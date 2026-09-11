@@ -128,26 +128,55 @@ async function tplGetIndex(env) {
     return out;
 }
 
-/** 读风格清单（tpl:sindex） */
-async function styleIndex(env) {
+/**
+ * 读【内置包索引】。
+ * 顺序：KV tpl:index（快） → 旧键 tpl:sindex-builtin（兼容） → static 的
+ * /wp-content/themes/index.json（权威清单，走 assets；读到后回写 KV 缓存）。
+ * 这样即使 KV 被删掉，下一个请求也会自动补全。
+ */
+async function builtinIndex(env) {
     let out = [];
+    for (const key of ['tpl:index', 'tpl:sindex-builtin']) {
+        if (out.length) break;
+        try {
+            const v = await env.KV_CACHE.get(key);
+            if (v) {
+                const o = JSON.parse(v);
+                if (Array.isArray(o) && o.length) out = o;
+            }
+        } catch (e) { /* fallthrough */ }
+    }
+    if (!out.length) {
+        try {
+            const url = 'https://assets.local/wp-content/themes/index.json';
+            const res = env.ASSETS ? await env.ASSETS.fetch(new Request(url)) : null;
+            if (res && res.ok) {
+                const o = await res.json();
+                if (Array.isArray(o) && o.length) {
+                    out = o;
+                    try { await env.KV_CACHE.put('tpl:index', JSON.stringify(out)); } catch (e) { /* 缓存失败不影响返回 */ }
+                }
+            }
+        } catch (e) { /* fallthrough */ }
+    }
+    return out.map(function (x) {
+        return { id: String(x.id || ''), name: String(x.name || x.id || ''), updated: String(x.updated || ''), source: 'builtin' };
+    }).filter(function (x) { return x.id; });
+}
+
+/** 读风格清单 = 私人包（tpl:sindex）+ 内置包（builtinIndex，内置在前） */
+async function styleIndex(env) {
+    let user = [];
     try {
         const v = await env.KV_CACHE.get('tpl:sindex');
-        if (v) { const o = JSON.parse(v); if (Array.isArray(o)) out = o; }
-    } catch (e) { /* fallthrough */ }
-    // 合并内置索引（tpl:sindex-builtin，WP 端部署后写入；内置在前）
-    try {
-        const vb = await env.KV_CACHE.get('tpl:sindex-builtin');
-        if (vb) {
-            const ob = JSON.parse(vb);
-            if (Array.isArray(ob)) {
-                const userIds = new Set(out.map(function (x) { return x.id; }));
-                const builtin = ob.filter(function (x) { return !userIds.has(x.id); });
-                out = builtin.concat(out);
-            }
+        if (v) {
+            const o = JSON.parse(v);
+            if (Array.isArray(o)) user = o.filter(function (x) { return x && x.source !== 'builtin'; });
         }
     } catch (e) { /* fallthrough */ }
-    return out;
+    const builtin = await builtinIndex(env);
+    const userIds = new Set(user.map(function (x) { return x.id; }));
+    return builtin.filter(function (x) { return !userIds.has(x.id); }).concat(user);
 }
 
 /**

@@ -5,8 +5,10 @@ compatibility_date = "2024-09-23"
 # 静态资源（主题 css/js/字体/图片）随 Worker 打包部署。
 # assets-first：命中静态文件的请求由 Cloudflare 边缘直接返回（免费、不计入 Worker 调用），
 # 未命中的请求（动态页 / R2 大图回源）才进入 Worker 逻辑。
+# assets 直出 + 让 Worker 能主动读 static 文件（env.ASSETS，用于内置包清单 index.json 的兜底读取）
 [assets]
 directory = "./static"
+binding = "ASSETS"
 
 [vars]
 ENABLE_COMPRESSION = true

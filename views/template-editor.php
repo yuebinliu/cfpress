@@ -1784,6 +1784,24 @@ function cfse_create_style_package($display_name = '', $unique_suffix = true) {
     cfse_log_message('已创建风格包: ' . $slug . '（tpl.json + 主题资源 ' . $copied_files . ' 个，内置索引已同步）', 'INFO');
     $logs[] = '风格包已生成: styles/' . $slug . '（tpl.json + 主题资源 ' . $copied_files . ' 个，已同步内置索引）';
     $logs[] = '已镜像到 worker/static/wp-content/themes/' . $slug . '/（本地 wrangler deploy 后该内置风格即可用）';
+
+    // 内置包权威清单：worker/static/wp-content/themes/index.json（Worker 端 KV tpl:index 缺失时回退读它）
+    $themes_root = CFSE_PLUGIN_DIR . 'worker/static/wp-content/themes';
+    $idx_items = array();
+    foreach ((array) glob($themes_root . '/*', GLOB_ONLYDIR) as $d) {
+        $tf = $d . '/tpl.json';
+        if (!file_exists($tf)) continue;
+        $j = json_decode((string) file_get_contents($tf), true);
+        $idx_items[] = array(
+            'id' => basename($d),
+            'name' => (is_array($j) && !empty($j['name'])) ? (string) $j['name'] : basename($d),
+            'updated' => gmdate('Y-m-d H:i:s', (int) filemtime($tf)),
+            'source' => 'builtin',
+        );
+    }
+    if (!empty($idx_items) && @file_put_contents($themes_root . '/index.json', wp_json_encode($idx_items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT))) {
+        $logs[] = '内置包清单已更新: worker/static/wp-content/themes/index.json（' . count($idx_items) . ' 个）';
+    }
     return array('ok' => true, 'slug' => $slug, 'dir' => $dst_dir, 'files' => $copied_files, 'tpl' => $tpl_payload, 'logs' => $logs);
 }
 

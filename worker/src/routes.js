@@ -111,6 +111,8 @@ export async function handleRequest(request, env) {
         const clean = items.map(function (x) {
             return { id: String(x.id || '').slice(0, 60), name: String(x.name || x.id || '').slice(0, 60), updated: String(x.updated || '').slice(0, 19), source: 'builtin' };
         }).filter(function (x) { return x.id; });
+        // 内置包索引：tpl:index 为准（旧键 tpl:sindex-builtin 双写一段时间做兼容）
+        await env.KV_CACHE.put('tpl:index', JSON.stringify(clean));
         await env.KV_CACHE.put('tpl:sindex-builtin', JSON.stringify(clean));
         return new Response(JSON.stringify({ ok: true, count: clean.length }), {
             status: 200,
