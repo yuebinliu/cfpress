@@ -743,8 +743,16 @@ private function get_post_storage_path($post) {
             $wp_query->in_the_loop = false;
             $GLOBALS['wp_the_query'] = $wp_query;
             $more = 1;
-            ob_start();
             $template = locate_template(array('single.php', 'singular.php', 'page.php', 'index.php'));
+            // WordPress 的 load_template() 参数 $load_once 默认 true，get_header()/get_footer()/
+            // get_sidebar() 内部也传 true（只有 get_template_part() 是 false）：同一 PHP 进程内
+            // 第二次渲染同一模板不会执行，只会得到 0 字节或缺少 header/footer 的残片。
+            // 这里提前识别，省掉一次注定失败的渲染，并让降级原因在日志里可见。
+            if ($template && in_array($template, get_included_files(), true)) {
+                $this->log('本进程已渲染过 ' . basename($template) . '（WP load-once 限制），跳过内部渲染，改用前台抓取', 'DEBUG');
+                return null;
+            }
+            ob_start();
             if ($template) {
                 load_template($template);
             } else {
@@ -770,8 +778,21 @@ private function get_post_storage_path($post) {
     private function fetch_from_frontend($post) {
         $post_url = add_query_arg('_cfse_internal', '1', get_permalink($post));
         $response = wp_remote_get($post_url, array('timeout' => 30, 'sslverify' => false, 'headers' => array('User-Agent' => 'CF-Static-Export/2.1', 'X-CF-Export-Internal' => '1')));
-        if (is_wp_error($response)) return null;
-        return wp_remote_retrieve_body($response);
+        if (is_wp_error($response)) {
+            $this->log('前台抓取失败：' . $response->get_error_message() . '（' . $post_url . '）', 'WARNING');
+            return null;
+        }
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+        if ($code < 200 || $code >= 400) {
+            $this->log('前台抓取返回 HTTP ' . $code . '（' . $post_url . '）', 'WARNING');
+            return null;
+        }
+        if (!$this->is_valid_html($body)) {
+            $this->log('前台抓取内容无效：' . strlen($body) . ' 字节（' . $post_url . '）', 'WARNING');
+            return null;
+        }
+        return $body;
     }
 
     private function generate_fallback_html($post) {
@@ -1775,6 +1796,10 @@ public function handle_deploy_worker() {
             return array($ok, $total);
         }
 
+        // 传给 CLI 子进程的原站地址：CLI 里没有 HTTP 上下文，若 wp-config.php 用
+        // $_SERVER['HTTP_HOST'] 计算 WP_HOME，home_url()/get_permalink() 会退化成
+        // http://localhost/，导致前台抓取连接失败、HTML 里 URL 替换失效。
+        $worker_site = home_url('/');
         $chunks = array_chunk($post_ids, (int) ceil($total / $workers));
         $tmp_dir = sys_get_temp_dir();
         $pid = getmypid();
@@ -1787,6 +1812,7 @@ public function handle_deploy_worker() {
             @unlink($done_files[$i]);
             $cmd = escapeshellarg(PHP_BINARY)
                 . ' ' . escapeshellarg($script)
+                . ' ' . escapeshellarg('--site=' . $worker_site)
                 . ' ' . implode(',', $ids_chunk)
                 . ' > ' . escapeshellarg($out_files[$i]) . ' 2>&1; echo done > ' . escapeshellarg($done_files[$i]);
             @exec($cmd . ' > /dev/null 2>&1 &');

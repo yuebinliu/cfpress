@@ -29,6 +29,35 @@ if ($wp_load === '') {
     fwrite(STDERR, "wp-load.php not found\n");
     exit(1);
 }
+
+// ---- 站点上下文（必须在 require wp-load.php 之前设置）----
+// CLI 没有 HTTP 上下文：若 wp-config.php 用 $_SERVER['HTTP_HOST'] 计算 WP_HOME，
+// home_url()/get_permalink() 会退化成 http://localhost/ —— 前台抓取必然连接失败，
+// 输出 HTML 里的 URL 替换（home_url() -> 静态站）也会失效。主进程用 --site=<原站URL> 传入。
+$cfse_site_arg = '';
+foreach (array_slice($argv, 1) as $cfse_arg) {
+    if (strpos($cfse_arg, '--site=') === 0) {
+        $cfse_site_arg = substr($cfse_arg, 7);
+    }
+}
+if ($cfse_site_arg !== '') {
+    $cfse_parts = @parse_url($cfse_site_arg);
+    if (!empty($cfse_parts['host'])) {
+        $cfse_scheme = isset($cfse_parts['scheme']) ? strtolower($cfse_parts['scheme']) : 'http';
+        $_SERVER['HTTP_HOST'] = $cfse_parts['host'] . (empty($cfse_parts['port']) ? '' : ':' . $cfse_parts['port']);
+        $_SERVER['SERVER_NAME'] = $cfse_parts['host'];
+        $_SERVER['SERVER_PORT'] = empty($cfse_parts['port']) ? ($cfse_scheme === 'https' ? '443' : '80') : (string) $cfse_parts['port'];
+        if ($cfse_scheme === 'https') {
+            $_SERVER['HTTPS'] = 'on';
+        }
+    }
+}
+if (empty($_SERVER['REQUEST_URI'])) {
+    $_SERVER['REQUEST_URI'] = '/';
+}
+$_SERVER['REQUEST_METHOD'] = 'GET';
+$_SERVER['SCRIPT_NAME'] = '/index.php';
+
 require $wp_load;
 
 if (!class_exists('CF_Static_Export_Pro')) {
