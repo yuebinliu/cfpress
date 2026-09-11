@@ -12,6 +12,9 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+// 风格生成 v2：内部渲染（tools/skin-render.php，每种页面一个进程）+ 探针 token 驱动映射
+require_once dirname(__FILE__) . '/skin-builder.php';
+
 // ============================================
 // 1. 注册菜单和钩子
 // ============================================
@@ -1018,6 +1021,10 @@ function cfseRenderItem(itemTpl, post, site) {
     h = cfseReplace(h, '{{POST_EXCERPT}}', escapeHtml(post.excerpt || ''));
     h = cfseReplace(h, '{{POST_CATEGORIES}}', catLinks);
     h = cfseReplace(h, '{{POST_TAGS}}', tagLinks);
+    // 站点级占位符：条目模板里同样会出现站点链接（如作者归档 /author/<slug>/、站点首页）
+    h = cfseReplace(h, '{{SITE_URL}}', (site && site.url) || '');
+    h = cfseReplace(h, '{{SITE_NAME}}', (site && site.name) || '');
+    h = cfseReplace(h, '{{SITE_DESC}}', (site && site.description) || '');
     return h;
 }
 
@@ -1174,7 +1181,135 @@ function cfse_handle_fetch_skin() {
     exit;
 }
 
+/**
+ * 「抓取外观 / 生成风格」v2：用探针文章 + **内部渲染**（每种页面一个独立进程）拿到页面 HTML，
+ * 再用探针内容 token（标题/正文/摘要/日期/分类名/标签名/permalink）定位结构，生成 6 类模板。
+ *
+ * 相比旧流程（HTTP 抓前台 + twentyten 类名正则）：
+ *   - 不依赖主题的 CSS 类名 / 注释锚，换主题也能生成；
+ *   - 不经过 HTTP、不受页面缓存干扰；渲染进程里没有登录用户，不会把 admin bar 的 CSS/JS 带进来；
+ *   - 是 per-PHP-进程 的 WP load-once 语义要求"每种页面一个新进程"（load_template 是 require_once）。
+ * 任何一步失败都会自动回退旧流程 cfse_fetch_skin_from_wordpress_legacy()。
+ */
 function cfse_fetch_skin_from_wordpress() {
+    $logs = array();
+    $probe_id = 0;
+    try {
+        if (!function_exists('cfse_skin_render_all') || !function_exists('cfse_skin_map_templates')) {
+            throw new Exception('skin-builder.php 未加载（检查 views/skin-builder.php）');
+        }
+
+        // 1. 探针要挂的分类 / 标签（全部取自真实存在的 term，避免制造垃圾 term）
+        $cat_ids = array();
+        $cat_names = array();
+        $cats = get_terms(array('taxonomy' => 'category', 'hide_empty' => false, 'number' => 5));
+        if (!is_wp_error($cats) && !empty($cats)) {
+            foreach (array_slice($cats, 0, 2) as $t) {
+                $cat_ids[] = (int) $t->term_id;
+                $cat_names[] = (string) $t->name;
+            }
+        }
+        $tag_names = array();
+        $tags = get_terms(array('taxonomy' => 'post_tag', 'hide_empty' => false, 'number' => 5));
+        if (!is_wp_error($tags) && !empty($tags)) {
+            foreach (array_slice($tags, 0, 2) as $t) {
+                $tag_names[] = (string) $t->name;
+            }
+        }
+
+        // 2. token 探针（日期 = 现在，保证它出现在首页/归档第一页第一条；_cfse_probe 让主插件跳过导出）
+        $token = 'CFSEPROBE' . strtoupper(substr(md5(uniqid('', true)), 0, 6));
+        $admins = get_users(array('role' => 'administrator', 'number' => 1, 'fields' => 'ID'));
+        $author = !empty($admins) ? (int) $admins[0] : 1;
+        $probe_id = wp_insert_post(array(
+            'post_type'     => 'post',
+            'post_status'   => 'publish',
+            'post_author'   => $author,
+            'post_title'    => $token . '-TITLE',
+            'post_content'  => '<p>' . $token . '-CONTENT</p>',
+            'post_excerpt'  => $token . '-EXCERPT',
+            'post_category' => $cat_ids,
+            'tags_input'    => $tag_names,
+            'meta_input'    => array('_cfse_probe' => '1'),
+        ));
+        if (is_wp_error($probe_id) || !$probe_id) {
+            throw new Exception('探针文章创建失败: ' . (is_wp_error($probe_id) ? $probe_id->get_error_message() : '未知错误'));
+        }
+        $logs[] = '探针文章已发布 #' . $probe_id . '（token ' . $token . '）';
+
+        // 3. 内部渲染：首页/分类/标签/归档/单页各一个进程
+        @set_time_limit(180);
+        $html = cfse_skin_render_all($probe_id, home_url());
+        $logs[] = '内部渲染：' . (empty($html) ? '全部失败' : implode(', ', array_keys($html)));
+        foreach (array('home', 'category', 'tag', 'archive', 'single') as $need) {
+            if (empty($html[$need])) {
+                throw new Exception('内部渲染缺少 ' . $need . ' 页面');
+            }
+        }
+
+        // 4. token 驱动结构映射
+        $probe_post = get_post($probe_id);
+        $ctx = array(
+            'token'       => $token,
+            'probe_id'    => $probe_id,
+            'probe_title' => $token . '-TITLE',
+            'permalink'   => get_permalink($probe_id),
+            'post_date'   => $probe_post ? $probe_post->post_date : current_time('mysql'),
+            'cat_names'   => $cat_names,
+            'tag_names'   => $tag_names,
+            'site_url'    => home_url(),
+            'site_name'   => get_bloginfo('name'),
+            'site_desc'   => get_bloginfo('description'),
+            'html'        => $html,
+        );
+        $tpls = cfse_skin_map_templates($ctx);
+        foreach ((array) $tpls['warns'] as $w) {
+            $logs[] = $w;
+        }
+        if (empty($tpls['pageHome']) || empty($tpls['item']) || empty($tpls['single'])) {
+            throw new Exception('映射结果不完整（pageHome / item / single 至少一项为空）');
+        }
+
+        // 5. 写入四个页签 + 单页（option 结构与旧版一致，下游不变）
+        $logs[] = '旧模板已备份到 option: ' . cfse_backup_custom_templates();
+        $custom = get_option('cfse_custom_templates', array());
+        if (!is_array($custom)) $custom = array();
+        $custom['homepage'] = array('page' => $tpls['pageHome'],     'item' => $tpls['item']);
+        $custom['category'] = array('page' => $tpls['pageCategory'], 'item' => $tpls['item']);
+        $custom['tag']      = array('page' => $tpls['pageTag'],      'item' => $tpls['item']);
+        $custom['archive']  = array('page' => $tpls['pageArchive'],  'item' => $tpls['item']);
+        $custom['single']   = array('page' => $tpls['single'],       'item' => '');
+        update_option('cfse_custom_templates', $custom);
+        $logs[] = '模板已写入：首页 / 分类 / 标签 / 归档（共用同一份条目模板）+ 文章单页';
+
+        // 6. 清理探针
+        wp_delete_post($probe_id, true);
+        $logs[] = '探针文章已删除（含 _cfse_probe 标记，未进 R2/D1）';
+        $probe_id = 0;
+
+        // 7. 重新生成 templates.js（沿用旧下游）
+        if (!cfse_generate_templates_from_custom()) {
+            throw new Exception('templates.js 重新生成失败（模板已写入，可在编辑器点「保存模板」重试）');
+        }
+        $logs[] = 'templates.js 已重新生成，待后台「初始化部署」推送到 Cloudflare Worker';
+        return array(true, $logs);
+    } catch (Throwable $e) {
+        if ($probe_id) {
+            wp_delete_post($probe_id, true);
+            $logs[] = '异常路径已清理探针文章 #' . $probe_id;
+        }
+        $logs[] = '内部渲染链路失败：' . $e->getMessage();
+        $logs[] = '—— 自动回退旧抓取流程 ——';
+        list($ok, $legacy_logs) = cfse_fetch_skin_from_wordpress_legacy();
+        return array($ok, array_merge($logs, $legacy_logs));
+    }
+}
+
+/**
+ * 旧版抓取流程（HTTP 抓原站首页/探针单页 + 主题类名正则清洗）。
+ * 保留为 v2 失败时的自动回退路径。
+ */
+function cfse_fetch_skin_from_wordpress_legacy() {
     $logs = array();
     $probe_id = 0;
     try {
