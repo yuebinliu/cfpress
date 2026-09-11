@@ -114,3 +114,17 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
 - 同名 python 脚本**第二次写**前需先 `read_file`（write_file 覆盖已存在文件同样吃 read-evidence）；换成**新文件名**可绕过。
 - **P 批实战确认（最实用）**：改大文件（admin.js/app.js/template-editor.php）一律 = `write_file` 写**新名** python 脚本（无锁）→ **同回合 bash 执行**（脚本新建未被 edit，bash 放行）→ 语法检查合并进同一条 bash。**不要**在同一回合里既 edit_file 大文件又跑 bash（必死锁）；若已 edit 大文件 → 剩余改动写成脚本，下轮开头跑。
 - **用户提议的备选方案（远程改）**：把 `worker/` 同步到服务器（/mnt/optane/webstack/www/wp-content/plugins/cf/worker），远程直接改大文件（无本地 read-evidence 锁），改完拉回本地再 `wrangler deploy`。适合"需反复逐段小改大文件"的场景；本地脚本已够用时不必动用。
+
+## 八、版本控制（2026-09 起）
+
+- **仓库**：项目根 `C:/Users/dog/Documents/cf`，`git init -b main`（基线提交 `e7f4cdd`，P 批状态）。**改完一批就提交一次**，message 带批次前缀，例如 `feat(tpl): MM 批 风格历史回退`、`fix(admin): 修复模板页风格下拉为空`。
+- **`.gitignore` 忽略**：`worker/node_modules/`、`worker/.wrangler/`、`reasonix.toml`、`.reasonix/`、`*.log`、`/tmp/`、`*.tmp`。
+  - `reasonix.toml` 与 `.reasonix/` 是**本机 harness 配置**（内含服务器密码、已批准命令），故意不入库。
+- **`.gitattributes`**：`* text=auto eol=lf` —— 仓库内一律 LF；仓库级 `core.autocrlf=false` 已设。目的是避免 Windows 检出时整文件变 CRLF、`git status` 误报"全文件改动"。
+- **日常套路（顺带绕开 harness read-evidence 死锁）**：
+  1. 动手前 `git status --short`（干净 = 可安全回滚/对比）；
+  2. 改大文件（`worker/src/admin.js`、`static/admin/app.js`、`views/template-editor.php`）后，用 `git diff --stat` / `git diff` **精确核对改了什么** —— 不再需要"重读大文件解锁"，也不必靠 mtime 猜改动；
+  3. `git diff --check` 查空白错误，`node --check` / `php -l` 做语法检查；
+  4. 验证通过 `git add -A && git commit`；改坏了一键 `git restore <file>` 回滚。
+- **敏感信息提醒**：本 `AGENTS.md` 含服务器 root 密码、MySQL root 密码、Worker 测试账号。**目前只做本地仓库**；若要推送远程（GitHub/Gitee 等），必须先脱敏（改环境变量 / 密码管理器 / 私有库 + 清理历史），否则明文永久进 git 历史。
+- 尚未配置 remote；推送前先与用户确认平台与可见性（建议私有库）。
