@@ -1299,7 +1299,8 @@ function cfse_fetch_skin_from_wordpress() {
 
         // 8. 直接产出风格包（tpl.json + 主题资源）：线上渲染走的是 tpl:active / tpl.json，
         //    所以抓取完即可得到风格包，无需再手动点「快照为新风格」；同名覆盖，不堆 theme-2/3…
-        $pkg = cfse_create_style_package(get_bloginfo('name') . ' - ' . get_option('stylesheet', 'theme'), false);
+        // 风格名直接用主题 slug（与后台下拉主显示一致，避免 "站点名 - 主题slug" 这类噪声）
+        $pkg = cfse_create_style_package(get_option('stylesheet', 'theme'), false);
         if (!empty($pkg['ok'])) {
             foreach ((array) $pkg['logs'] as $x) { $logs[] = $x; }
         } else {

@@ -1299,17 +1299,35 @@
       sec.querySelector('[data-tplhint]').textContent = TPL_META[k].hint;
       kindArea().value = contents[k] || '';
     }
+    // 风格选项：主显示风格包 slug（name 常被站点名/主题名污染，只作补充说明）
+    function styleOptHtml(s) {
+      var id = String(s.id || '');
+      var nm = String(s.name || '');
+      var extra = (nm && nm !== id) ? ' — ' + nm : '';
+      return '<option value="' + esc(id) + '">' + esc(id) + esc(extra) + '</option>';
+    }
+
     function fillStyleSel() {
       var sel = document.getElementById('st-sel');
-      var opts = '<option value="">（选择风格…）</option><option value="__default__">默认风格（内置模板）</option>';
-      styles.forEach(function (s) {
-        var tag = (s.source === 'builtin') ? '📦 ' : '';
-        opts += '<option value="' + esc(s.id) + '">' + tag + esc(s.name) + '（' + esc(String(s.updated || '').slice(0, 16)) + '）</option>';
-      });
+      var builtin = [];
+      var mine = [];
+      styles.forEach(function (s) { (s.source === 'builtin' ? builtin : mine).push(s); });
+
+      var opts = '<option value="">（选择风格…）</option>'
+        + '<option value="__default__">默认风格（部署内置模板，无资源依赖）</option>';
+      if (builtin.length) {
+        opts += '<optgroup label="📦 内置风格（随 wrangler deploy 更新）">'
+          + builtin.map(styleOptHtml).join('') + '</optgroup>';
+      }
+      if (mine.length) {
+        opts += '<optgroup label="📤 我上传/保存的风格（存 D1，改完即生效）">'
+          + mine.map(styleOptHtml).join('') + '</optgroup>';
+      }
       sel.innerHTML = opts;
+
       var kd = document.getElementById('kd-sel');
       var ko = '<option value="">（保持当前生效模板）</option>';
-      styles.forEach(function (s) { ko += '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>'; });
+      styles.forEach(function (s) { ko += styleOptHtml(s); });
       kd.innerHTML = ko;
       kd.value = loadedStyle.id || '';
       renderStyleFoot();
