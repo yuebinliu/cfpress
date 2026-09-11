@@ -263,6 +263,33 @@ function cfse_skin_strip_probe_links($html, $ctx) {
     return $html;
 }
 
+/**
+ * 侧边栏某区块 → 占位符（主题无关回退）：定位含指定 widget class 的容器，
+ * 把它内部第一个 <ul> 的内容换成占位符。命中返回 true。
+ */
+function cfse_skin_sidebar_replace(&$html, $classes, $ph) {
+    foreach ((array) $classes as $cls) {
+        $pat = '~<(li|div|section)\b[^>]*class=["\'][^"\']*' . preg_quote($cls, '~') . '[^"\']*["\'][^>]*>~i';
+        if (!preg_match($pat, $html, $m, PREG_OFFSET_CAPTURE)) continue;
+        $cstart = $m[0][1];
+        $gt = strpos($html, '>', $cstart);
+        if ($gt === false) continue;
+        $inner = substr($html, $cstart + 1, $gt - $cstart - 1);
+        if (!preg_match('/^([a-zA-Z][a-zA-Z0-9]*)/', $inner, $tm)) continue;
+        $cclose = cfse_html_find_close($html, $gt + 1, strtolower($tm[1]));
+        if (!$cclose) continue;
+        $seg_start = $gt + 1;
+        $seg = substr($html, $seg_start, $cclose['close_start'] - $seg_start);
+        if (!preg_match('~<ul\b[^>]*>~i', $seg, $um, PREG_OFFSET_CAPTURE)) continue;
+        $ul_content_start = $seg_start + $um[0][1] + strlen($um[0][0]);
+        $ul_close = cfse_html_find_close($html, $ul_content_start, 'ul');
+        if (!$ul_close) continue;
+        $html = substr($html, 0, $ul_content_start) . $ph . substr($html, $ul_close['close_start']);
+        return true;
+    }
+    return false;
+}
+
 /** 页面壳：列表区 → {{CONTENT}}、分页 → 占位符、侧边栏 → 占位符、站点级替换 */
 function cfse_skin_page_shell($html, $ctx, $type) {
     $warns = array();
@@ -284,8 +311,29 @@ function cfse_skin_page_shell($html, $ctx, $type) {
     $html = preg_replace('~<link\b[^>]*rel=["\']alternate["\'][^>]*href=["\'][^"\']*/(category|tag)/[^"\']*/feed/["\'][^>]*/?>~i', '', $html);
     $html = preg_replace('~<link\b[^>]*href=["\'][^"\']*/(category|tag)/[^"\']*/feed/["\'][^>]*rel=["\']alternate["\'][^>]*/?>~i', '', $html);
 
-    // 页面标题（Category / Tag / Monthly Archives: xxx）→ {{TITLE}}（渲染端按页面类型填标题）
-    if (preg_match('~<h1\b[^>]*class=["\'][^"\']*page-title[^"\']*["\'][^>]*>~i', $html, $m, PREG_OFFSET_CAPTURE)) {
+    // 页面标题 → {{TITLE}}
+    // 主题无关做法：用"分类名 / 标签名 / 年月文本"反查承载它的标题元素（h1~h6），不依赖主题 class；
+    // 没命中再退回常见的 h1.page-title。
+    $title_done = false;
+    foreach ((array) $ctx['title_needles'] as $needle) {
+        if ($needle === '') continue;
+        $pos = strpos($html, $needle);
+        if ($pos === false) continue;
+        $loc = cfse_html_loc_tag($html, $pos);
+        $guard = 0;
+        while ($loc && !preg_match('/^h[1-6]$/', $loc['tag']) && $guard++ < 8) {
+            $loc = cfse_html_loc_tag($html, $loc['start'] - 1);
+        }
+        if ($loc && preg_match('/^h[1-6]$/', $loc['tag'])) {
+            $close = cfse_html_find_close($html, $loc['content_start'], $loc['tag']);
+            if ($close) {
+                $html = substr($html, 0, $loc['content_start']) . '{{TITLE}}' . substr($html, $close['close_start']);
+                $title_done = true;
+                break;
+            }
+        }
+    }
+    if (!$title_done && preg_match('~<h1\b[^>]*class=["\'][^"\']*page-title[^"\']*["\'][^>]*>~i', $html, $m, PREG_OFFSET_CAPTURE)) {
         $p0 = $m[0][1];
         $gt = strpos($html, '>', $p0);
         if ($gt !== false) {
@@ -294,11 +342,13 @@ function cfse_skin_page_shell($html, $ctx, $type) {
                 $close = cfse_html_find_close($html, $gt + 1, strtolower($mm[1]));
                 if ($close) {
                     $html = substr($html, 0, $gt + 1) . '{{TITLE}}' . substr($html, $close['close_start']);
+                    $title_done = true;
                 }
             }
         }
-    } elseif ($type !== 'home') {
-        $warns[] = '未找到 h1.page-title，页面标题未占位化（{{TITLE}} 缺失）';
+    }
+    if (!$title_done && $type !== 'home') {
+        $warns[] = '未定位到归档标题元素（token 与 h1.page-title 均未命中），{{TITLE}} 缺失';
     }
 
     // <title> 里的分类 / 标签名 → {{TITLE}}（如 "Resourse | 站点名"）
@@ -314,27 +364,51 @@ function cfse_skin_page_shell($html, $ctx, $type) {
     }
 
     // 2) 分页容器 → {{PAGINATION_PREV}} / {{PAGINATION_NEXT}}
+    // 主题无关做法：用 href 里形如 /page/N/（或 paged=N）的分页链接反查其容器；
+    // 没命中再退回 nav-previous / nav-next 类名。
     $cnt_prev = 0; $cnt_next = 0;
-    $html = preg_replace_callback('~(<(div|nav|span)\b[^>]*class=["\'][^"\']*nav-previous[^"\']*["\'][^>]*>).*?(</\2>)~s', function ($m) use (&$cnt_prev) {
-        $cnt_prev++;
-        return '<div class="nav-previous">{{PAGINATION_PREV}}</div>';
-    }, $html);
-    $html = preg_replace_callback('~(<(div|nav|span)\b[^>]*class=["\'][^"\']*nav-next[^"\']*["\'][^>]*>).*?(</\2>)~s', function ($m) use (&$cnt_next) {
-        $cnt_next++;
-        return '<div class="nav-next">{{PAGINATION_NEXT}}</div>';
-    }, $html);
+    if (preg_match('~<a\b[^>]*href=["\'][^"\']*(?:/page/\d+/?|paged=\d+)[^"\']*["\'][^>]*>~i', $html, $pgm, PREG_OFFSET_CAPTURE)) {
+        $loc = cfse_html_loc_tag($html, $pgm[0][1]);
+        $guard = 0;
+        while ($loc && !in_array($loc['tag'], array('div', 'nav', 'section', 'p'), true) && $guard++ < 6) {
+            $loc = cfse_html_loc_tag($html, $loc['start'] - 1);
+        }
+        if ($loc) {
+            $close = cfse_html_find_close($html, $loc['content_start'], $loc['tag']);
+            if ($close) {
+                $html = substr($html, 0, $loc['content_start'])
+                    . "\n\t<div class=\"nav-previous\">{{PAGINATION_PREV}}</div>\n\t<div class=\"nav-next\">{{PAGINATION_NEXT}}</div>\n"
+                    . substr($html, $close['close_start']);
+                $cnt_prev = 1;
+                $cnt_next = 1;
+            }
+        }
+    }
+    if (!$cnt_prev && !$cnt_next) {
+        $html = preg_replace_callback('~(<(div|nav|span)\b[^>]*class=["\'][^"\']*nav-previous[^"\']*["\'][^>]*>).*?(</\2>)~s', function ($m) use (&$cnt_prev) {
+            $cnt_prev++;
+            return '<div class="nav-previous">{{PAGINATION_PREV}}</div>';
+        }, $html);
+        $html = preg_replace_callback('~(<(div|nav|span)\b[^>]*class=["\'][^"\']*nav-next[^"\']*["\'][^>]*>).*?(</\2>)~s', function ($m) use (&$cnt_next) {
+            $cnt_next++;
+            return '<div class="nav-next">{{PAGINATION_NEXT}}</div>';
+        }, $html);
+    }
 
     // 3) 侧边栏三块 → 占位符（站点级内容，与探针无关；沿用旧的容器特征）
     $n = 0;
     $html = preg_replace('~(<ul\b[^>]*class=["\'][^"\']*wp-block-categories-list[^"\']*["\'][^>]*>).*?(</ul>)~s', '$1{{SIDEBAR_CATEGORIES}}$2', $html, -1, $n);
     if (!$n) $html = preg_replace('~(<ul\b[^>]*class=["\'][^"\']*cat-item[^"\']*["\'][^>]*>).*?(</ul>)~s', '$1{{SIDEBAR_CATEGORIES}}$2', $html, -1, $n);
+    if (!$n && cfse_skin_sidebar_replace($html, array('widget_categories', 'wp-block-categories'), '{{SIDEBAR_CATEGORIES}}')) $n = 1;
     if (!$n) $warns[] = '未找到侧边栏分类列表容器，{{SIDEBAR_CATEGORIES}} 缺失';
     $n = 0;
     $html = preg_replace('~(<ul\b[^>]*class=["\'][^"\']*(wp-block-archives|widget_archive)[^"\']*["\'][^>]*>).*?(</ul>)~s', '$1{{SIDEBAR_ARCHIVES}}$2', $html, -1, $n);
     if (!$n) $html = preg_replace('~(<li id="archives-2"[^>]*>.*?<ul>).*?(</ul>)~s', '$1{{SIDEBAR_ARCHIVES}}$2', $html, -1, $n);
+    if (!$n && cfse_skin_sidebar_replace($html, array('widget_archive', 'wp-block-archives'), '{{SIDEBAR_ARCHIVES}}')) $n = 1;
     if (!$n) $warns[] = '未找到侧边栏归档列表容器，{{SIDEBAR_ARCHIVES}} 缺失';
     $n = 0;
     $html = preg_replace('~(<ul\b[^>]*class=["\'][^"\']*(wp-tag-cloud|tagcloud)[^"\']*["\'][^>]*>).*?(</ul>)~s', '$1{{SIDEBAR_TAGS}}$2', $html, -1, $n);
+    if (!$n && cfse_skin_sidebar_replace($html, array('widget_tag_cloud', 'wp-block-tag-cloud', 'wp-tag-cloud', 'tagcloud'), '{{SIDEBAR_TAGS}}')) $n = 1;
     if (!$n) $warns[] = '未找到侧边栏标签云容器，{{SIDEBAR_TAGS}} 缺失';
 
     // 4) 站点级替换
@@ -397,6 +471,19 @@ function cfse_skin_single_shell($html, $ctx) {
 function cfse_skin_map_templates($ctx) {
     $warns = array();
     $ctx['date_candidates'] = cfse_skin_date_candidates($ctx['post_date']);
+
+    // 归档页标题里可能出现的文本：分类名/标签名 + 年月（用于主题无关地定位标题元素）
+    $ctx['title_needles'] = array();
+    foreach (array_merge((array) $ctx['cat_names'], (array) $ctx['tag_names']) as $nm) {
+        if ($nm !== '' && !in_array($nm, $ctx['title_needles'], true)) $ctx['title_needles'][] = $nm;
+    }
+    $ts = !empty($ctx['post_date']) ? strtotime($ctx['post_date']) : 0;
+    if ($ts) {
+        foreach (array('F Y', 'Y年n月', 'Y F', 'F, Y', 'Y/m') as $f) {
+            $s = date_i18n($f, $ts);
+            if ($s !== '' && !in_array($s, $ctx['title_needles'], true)) $ctx['title_needles'][] = $s;
+        }
+    }
 
     // ---- item 模板：取自首页条目（首页条目用 the_content，统一映射为 {{POST_EXCERPT}}）----
     $item = '';
