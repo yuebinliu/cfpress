@@ -1303,7 +1303,8 @@ function cfse_fetch_skin_from_wordpress() {
         if (!empty($pkg['ok'])) {
             foreach ((array) $pkg['logs'] as $x) { $logs[] = $x; }
         } else {
-            $logs[] = '风格包自动生成失败（模板已写入 cfse_custom_templates，可在编辑器点「📦 快照为新风格」重试）';
+            foreach ((array) $pkg['logs'] as $x) { $logs[] = '风格包: ' . $x; }
+            $logs[] = '风格包自动生成失败（模板已写入 cfse_custom_templates；常见原因是 styles/ 目录不可写，可在编辑器点「📦 快照为新风格」重试）';
         }
         return array(true, $logs);
     } catch (Throwable $e) {

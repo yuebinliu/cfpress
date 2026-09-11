@@ -564,50 +564,76 @@ function cfse_skin_map_templates($ctx) {
  * 调 tools/skin-render.php 渲染 5 种页面（每种一个进程，规避 WP load-once）。
  * 返回 array(type => html)；失败的类型不出现。
  */
+/**
+ * 找 CLI php 解释器。
+ * fpm 环境下 PHP_BINARY 是 /usr/local/sbin/php-fpm（不能执行脚本），
+ * 直接拿它 spawn 子进程会全部失败（表现为「内部渲染全部失败」+ 回退，进而 nginx 504）。
+ */
+if (!function_exists('cfse_cli_php')) {
+    function cfse_cli_php() {
+        static $cached = null;
+        if ($cached !== null) return $cached;
+        $cands = array();
+        $env = trim((string) @shell_exec('command -v php 2>/dev/null'));
+        if ($env !== '') $cands[] = $env;
+        if (defined('PHP_BINDIR') && PHP_BINDIR !== '') $cands[] = rtrim(PHP_BINDIR, '/') . '/php';
+        $cands[] = '/usr/local/bin/php';
+        $cands[] = '/usr/bin/php';
+        foreach ($cands as $c) {
+            if ($c !== '' && @is_executable($c)) { $cached = $c; return $cached; }
+        }
+        $cached = PHP_BINARY;
+        return $cached;
+    }
+}
+
 function cfse_skin_render_all($probe_id, $site_url, $types = array('home', 'category', 'tag', 'archive', 'single'), $timeout = 90) {
     $script = CFSE_PLUGIN_DIR . 'tools/skin-render.php';
-    if (!file_exists($script)) return array();
+    $GLOBALS['cfse_skin_render_fails'] = array();
+    $out = array();
+    if (!file_exists($script)) {
+        $GLOBALS['cfse_skin_render_fails']['_setup'] = '缺少 tools/skin-render.php';
+        return $out;
+    }
     $probe_id = (int) $probe_id;
     $base = rtrim((string) $site_url, '/');
-    if ($base === '') return array();
-
-    $out = array();
+    if ($base === '') {
+        $GLOBALS['cfse_skin_render_fails']['_setup'] = '站点 URL 为空';
+        return $out;
+    }
     if (!function_exists('exec')) {
+        $GLOBALS['cfse_skin_render_fails']['_setup'] = 'PHP exec() 不可用';
         return $out;
     }
 
+    // 单进程超时：优先用系统 timeout，没有则依赖 PHP 自身超时
+    $timeout_bin = trim((string) @shell_exec('command -v timeout 2>/dev/null'));
+    $per_type = max(10, (int) floor($timeout / max(1, count($types))));
+    $php_bin = function_exists('cfse_cli_php') ? cfse_cli_php() : PHP_BINARY;
+
     $tmp = sys_get_temp_dir();
     $pid = getmypid();
-    $files = array();
-    $cmds = array();
     foreach ($types as $t) {
         $f = $tmp . '/cfse_skin_' . $pid . '_' . $t . '.html';
         @unlink($f);
-        $files[$t] = $f;
-        $cmds[$t] = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script)
+        $cmd = escapeshellarg($php_bin) . ' ' . escapeshellarg($script)
             . ' --site=' . escapeshellarg($base)
             . ' --type=' . escapeshellarg($t)
             . ' --probe=' . $probe_id
-            . ' --out=' . escapeshellarg($f)
-            . ' > /dev/null 2>&1';
-    }
-    // 并行启动（每种页面一个进程）
-    foreach ($cmds as $t => $cmd) {
-        @exec($cmd . ' &');
-    }
-    // 轮询等待
-    $deadline = time() + $timeout;
-    while (time() < $deadline) {
-        $pending = 0;
-        foreach ($files as $t => $f) {
-            if (!is_file($f) || filesize($f) < 1000) $pending++;
+            . ' --out=' . escapeshellarg($f) . ' 2>&1';
+        if ($timeout_bin !== '') {
+            $cmd = escapeshellarg($timeout_bin) . ' ' . $per_type . ' ' . $cmd;
         }
-        if ($pending === 0) break;
-        usleep(200000);
-    }
-    foreach ($files as $t => $f) {
-        if (is_file($f) && filesize($f) > 1000) {
+        // 串行同步执行：每种页面一个进程（规避 WP load-once），但**不后台化** ——
+        // fpm 里后台子进程可能被回收，主请求会白等超时（nginx 504）。
+        $lines = array();
+        $code = 0;
+        @exec($cmd, $lines, $code);
+        if ($code === 0 && is_file($f) && filesize($f) > 1000) {
             $out[$t] = (string) file_get_contents($f);
+        } else {
+            $tail = implode(' ', array_slice((array) $lines, -3));
+            $GLOBALS['cfse_skin_render_fails'][$t] = 'exit=' . $code . ($tail !== '' ? ' | ' . substr($tail, 0, 220) : '');
         }
         @unlink($f);
     }

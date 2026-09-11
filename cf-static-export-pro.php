@@ -1846,6 +1846,29 @@ public function handle_deploy_worker() {
         // $_SERVER['HTTP_HOST'] 计算 WP_HOME，home_url()/get_permalink() 会退化成
         // http://localhost/，导致前台抓取连接失败、HTML 里 URL 替换失效。
         $worker_site = home_url('/');
+/**
+ * 找 CLI php 解释器。
+ * fpm 环境下 PHP_BINARY 是 /usr/local/sbin/php-fpm（不能执行脚本），
+ * 直接拿它 spawn 子进程会全部失败（表现为「内部渲染全部失败」+ 回退，进而 nginx 504）。
+ */
+if (!function_exists('cfse_cli_php')) {
+    function cfse_cli_php() {
+        static $cached = null;
+        if ($cached !== null) return $cached;
+        $cands = array();
+        $env = trim((string) @shell_exec('command -v php 2>/dev/null'));
+        if ($env !== '') $cands[] = $env;
+        if (defined('PHP_BINDIR') && PHP_BINDIR !== '') $cands[] = rtrim(PHP_BINDIR, '/') . '/php';
+        $cands[] = '/usr/local/bin/php';
+        $cands[] = '/usr/bin/php';
+        foreach ($cands as $c) {
+            if ($c !== '' && @is_executable($c)) { $cached = $c; return $cached; }
+        }
+        $cached = PHP_BINARY;
+        return $cached;
+    }
+}
+
         $chunks = array_chunk($post_ids, (int) ceil($total / $workers));
         $tmp_dir = sys_get_temp_dir();
         $pid = getmypid();
@@ -1856,7 +1879,7 @@ public function handle_deploy_worker() {
             $done_files[$i] = $out_files[$i] . '.done';
             @unlink($out_files[$i]);
             @unlink($done_files[$i]);
-            $cmd = escapeshellarg(PHP_BINARY)
+            $cmd = escapeshellarg(cfse_cli_php())
                 . ' ' . escapeshellarg($script)
                 . ' ' . escapeshellarg('--site=' . $worker_site)
                 . ' ' . implode(',', $ids_chunk)
