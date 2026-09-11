@@ -1741,7 +1741,9 @@ function cfse_create_style_package($display_name = '', $unique_suffix = true) {
 
     // 2) 主题资源 → wp-content/themes/<slug>/（保留原生 WP 路径，Worker 端 assets 直出）
     $theme_dirs = array_unique(array(get_template_directory(), get_stylesheet_directory()));
-    $dest_theme = $dst_dir . '/wp-content/themes/' . $slug;
+    // WP 端风格包目录保持扁平：styles/<slug>/ 直接放 tpl.json + 主题资源（与 tpl.json 同层）。
+    // 只有镜像到部署产物时才补上 wp-content/themes/<slug>/ 前缀（那是 Worker 的 URL 路径约定）。
+    $dest_theme = $dst_dir;
     // 镜像一份到 Worker 的 static 资源目录：内置风格约定 tpl.json + 主题资源走 assets 直出，
     // 部署（wrangler deploy）后 Worker 才能 fetch /wp-content/themes/<slug>/tpl.json 应用该风格。
     $static_theme = CFSE_PLUGIN_DIR . 'worker/static/wp-content/themes/' . $slug;
@@ -1817,7 +1819,7 @@ function cfse_sync_builtin_styles() {
     if (is_dir($styles_root)) {
         foreach (glob($styles_root . '/*', GLOB_ONLYDIR) as $dir) {
             $slug = basename($dir);
-            $tpl_file = $dir . '/wp-content/themes/' . basename($dir) . '/tpl.json';
+            $tpl_file = $dir . '/tpl.json';
             if (!file_exists($tpl_file)) continue;
             $data = json_decode((string) file_get_contents($tpl_file), true);
             $name = (is_array($data) && isset($data['name'])) ? (string) $data['name'] : $slug;
