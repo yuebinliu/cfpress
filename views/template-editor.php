@@ -1241,9 +1241,13 @@ function cfse_fetch_skin_from_wordpress() {
         @set_time_limit(180);
         $html = cfse_skin_render_all($probe_id, home_url());
         $logs[] = '内部渲染：' . (empty($html) ? '全部失败' : implode(', ', array_keys($html)));
+        foreach ((array) (isset($GLOBALS['cfse_skin_render_fails']) ? $GLOBALS['cfse_skin_render_fails'] : array()) as $ft => $why) {
+            $logs[] = '渲染失败 ' . $ft . ': ' . $why;
+        }
         foreach (array('home', 'category', 'tag', 'archive', 'single') as $need) {
             if (empty($html[$need])) {
-                throw new Exception('内部渲染缺少 ' . $need . ' 页面');
+                $why = isset($GLOBALS['cfse_skin_render_fails'][$need]) ? $GLOBALS['cfse_skin_render_fails'][$need] : '未知原因';
+                throw new Exception('内部渲染缺少 ' . $need . ' 页面（' . $why . '）');
             }
         }
 
