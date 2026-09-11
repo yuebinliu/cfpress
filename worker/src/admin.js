@@ -866,6 +866,14 @@ export async function handleAdminRequest(request, env) {
     if (path === '/api/templates/style/get' && method === 'GET') {
         await ensureStylesTable(env);
         const id = String(url.searchParams.get('id') || '');
+        if (id === '__default__') {
+            // 默认风格（内置模板）：不依赖任何 tpl.json 资源，返回空组合即可
+            // （渲染端遇到空内容会回退部署内置模板）。此前缺这个分支，前端加载/预览
+            // 默认风格会拿到 404，被误报成「内置风格资源未部署」。
+            const tplEmpty = {};
+            for (const k of TPL_KINDS) tplEmpty[k] = '';
+            return json({ id: '__default__', name: '默认风格（内置模板）', tpl: tplEmpty });
+        }
         if (id) {
             // 内置风格 → 返回 builtin 标记，内容由前端 fetch static /style/<id>/tpl.json
             const builtinRaw = await env.KV_CACHE.get('tpl:sindex-builtin');
