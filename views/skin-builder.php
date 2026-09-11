@@ -538,6 +538,13 @@ function cfse_skin_map_templates($ctx) {
     if ($ref_shell !== '') {
         $block = cfse_skin_extract_pagination($ref_shell);
         if ($block !== '') {
+            // 提取到的分页块可能只含一个占位符（例如列表第一页没有 "Newer posts"）→ 补齐两个
+            if (strpos($block, '{{PAGINATION_PREV}}') === false) {
+                $block = "\n\t<div class=\"nav-previous\">{{PAGINATION_PREV}}</div>" . $block;
+            }
+            if (strpos($block, '{{PAGINATION_NEXT}}') === false) {
+                $block = $block . "\n\t<div class=\"nav-next\">{{PAGINATION_NEXT}}</div>";
+            }
             foreach (array('pageHome', 'pageCategory', 'pageTag', 'pageArchive') as $k) {
                 if ($out[$k] !== '' && strpos($out[$k], '{{PAGINATION_') === false && strpos($out[$k], '{{CONTENT}}') !== false) {
                     $out[$k] = str_replace('{{CONTENT}}', '{{CONTENT}}' . "\n" . $block, $out[$k]);

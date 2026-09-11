@@ -1291,7 +1291,16 @@ function cfse_fetch_skin_from_wordpress() {
         if (!cfse_generate_templates_from_custom()) {
             throw new Exception('templates.js 重新生成失败（模板已写入，可在编辑器点「保存模板」重试）');
         }
-        $logs[] = 'templates.js 已重新生成，待后台「初始化部署」推送到 Cloudflare Worker';
+        $logs[] = 'templates.js 已重新生成（回退基线）';
+
+        // 8. 直接产出风格包（tpl.json + 主题资源）：线上渲染走的是 tpl:active / tpl.json，
+        //    所以抓取完即可得到风格包，无需再手动点「快照为新风格」；同名覆盖，不堆 theme-2/3…
+        $pkg = cfse_create_style_package(get_bloginfo('name') . ' - ' . get_option('stylesheet', 'theme'), false);
+        if (!empty($pkg['ok'])) {
+            foreach ((array) $pkg['logs'] as $x) { $logs[] = $x; }
+        } else {
+            $logs[] = '风格包自动生成失败（模板已写入 cfse_custom_templates，可在编辑器点「📦 快照为新风格」重试）';
+        }
         return array(true, $logs);
     } catch (Throwable $e) {
         if ($probe_id) {
@@ -1672,32 +1681,32 @@ function cfse_handle_export_style() {
     exit;
 }
 
-function cfse_handle_create_style() {
-    if (!current_user_can('manage_options')) wp_die('权限不足');
-    check_admin_referer('cf_create_style');
+function cfse_create_style_package($display_name = '', $unique_suffix = true) {
     @set_time_limit(120);
-    $display_name = isset($_GET['style_name']) ? sanitize_text_field(wp_unslash($_GET['style_name'])) : '';
+    $logs = array();
     $style_root_dir = CFSE_PLUGIN_DIR . 'styles';
     if (!wp_mkdir_p($style_root_dir) || !is_writable($style_root_dir)) {
         cfse_log_message('styles 目录不可写: ' . $style_root_dir, 'ERROR');
-        wp_redirect(add_query_arg(array('style_error' => '1'), admin_url('options-general.php?page=cf-template-editor')));
-        exit;
+        $logs[] = 'styles 目录不可写: ' . $style_root_dir;
+        return array('ok' => false, 'slug' => '', 'dir' => '', 'files' => 0, 'tpl' => array(), 'logs' => $logs);
     }
 
     // 主题 slug 唯一（同主题重复生成加后缀）
     $theme_slug = function_exists('get_option') ? get_option('stylesheet', 'theme') : 'theme';
     $base_slug = sanitize_title($theme_slug, 'theme', 'save');
     $slug = $base_slug;
-    $n = 2;
-    while (is_dir($style_root_dir . '/' . $slug)) {
-        $slug = $base_slug . '-' . $n;
-        $n++;
+    if ($unique_suffix) {
+        $n = 2;
+        while (is_dir($style_root_dir . '/' . $slug)) {
+            $slug = $base_slug . '-' . $n;
+            $n++;
+        }
     }
     $dst_dir = $style_root_dir . '/' . $slug;
     if (!wp_mkdir_p($dst_dir) || !is_writable($dst_dir)) {
         cfse_log_message('风格包目录创建失败: ' . $dst_dir, 'ERROR');
-        wp_redirect(add_query_arg(array('style_error' => '1'), admin_url('options-general.php?page=cf-template-editor')));
-        exit;
+        $logs[] = '风格包目录创建失败: ' . $dst_dir;
+        return array('ok' => false, 'slug' => '', 'dir' => '', 'files' => 0, 'tpl' => array(), 'logs' => $logs);
     }
 
     // 1) tpl.json（6 类模板 JSON，与 Worker 导出格式一致；内置风格只读源头）
@@ -1729,8 +1738,8 @@ function cfse_handle_create_style() {
     $dest_theme = $dst_dir . '/wp-content/themes/' . $slug;
     if (!wp_mkdir_p($dest_theme)) {
         cfse_log_message('风格资源目录创建失败: ' . $dest_theme, 'ERROR');
-        wp_redirect(add_query_arg(array('style_error' => '1'), admin_url('options-general.php?page=cf-template-editor')));
-        exit;
+        $logs[] = '风格资源目录创建失败: ' . $dest_theme;
+        return array('ok' => false, 'slug' => '', 'dir' => '', 'files' => 0, 'tpl' => array(), 'logs' => $logs);
     }
     file_put_contents($dest_theme . '/tpl.json', wp_json_encode($tpl_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
     $allowed = array('css', 'js', 'mjs', 'json', 'map', 'svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'txt');
@@ -1756,7 +1765,21 @@ function cfse_handle_create_style() {
     cfse_sync_builtin_styles();
 
     cfse_log_message('已创建风格包: ' . $slug . '（tpl.json + 主题资源 ' . $copied_files . ' 个，内置索引已同步）', 'INFO');
-    wp_redirect(add_query_arg(array('style_created' => '1', 'style_id' => rawurlencode($slug)), admin_url('options-general.php?page=cf-template-editor')));
+    $logs[] = '风格包已生成: styles/' . $slug . '（tpl.json + 主题资源 ' . $copied_files . ' 个，已同步内置索引）';
+    return array('ok' => true, 'slug' => $slug, 'dir' => $dst_dir, 'files' => $copied_files, 'tpl' => $tpl_payload, 'logs' => $logs);
+}
+
+/** 「快照为新风格」后台按钮：权限/nonce 检查 → 调用 cfse_create_style_package() → 跳转 */
+function cfse_handle_create_style() {
+    if (!current_user_can('manage_options')) wp_die('权限不足');
+    check_admin_referer('cf_create_style');
+    $style_name = isset($_GET['style_name']) ? sanitize_text_field(wp_unslash($_GET['style_name'])) : '';
+    $res = cfse_create_style_package($style_name, true);
+    if (empty($res['ok'])) {
+        wp_redirect(add_query_arg(array('style_error' => '1'), admin_url('options-general.php?page=cf-template-editor')));
+        exit;
+    }
+    wp_redirect(add_query_arg(array('style_created' => '1', 'style_id' => rawurlencode($res['slug'])), admin_url('options-general.php?page=cf-template-editor')));
     exit;
 }
 
