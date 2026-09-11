@@ -1419,16 +1419,9 @@
         var txt = Object.keys(g.tpl || {}).map(function (k) { return String(g.tpl[k] || ''); }).join('\n');
         // 只提示"非本风格目录"的 /wp-content/ 引用：风格自己的资源就在
         // /wp-content/themes/<风格名>/（与 tpl.json 同层），属正常用法，不必打扰。
-        var selfDir = '/wp-content/themes/' + id + '/';
-        var refs = (txt.match(/\/wp-content\/[^"'\s)<>]+/g) || []).filter(function (p) {
-          return id !== '__default__' && p.indexOf(selfDir) !== 0;
-        });
-        if (refs.length) {
-          var uniq = refs.filter(function (v, i, a) { return a.indexOf(v) === i; }).slice(0, 6);
-          if (!confirm('该风格还引用了 ' + refs.length + ' 处「非本风格目录」的 /wp-content/ 资源：\n\n' + uniq.join('\n')
-            + '\n\n这类资源来自部署打包的 static（assets 直出）→ 未命中回退 R2，改动主题后需在 WP 后台点「同步主题资源」再 wrangler deploy；若指向原站则走 {{SITE_URL}}。'
-            + '\n\n提示：风格自己的资源应放在风格目录里，用 /wp-content/themes/<风格名>/ 引用（与 tpl.json 同层）。\n\n仍要应用吗？')) return null;
-        }
+        // 风格里出现 /wp-content/ 引用是正常用法（风格自己的资源目录、媒体库 uploads、
+        // {{SITE_URL}}/wp-content/… 走原站），不再打断应用流程。
+        void txt;
         return api('/api/templates/style/apply', { method: 'POST', body: { id: id, name: g.name, tpl: g.tpl } });
       }).then(function (d) {
         if (!d) return;

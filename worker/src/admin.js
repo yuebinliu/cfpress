@@ -135,29 +135,29 @@ async function tplGetIndex(env) {
  * 这样即使 KV 被删掉，下一个请求也会自动补全。
  */
 async function builtinIndex(env) {
+    // 权威来源 = static 的 /wp-content/themes/index.json（部署产物，与风格目录同层）。
+    // 每次请求都读它，所以**新增/更新内置风格后立即反映**，不需要清 KV 缓存。
+    // （KV 只在 assets 不可用时兜底，不做写缓存 —— 旧写法"KV 优先"会把清单锁死。）
     let out = [];
-    for (const key of ['tpl:index', 'tpl:sindex-builtin']) {
-        if (out.length) break;
-        try {
-            const v = await env.KV_CACHE.get(key);
-            if (v) {
-                const o = JSON.parse(v);
-                if (Array.isArray(o) && o.length) out = o;
-            }
-        } catch (e) { /* fallthrough */ }
-    }
+    try {
+        const url = 'https://assets.local/wp-content/themes/index.json';
+        const res = env.ASSETS ? await env.ASSETS.fetch(new Request(url)) : null;
+        if (res && res.ok) {
+            const o = await res.json();
+            if (Array.isArray(o)) out = o;
+        }
+    } catch (e) { /* fallthrough */ }
     if (!out.length) {
-        try {
-            const url = 'https://assets.local/wp-content/themes/index.json';
-            const res = env.ASSETS ? await env.ASSETS.fetch(new Request(url)) : null;
-            if (res && res.ok) {
-                const o = await res.json();
-                if (Array.isArray(o) && o.length) {
-                    out = o;
-                    try { await env.KV_CACHE.put('tpl:index', JSON.stringify(out)); } catch (e) { /* 缓存失败不影响返回 */ }
+        for (const key of ['tpl:index', 'tpl:sindex-builtin']) {
+            if (out.length) break;
+            try {
+                const v = await env.KV_CACHE.get(key);
+                if (v) {
+                    const o = JSON.parse(v);
+                    if (Array.isArray(o) && o.length) out = o;
                 }
-            }
-        } catch (e) { /* fallthrough */ }
+            } catch (e) { /* fallthrough */ }
+        }
     }
     return out.map(function (x) {
         return { id: String(x.id || ''), name: String(x.name || x.id || ''), updated: String(x.updated || ''), source: 'builtin' };
