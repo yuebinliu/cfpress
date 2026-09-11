@@ -1,0 +1,1388 @@
+/**
+ * admin.js —— Worker 管理后台 API（/api/*）
+ * 鉴权：除 /api/login /api/refresh 外均需 Authorization: Bearer <access token>
+ * 依赖：auth.js（JWT/登录）、cache.js（发布后清列表缓存）
+ */
+import { authenticate, signJwt, verifyJwt, bearerToken, loginRateLimit, hashPassword, verifyPassword } from './auth';
+import { deleteCache, purgeCache } from './cache';
+import { CFSE_SINGLE_TPL, renderHomepage, renderCategoryPage, renderTagPage, renderArchivePage } from './templates';
+import { mdToHtml, mdToText } from './md';
+import { getSiteContext } from './site';
+import { getActiveTpl } from './tplstore';
+import { getActiveTplContent } from './tplstore';
+import { getCacheConfig } from './cacheconfig';
+
+const ACCESS_TTL = 15 * 60;   // 15 min
+const REFRESH_TTL = 7 * 86400; // 7 d
+
+/** 粗略净化正文：移除脚本/样式/表单/危险属性（前台不可信编辑来源防护） */
+function scrubHtml(html) {
+    let h = String(html || '');
+    h = h.replace(/<script[\s\S]*?<\/script\s*>/gi, '');
+    h = h.replace(/<style[\s\S]*?<\/style\s*>/gi, '');
+    h = h.replace(/<(iframe|object|embed|form)\b[\s\S]*?<\/\1\s*>/gi, '');
+    h = h.replace(/<(iframe|object|embed)\b[^>]*\/?>/gi, '');
+    h = h.replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+    h = h.replace(/\b(href|src|xlink:href)\s*=\s*("javascript:[^"]*"|'javascript:[^']*'|javascript:[^\s>]+)/gi, '$1="#"');
+    return h;
+}
+
+// 写操作限速（内存滑窗：每用户 90 次/分钟；isolate 级，0 KV 成本）
+const WRATE_LIMIT = 90;
+const wrateMap = new Map();
+function wrateAllowed(uid) {
+    const now = Date.now();
+    const e = wrateMap.get(uid);
+    if (!e || now >= e.resetAt) {
+        if (wrateMap.size > 32) { wrateMap.forEach(function (v, k) { if (now >= v.resetAt) wrateMap.delete(k); }); }
+        wrateMap.set(uid, { n: 1, resetAt: now + 60000 });
+        return true;
+    }
+    e.n++;
+    return e.n <= WRATE_LIMIT;
+}
+
+function json(data, status = 200) {
+    return new Response(JSON.stringify(data), {
+        status: status,
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+    });
+}
+
+function slugify(text) {
+    let s = String(text || '').trim().toLowerCase();
+    if (!s) return '';
+    // 非 ASCII（中文等）→ 小写 %xx（与 WP sanitize_title 及库内既有 slug 形态一致，渲染端直接拼接）
+    s = s.replace(/[^\x00-\x7F]+/g, function (m) { return encodeURIComponent(m).toLowerCase(); });
+    // ASCII 部分：仅保留 a-z0-9%（%xx 编码用），其余连续字符 → '-'
+    s = s.replace(/[^a-z0-9%]+/g, '-').replace(/^-+|-+$/g, '');
+    return s;
+}
+
+/** WordPress 默认分类：无分类文章自动归入（对齐 WP get_option('default_category') 行为） */
+const DEFAULT_CATEGORY = { name: 'Uncategorized', slug: 'uncategorized' };
+
+/** 分类列表为空（或全部无效）时补默认分类 */
+function withDefaultCategory(list) {
+    const arr = (Array.isArray(list) ? list : []).filter(function (x) {
+        if (!x) return false;
+        return typeof x === 'string' ? x.trim() !== '' : String(x.name || '').trim() !== '';
+    });
+    return arr.length ? arr : [DEFAULT_CATEGORY];
+}
+
+function pad(n) { return n < 10 ? '0' + n : String(n); }
+
+function nowDateTime() {
+    return localDateTime(0);
+}
+
+/** 按站点时区偏移生成墙钟时间字符串 YYYY-MM-DD HH:MM:SS（与 WP 端 gmt_offset 对齐） */
+function localDateTime(offsetSec) {
+    const off = parseInt(offsetSec || 0, 10) || 0;
+    const d = new Date(Date.now() + off * 1000);
+    return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate())
+        + ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds());
+}
+
+function excerptOf(content, len = 200) {
+    const text = String(content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    return text.length > len ? text.slice(0, len) + '...' : text;
+}
+
+/** 解析 DB 中 categories/tags 列的 JSON（失败返回空数组） */
+function parseTaxoList(s) {
+    try {
+        const a = JSON.parse(String(s || '[]'));
+        return Array.isArray(a) ? a : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function b64ToBytes(b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+}
+
+/** 模板类型（6 类）：单页壳 / 列表条目 / 四种页面外壳 */
+const TPL_KINDS = ['single', 'item', 'pageHome', 'pageCategory', 'pageTag', 'pageArchive'];
+function tplKind(v) {
+    const s = String(v || '');
+    return TPL_KINDS.indexOf(s) >= 0 ? s : 'single';
+}
+
+/** 读模板索引（tpl:index）；缺失时返回 6 类空结构 */
+async function tplGetIndex(env) {
+    const out = {};
+    for (const k of TPL_KINDS) out[k] = [];
+    try {
+        const v = await env.KV_CACHE.get('tpl:index');
+        if (v) {
+            const o = JSON.parse(v);
+            for (const k of TPL_KINDS) if (Array.isArray(o[k])) out[k] = o[k];
+        }
+    } catch (e) { /* fallthrough */ }
+    return out;
+}
+
+/** 读风格清单（tpl:sindex） */
+async function styleIndex(env) {
+    let out = [];
+    try {
+        const v = await env.KV_CACHE.get('tpl:sindex');
+        if (v) { const o = JSON.parse(v); if (Array.isArray(o)) out = o; }
+    } catch (e) { /* fallthrough */ }
+    // 合并内置索引（tpl:sindex-builtin，WP 端部署后写入；内置在前）
+    try {
+        const vb = await env.KV_CACHE.get('tpl:sindex-builtin');
+        if (vb) {
+            const ob = JSON.parse(vb);
+            if (Array.isArray(ob)) {
+                const userIds = new Set(out.map(function (x) { return x.id; }));
+                const builtin = ob.filter(function (x) { return !userIds.has(x.id); });
+                out = builtin.concat(out);
+            }
+        }
+    } catch (e) { /* fallthrough */ }
+    return out;
+}
+
+/** 确保 styles 表存在（幂等；WP 端 schema 迁移也会建，这里兜底） */
+async function ensureStylesTable(env) {
+    try {
+        await env.D1_DATABASE.prepare('CREATE TABLE IF NOT EXISTS styles (id TEXT NOT NULL, version INTEGER NOT NULL, name TEXT, tpl_json TEXT, updated_at TEXT, PRIMARY KEY (id, version))').run();
+    } catch (e) { /* fallthrough */ }
+}
+
+/**
+ * 渲染单类模板的预览 HTML（/api/templates/preview 与 /api/templates/style/preview 共用）。
+ * tplAll 可选：{item,pageHome,...}，用于风格级预览时按同一套组合渲染。
+ */
+async function tplPreviewHtml(env, type, content, tplAll) {
+    const site = await getSiteContext(env);
+    const actItem = (tplAll && typeof tplAll.item === 'string') ? tplAll.item : await getActiveTplContent(env, 'item');
+    const sample = [];
+    for (let i = 1; i <= 5; i++) {
+        sample.push({
+            wp_id: 90000 + i, slug: 'preview-' + i, title: '预览样例文章 ' + i,
+            date: '2026-09-10 12:0' + i + ':00',
+            excerpt: '这是一段用于预览的摘要文字，检查条目模板的标题、日期、分类与标签渲染效果。',
+            categories: JSON.stringify([{ name: '示例分类', slug: 'uncategorized' }]),
+            tags: JSON.stringify([{ name: '示例标签', slug: 'demo' }]),
+        });
+    }
+    const data = { posts: sample, totalPages: 1, currentPage: 1 };
+    const baseOpts = { baseUrl: '/', sidebar: null, site: site };
+    if (type === 'item') {
+        const pageHome = (tplAll && typeof tplAll.pageHome === 'string') ? tplAll.pageHome : '';
+        return renderHomepage(data, 1, sample.length, Object.assign({ itemTpl: content, pageTpl: pageHome }, baseOpts));
+    }
+    if (type === 'single') {
+        const row = {
+            wp_id: 99999, title: '预览样例文章：中文标题 Test', slug: 'preview-sample',
+            date: '2026-09-10 12:00:00', modified: '2026-09-10 12:00:00', excerpt: '预览用摘要',
+            content: '<p>这是正文预览样例。包含一段文字与 <code>code</code> 标记。</p><p>再一段：看看段间距、行高和配色。</p><blockquote><p>引用样式预览。</p></blockquote><pre><code>console.log(1);</code></pre>',
+            content_format: 'html',
+            categories: JSON.stringify([{ name: '示例分类', slug: 'uncategorized' }]),
+            tags: JSON.stringify([{ name: '示例标签', slug: 'demo' }]),
+        };
+        return renderSingleHtml(row, site, content);
+    }
+    const withItem = Object.assign({ itemTpl: actItem, pageTpl: content }, baseOpts);
+    if (type === 'pageHome') return renderHomepage(data, 1, sample.length, withItem);
+    if (type === 'pageCategory') return renderCategoryPage(data, 1, sample.length, Object.assign({ slug: 'demo', name: '示例分类' }, withItem));
+    if (type === 'pageTag') return renderTagPage(data, 1, sample.length, Object.assign({ slug: 'demo', name: '示例标签' }, withItem));
+    if (type === 'pageArchive') return renderArchivePage(data, 1, sample.length, Object.assign({ year: '2026', month: '09' }, withItem));
+    return '';
+}
+
+/** 发布后清缓存：按纯 TTL 配置决定清理范围（省 KV 写） */
+async function purgeLists(env, extraKeys) {
+    const cfg = await getCacheConfig(env);
+    // seo（sitemap/robots）始终清：SEO 索引即时性由发布触发，精确删两个键（避免全库 list）
+    try { await deleteCache(env.KV_CACHE, 'seo:sitemap.xml'); } catch (e) {}
+    try { await deleteCache(env.KV_CACHE, 'seo:robots.txt'); } catch (e) {}
+    // 列表/侧边栏：仅在该类缓存启用（TTL>0）且 purge_on_publish=true 时清；否则靠 TTL 自然过期
+    if (!cfg.purge_on_publish) return;
+    if (cfg.ttl_sidebar > 0) {
+        try { await deleteCache(env.KV_CACHE, 'sidebar:data'); } catch (e) {}
+    }
+    if (cfg.ttl_list > 0) {
+        const keys = ['home:page:1'];
+        for (const k of (extraKeys || [])) keys.push(k);
+        for (const k of keys) { try { await deleteCache(env.KV_CACHE, k); } catch (e) {} }
+    }
+}
+
+/* ---------- 单页 A3：用单页壳模板把文章渲染为静态 HTML 存 R2 ---------- */
+function escHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** 按站点 storagePattern（settings）解析文章 R2 存储路径 */
+function postStoragePath(row, pattern) {
+    const d = String(row.date || '');
+    const vals = {
+        slug: String(row.slug || ''), id: String(row.wp_id || ''),
+        year: d.slice(0, 4), month: d.slice(5, 7), day: d.slice(8, 10),
+        hour: d.slice(11, 13), minute: d.slice(14, 16), second: d.slice(17, 19),
+    };
+    let p = pattern || '{slug}/index.html';
+    Object.keys(vals).forEach(function (k) { p = p.split('{' + k + '}').join(vals[k]); });
+    return p;
+}
+
+function postPublicUrl(row, site) {
+    const p = postStoragePath(row, site.storagePattern).replace(/\/?index\.html$/, '');
+    return (site.url || '') + '/' + p.split('/').filter(Boolean).join('/') + '/';
+}
+
+/** 正文含代码块时给单页注入 highlight.js 资源（/hl/ 由 Worker assets 直出） */
+function injectCodeAssets(html, content) {
+    if (!html || !/<(?:pre|code)\b/i.test(String(content || ''))) return html;
+    const css = '<link rel="stylesheet" href="/hl/github.min.css">';
+    const js = '<script src="/hl/highlight.min.js"><\/script><script>document.addEventListener("DOMContentLoaded",function(){try{hljs.highlightAll()}catch(e){}});<\/script>';
+    let h = html;
+    if (/<\/head>/i.test(h)) { h = h.replace(/<\/head>/i, css + '</head>'); }
+    else { h = css + h; }
+    if (/<\/body>/i.test(h)) { h = h.replace(/<\/body>/i, js + '</body>'); }
+    else { h += js; }
+    return h;
+}
+
+/** 条件块处理：{{#IF_FLAG}}...{{/IF_FLAG}}，cond=false 时整块删除（与 templates.js cfseIfBlock 同语义） */
+function cfseIfBlock(tpl, flag, cond) {
+    const open = '{{#IF_' + flag + '}}';
+    const close = '{{/IF_' + flag + '}}';
+    while (tpl.includes(open)) {
+        const s = tpl.indexOf(open);
+        const e = tpl.indexOf(close, s);
+        if (e < 0) break;
+        tpl = tpl.slice(0, s) + (cond ? tpl.slice(s + open.length, e) : '') + tpl.slice(e + close.length);
+    }
+    return tpl;
+}
+
+function renderSingleHtml(row, site, tplOverride) {
+    let h = tplOverride || CFSE_SINGLE_TPL || '';
+    if (!h) return '';
+    const rep = function (t, v) { h = h.split(t).join(String(v == null ? '' : v)); };
+    rep('{{SITE_URL}}', site.url || '');
+    rep('{{SITE_NAME}}', escHtml(site.name));
+    rep('{{SITE_DESC}}', escHtml(site.description || ''));
+    rep('{{SITE_FOOTER}}', site.footerHtml || '');
+    rep('{{POST_TITLE}}', escHtml(row.title));
+    rep('{{POST_DATE}}', escHtml(String(row.date || '').slice(0, 10)));
+    rep('{{POST_EXCERPT}}', escHtml(row.excerpt || ''));
+    const bodyHtml = (row.content_format || 'html') === 'md' ? mdToHtml(row.content) : String(row.content || '');
+    rep('{{POST_CONTENT}}', bodyHtml);
+    rep('{{POST_URL}}', postPublicUrl(row, site));
+    // 分类/标签区（与列表条目模板同形态；无则整块隐藏）
+    const cats = parseTaxoList(row.categories);
+    const tags = parseTaxoList(row.tags);
+    h = cfseIfBlock(h, 'CATEGORIES', cats.length > 0);
+    h = cfseIfBlock(h, 'TAGS', tags.length > 0);
+    const baseUrl = site.url || '';
+    rep('{{POST_CATEGORIES}}', cats.map(function (c) { return '<a href="' + baseUrl + '/category/' + (c.slug || '') + '/">' + escHtml(c.name) + '</a>'; }).join(', '));
+    rep('{{POST_TAGS}}', tags.map(function (t) { return '<a href="' + baseUrl + '/tag/' + (t.slug || '') + '/">' + escHtml(t.name) + '</a>'; }).join(', '));
+    return injectCodeAssets(h, bodyHtml);
+}
+
+/** 发布（published）文章 → 渲染单页写 R2（单页直读 R2，无 KV 缓存层） */
+async function writeSinglePage(env, row) {
+    if (!row || row.status !== 'published') return false;
+    const site = await getSiteContext(env);
+    const path = postStoragePath(row, site.storagePattern);
+    const html = renderSingleHtml(row, site, await getActiveTplContent(env, 'single'));
+    if (!html) return false;
+    try {
+        await env.R2_BUCKET.put(path, html, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
+    } catch (e) { console.error('writeSinglePage put failed:', e); return false; }
+    return true;
+}
+
+/** 删除文章静态单页（R2） */
+async function deleteSinglePage(env, row) {
+    if (!row) return;
+    const site = await getSiteContext(env);
+    const path = postStoragePath(row, site.storagePattern);
+    try { await env.R2_BUCKET.delete(path); } catch (e) {}
+    try { await env.R2_BUCKET.delete(path + '.gz'); } catch (e) {}
+}
+
+/** 规范化并 upsert 分类/标签，返回 [{name,slug}]（同时写 post_taxonomy） */
+async function syncTaxonomy(db, postId, type, terms) {
+    const out = [];
+    for (const raw of (terms || [])) {
+        if (!raw) continue;
+        const name = typeof raw === 'string' ? raw : String(raw.name || '');
+        if (!name.trim()) continue;
+        let slug = (raw && raw.slug) ? String(raw.slug) : slugify(name);
+        if (!slug) slug = 'c' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
+        await db.prepare('INSERT INTO taxonomies (type, slug, name) VALUES (?, ?, ?) ON CONFLICT(type, slug) DO UPDATE SET name = excluded.name')
+            .bind(type, slug, name.trim()).run();
+        await db.prepare('INSERT OR IGNORE INTO post_taxonomy (post_id, taxonomy_type, taxonomy_slug) VALUES (?, ?, ?)')
+            .bind(postId, type, slug).run();
+        out.push({ name: name.trim(), slug: slug });
+    }
+    return out;
+}
+
+function buildPostPayload(body, offsetSec) {
+    const title = String(body.title || '').trim();
+    if (!title) return { error: '标题不能为空' };
+    const fmt = body.content_format === 'md' ? 'md' : 'html';
+    // md 原稿原样保存（渲染层再转）；html 入库前净化
+    const content = fmt === 'md' ? String(body.content || '') : scrubHtml(String(body.content || ''));
+    const slug = (body.slug ? String(body.slug) : slugify(title) || ('p' + Date.now().toString(36))).toLowerCase();
+    const status = body.status === 'draft' ? 'draft' : 'published';
+    return {
+        slug: slug,
+        title: title,
+        content: content,
+        content_format: fmt,
+        excerpt: (body.excerpt !== undefined && String(body.excerpt).trim() !== '') ? String(body.excerpt).trim()
+            : (fmt === 'md' ? mdToText(content, 200) : excerptOf(content)),
+        status: status,
+        featured_image: body.featured_image ? String(body.featured_image) : '',
+        categories: body.categories,
+        tags: body.tags,
+        date: body.date || localDateTime(offsetSec),
+        modified: localDateTime(offsetSec),
+    };
+}
+
+/** 主入口：request.path 以 /api/ 开头时由 routes 调用 */
+export async function handleAdminRequest(request, env) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const method = request.method;
+    const secret = env.AUTH_KEY_SECRET || 'cfse-dev-secret';
+
+    // ---- 登录 ----
+    if (path === '/api/login' && method === 'POST') {
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (await loginRateLimit(env, ip)) return json({ error: '尝试过于频繁，请稍后再试' }, 429);
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        // 账号级失败锁定：连续 10 次错误锁 15 分钟（与 IP 限速叠加）
+        const uName = String(body.username || '').trim();
+        const uKey = 'login:u:' + uName;
+        let uLock = '0';
+        try { uLock = (await env.KV_CACHE.get(uKey)) || '0'; } catch (e) {}
+        if (parseInt(uLock, 10) >= 10) return json({ error: '该账号已临时锁定，请 15 分钟后再试' }, 429);
+        const user = await authenticate(env.D1_DATABASE, body.username, body.password);
+        if (!user) {
+            const n = parseInt(uLock, 10) + 1;
+            try { await env.KV_CACHE.put(uKey, String(n), { expirationTtl: 900 }); } catch (e) {}
+            return json({ error: n >= 10 ? '该账号已临时锁定，请 15 分钟后再试' : '用户名或密码错误' }, 401);
+        }
+        try { await env.KV_CACHE.delete(uKey); } catch (e) {}
+        const access = await signJwt({ sub: user.id, username: user.username, role: user.role, typ: 'access' }, secret, ACCESS_TTL);
+        const refresh = await signJwt({ sub: user.id, typ: 'refresh' }, secret, REFRESH_TTL);
+        return json({ access, refresh, user: { id: user.id, username: user.username, role: user.role, displayName: user.displayName, email: user.email } });
+    }
+
+    // ---- 刷新 ----
+    if (path === '/api/refresh' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const payload = await verifyJwt(body.refresh, secret, 'refresh');
+        if (!payload) return json({ error: 'refresh 无效或已过期' }, 401);
+        const row = await env.D1_DATABASE.prepare('SELECT * FROM users WHERE id = ?').bind(payload.sub).first();
+        if (!row || parseInt(row.user_status, 10) !== 1) return json({ error: '账号不可用' }, 401);
+        const access = await signJwt({ sub: row.id, username: row.user_login, role: row.role, typ: 'access' }, secret, ACCESS_TTL);
+        return json({ access, user: { id: row.id, username: row.user_login, role: row.role, displayName: row.display_name, email: row.user_email } });
+    }
+
+    // ---- 其余需 access 鉴权 ----
+    const token = bearerToken(request);
+    const authPayload = token ? await verifyJwt(token, secret, 'access') : null;
+    if (!authPayload) return json({ error: '未授权或登录已过期' }, 401);
+
+    // ---- 角色权限门禁 ----
+    // admin：全部；editor/author：内容管理；subscriber：仅个人资料
+    const role = authPayload.role || 'subscriber';
+    const isWrite = request.method === 'POST' || request.method === 'PUT' || request.method === 'DELETE';
+    const adminOnly = path.startsWith('/api/users')
+        || (isWrite && (path === '/api/settings' || path.startsWith('/api/import')
+            || path === '/api/cache/purge' || path.startsWith('/api/posts/rebuild-single')
+            || path.startsWith('/api/posts/batch')));
+    if (adminOnly && role !== 'admin') return json({ error: '无权限' }, 403);
+    if (role === 'subscriber' && path !== '/api/me' && path !== '/api/me/password') {
+        return json({ error: '无权限' }, 403);
+    }
+
+    // ---- 写操作限速（每用户 90 次/分钟，防脚本风暴；内存滑窗，0 KV 成本） ----
+    if (role !== 'subscriber' && (request.method === 'POST' || request.method === 'PUT' || request.method === 'DELETE')) {
+        if (!wrateAllowed(authPayload.sub)) return json({ error: '操作过于频繁，请稍后再试' }, 429);
+    }
+
+    const db = env.D1_DATABASE;
+
+    // GET /api/me
+    if (path === '/api/me' && method === 'GET') {
+        const row = await db.prepare('SELECT id, user_login, user_email, display_name, role FROM users WHERE id = ?').bind(authPayload.sub).first();
+        return json(row ? { id: row.id, username: row.user_login, email: row.user_email, displayName: row.display_name, role: row.role } : { error: 'not found' }, row ? 200 : 404);
+    }
+
+    // PUT /api/me（更新昵称 / 邮箱）
+    if (path === '/api/me' && method === 'PUT') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const displayName = String(body.display_name || '').trim();
+        const email = String(body.email || '').trim();
+        if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: '邮箱格式不正确' }, 400);
+        if (!displayName) return json({ error: '昵称不能为空' }, 400);
+        await db.prepare('UPDATE users SET display_name = ?, user_email = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .bind(displayName, email, authPayload.sub).run();
+        return json({ ok: true });
+    }
+
+    // POST /api/me/password（修改自己的密码）
+    if (path === '/api/me/password' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const row = await db.prepare('SELECT * FROM users WHERE id = ?').bind(authPayload.sub).first();
+        if (!row) return json({ error: '用户不存在' }, 404);
+        const oldOk = await verifyPassword(body.old_password, row.user_pass);
+        if (!oldOk) return json({ error: '原密码错误' }, 401);
+        const np = String(body.new_password || '');
+        if (np.length < 8) return json({ error: '新密码至少 8 位' }, 400);
+        const store = await hashPassword(np);
+        await db.prepare('UPDATE users SET user_pass = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').bind(store, authPayload.sub).run();
+        return json({ ok: true, message: '密码已修改，请重新登录' });
+    }
+
+    // GET /api/settings（站点信息 + 缓存策略）
+    if (path === '/api/settings' && method === 'GET') {
+        const site = await getSiteContext(env);
+        return json({
+            site: { name: site.name, url: site.url, description: site.description || '' },
+            cache: site.cache,
+        });
+    }
+
+    // PUT /api/settings（仅 admin；支持站点名/描述 与/或 缓存策略 → settings 落库 + 清缓存即时生效）
+    if (path === '/api/settings' && method === 'PUT') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const hasSite = body.site && typeof body.site === 'object';
+        const hasCache = body.cache && typeof body.cache === 'object';
+        if (!hasSite && !hasCache) return json({ error: '没有要更新的设置' }, 400);
+        const site = await getSiteContext(env);
+        const result = {};
+        if (hasSite) {
+            const newName = String(body.site.name || '').trim();
+            if (!newName) return json({ error: '站点名不能为空' }, 400);
+            const row = await db.prepare("SELECT v FROM settings WHERE k = 'site'").first();
+            let prev = {};
+            try { prev = JSON.parse((row && row.v) || '{}'); } catch (e) {}
+            const newDesc = String(body.site.description || '').trim();
+            const payload = JSON.stringify({
+                name: newName,
+                description: newDesc,
+                url: prev.url || site.url || '',
+                storagePattern: prev.storagePattern || site.storagePattern || '{slug}/index.html',
+                timezoneOffset: prev.timezoneOffset || 0,
+            });
+            await db.prepare("INSERT INTO settings (k, v) VALUES ('site', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(payload).run();
+            result.site = { name: newName, description: newDesc };
+        }
+        if (hasCache) {
+            const c = body.cache;
+            const ttlNum = function (v, dflt) {
+                const n = parseInt(v, 10);
+                if (isNaN(n) || n < 0) return dflt;
+                return Math.min(n, 31536000); // 上限 1 年
+            };
+            const cacheCfg = {
+                ttl_list: ttlNum(c.ttl_list, 0),
+                ttl_sidebar: ttlNum(c.ttl_sidebar, 0),
+                ttl_site: ttlNum(c.ttl_site, 604800),
+                ttl_feed: ttlNum(c.ttl_feed, 14400),
+                feed_count: (function () { const n = parseInt(c.feed_count, 10); return (!isNaN(n) && n >= 1) ? Math.min(n, 100) : 20; })(),
+                purge_on_publish: !!c.purge_on_publish,
+            };
+            await db.prepare("INSERT INTO settings (k, v) VALUES ('cache', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(JSON.stringify(cacheCfg)).run();
+            result.cache = cacheCfg;
+        }
+        // 配置与站点信息打包在同一个 KV 值 site:ctx → 清一次即全面生效；旧的独立配置键顺手清理
+        try { await deleteCache(env.KV_CACHE, 'site:ctx'); } catch (e) {}
+        try { await deleteCache(env.KV_CACHE, 'cache:config'); } catch (e) {}
+        // 站名/描述/缓存策略变化影响 RSS
+        try { await purgeCache(env.KV_CACHE, 'rss:'); } catch (e) {}
+        // 旧的列表/侧边栏缓存精确失效（首屏；其余分页靠 TTL 过期），并按新配置清 seo
+        try { await deleteCache(env.KV_CACHE, 'home:page:1'); } catch (e) {}
+        try { await deleteCache(env.KV_CACHE, 'sidebar:data'); } catch (e) {}
+        await purgeLists(env);
+        return json(Object.assign({ ok: true }, result));
+    }
+
+    // ---- 文章 ----
+    if (path === '/api/posts' && method === 'GET') {
+        const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
+        const per = Math.min(100, Math.max(1, parseInt(url.searchParams.get('per') || '20', 10) || 20));
+        const q = url.searchParams.get('q');
+        const status = url.searchParams.get('status');
+        const taxType = url.searchParams.get('type');
+        const taxSlug = url.searchParams.get('tax');
+        const sortCol = url.searchParams.get('sort') === 'title' ? 'title COLLATE NOCASE' : 'date';
+        const sortDir = url.searchParams.get('dir') === 'asc' ? 'ASC' : 'DESC';
+        const offset = (page - 1) * per;
+        const conds = [];
+        const like = [];
+        if (q) { conds.push('(title LIKE ? OR content LIKE ?)'); like.push('%' + q + '%', '%' + q + '%'); }
+        if (status === 'published' || status === 'draft') { conds.push('status = ?'); like.push(status); }
+        if ((taxType === 'category' || taxType === 'tag') && taxSlug) {
+            conds.push("wp_id IN (SELECT post_id FROM post_taxonomy WHERE taxonomy_type = ? AND taxonomy_slug = ?)");
+            like.push(taxType, decodeURIComponent(taxSlug));
+        }
+        const where = conds.length ? (' WHERE ' + conds.join(' AND ')) : '';
+        const rows = await db.prepare('SELECT wp_id, slug, title, excerpt, date, modified, status, categories, tags, featured_image FROM posts' + where + ' ORDER BY ' + sortCol + ' ' + sortDir + ' LIMIT ? OFFSET ?').bind(...like, per, offset).all();
+        const cnt = await db.prepare('SELECT COUNT(*) AS c FROM posts' + where).bind(...like).first();
+        return json({ posts: rows.results || [], total: parseInt((cnt && cnt.c) || 0, 10), page, pages: Math.ceil(parseInt((cnt && cnt.c) || 0, 10) / per) });
+    }
+
+    // POST /api/posts/{id}/duplicate（复制为草稿）
+    let sd = path.match(/^\/api\/posts\/(\d+)\/duplicate$/);
+    if (sd && method === 'POST') {
+        const id = parseInt(sd[1], 10);
+        const row = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(id).first();
+        if (!row) return json({ error: 'not found' }, 404);
+        const siteCtx = await getSiteContext(env);
+        const off = siteCtx.timezoneOffset || 0;
+        let slug = String(row.slug) + '-2';
+        for (let tries = 1; tries <= 20; tries++) {
+            const hit = await db.prepare('SELECT wp_id FROM posts WHERE slug = ?').bind(slug).first();
+            if (!hit) break;
+            slug = String(row.slug) + '-' + (tries + 1);
+        }
+        const wpId = Date.now() * 100 + Math.floor(Math.random() * 100);
+        const cats = withDefaultCategory(parseTaxoList(row.categories));
+        const tags = parseTaxoList(row.tags);
+        await db.prepare('INSERT INTO posts (wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(wpId, slug, String(row.title) + '（副本）', String(row.content || ''), (row.content_format || 'html'), String(row.excerpt || ''), localDateTime(off), localDateTime(off), 'draft', JSON.stringify(cats), JSON.stringify(tags), String(row.featured_image || '')).run();
+        await syncTaxonomy(db, wpId, 'category', cats);
+        await syncTaxonomy(db, wpId, 'tag', tags);
+        return json({ ok: true, id: wpId, slug: slug, status: 'draft' });
+    }
+
+    // POST /api/posts/{id}/rebuild（单篇重建静态单页）
+    let sr = path.match(/^\/api\/posts\/(\d+)\/rebuild$/);
+    if (sr && method === 'POST') {
+        const id = parseInt(sr[1], 10);
+        const row = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(id).first();
+        if (!row) return json({ error: 'not found' }, 404);
+        if (row.status === 'published') {
+            await writeSinglePage(env, row);
+            await purgeLists(env);
+        }
+        return json({ ok: true, rebuilt: row.status === 'published' ? 1 : 0 });
+    }
+
+    // GET /api/posts/{id}
+    let m = path.match(/^\/api\/posts\/(\d+)$/);
+    if (m && method === 'GET') {
+        const row = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(parseInt(m[1], 10)).first();
+        if (!row) return json({ error: 'not found' }, 404);
+        // 邻篇（按 date desc 管理列表顺序）
+        const all = await db.prepare('SELECT wp_id, slug, title FROM posts ORDER BY date DESC, wp_id DESC').all();
+        const list = all.results || [];
+        const ix = list.findIndex(function (x) { return x.wp_id === row.wp_id; });
+        const prev = ix > 0 ? list[ix - 1] : null;
+        const next = (ix >= 0 && ix < list.length - 1) ? list[ix + 1] : null;
+        return json(Object.assign({}, row, { prev: prev, next: next }));
+    }
+
+    // POST /api/posts（新建）
+    if (path === '/api/posts' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const siteCtx = await getSiteContext(env);
+        const p = buildPostPayload(body, siteCtx.timezoneOffset || 0);
+        if (p.error) return json({ error: p.error }, 400);
+        const dt = localDateTime(siteCtx.timezoneOffset || 0);
+        // slug 冲突时自动追加 -2/-3…（WP 风格），最多尝试 20 次
+        let finalSlug = p.slug;
+        for (let tries = 1; tries <= 20; tries++) {
+            const hit = await db.prepare('SELECT wp_id FROM posts WHERE slug = ?').bind(finalSlug).first();
+            if (!hit) break;
+            finalSlug = p.slug + '-' + (tries + 1);
+        }
+        const wpId = Date.now() * 100 + Math.floor(Math.random() * 100); // 无自增可用唯一 id（时间戳毫秒）
+        const catJson = JSON.stringify(withDefaultCategory(p.categories));
+        const tagJson = JSON.stringify(p.tags || []);
+        await db.prepare("INSERT INTO posts (wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(wpId, finalSlug, p.title, p.content, p.content_format, p.excerpt, p.date, dt, p.status, catJson, tagJson, p.featured_image).run();
+        await db.prepare('DELETE FROM post_taxonomy WHERE post_id = ?').bind(wpId).run();
+        const cats = await syncTaxonomy(db, wpId, 'category', withDefaultCategory(p.categories));
+        const tags = await syncTaxonomy(db, wpId, 'tag', p.tags);
+        if (cats.length || tags.length) {
+            await db.prepare('UPDATE posts SET categories = ?, tags = ? WHERE wp_id = ?')
+                .bind(JSON.stringify(cats), JSON.stringify(tags), wpId).run();
+        }
+        if (p.status === 'published') {
+            const row2 = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(wpId).first();
+            if (row2) await writeSinglePage(env, row2);
+            await purgeLists(env);
+        }
+        return json({ ok: true, id: wpId, slug: finalSlug, date: p.date, single: p.status === 'published' ? 1 : 0 });
+    }
+
+    // PUT /api/posts/{id}（更新；正文为纯净 HTML）
+    if (m && method === 'PUT') {
+        const id = parseInt(m[1], 10);
+        const row = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(id).first();
+        if (!row) return json({ error: 'not found' }, 404);
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const siteCtx = await getSiteContext(env);
+        const p = buildPostPayload(Object.assign({}, row, body), siteCtx.timezoneOffset || 0);
+        if (p.error) return json({ error: p.error }, 400);
+        // 改 slug 时的唯一性检查（其它文章已占用 → 409）
+        if (p.slug !== row.slug) {
+            const clash = await db.prepare('SELECT wp_id FROM posts WHERE slug = ? AND wp_id != ?').bind(p.slug, id).first();
+            if (clash) return json({ error: 'slug 已被其它文章占用：' + p.slug }, 409);
+        }
+        await db.prepare('DELETE FROM post_taxonomy WHERE post_id = ?').bind(id).run();
+        const catsIn = withDefaultCategory(body.categories !== undefined ? body.categories : parseTaxoList(row.categories));
+        const tagsIn = body.tags !== undefined ? body.tags : parseTaxoList(row.tags);
+        const cats = await syncTaxonomy(db, id, 'category', catsIn);
+        const tags = await syncTaxonomy(db, id, 'tag', tagsIn);
+        await db.prepare('UPDATE posts SET slug = ?, title = ?, content = ?, content_format = ?, excerpt = ?, modified = ?, status = ?, categories = ?, tags = ?, featured_image = ? WHERE wp_id = ?')
+            .bind(p.slug, p.title, p.content, p.content_format, p.excerpt, localDateTime(siteCtx.timezoneOffset || 0), p.status, JSON.stringify(cats), JSON.stringify(tags), p.featured_image, id).run();
+        // 单页同步：slug 变化先删旧；published 重建/生成单页；转草稿删除单页
+        const newRow = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(id).first();
+        if (row && row.status === 'published' && row.slug !== p.slug) await deleteSinglePage(env, row);
+        if (p.status === 'published' && newRow) await writeSinglePage(env, newRow);
+        if (p.status === 'draft') await deleteSinglePage(env, newRow || row);
+        await purgeLists(env);
+        return json({ ok: true, id: id, slug: p.slug, single: p.status === 'published' ? 1 : 0 });
+    }
+
+    // DELETE /api/posts/{id}
+    if (m && method === 'DELETE') {
+        const id = parseInt(m[1], 10);
+        const row = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(id).first();
+        await db.prepare('DELETE FROM post_taxonomy WHERE post_id = ?').bind(id).run();
+        await db.prepare('DELETE FROM posts WHERE wp_id = ?').bind(id).run();
+        await db.prepare('DELETE FROM taxonomies WHERE slug NOT IN (SELECT DISTINCT taxonomy_slug FROM post_taxonomy)').run();
+        if (row) await deleteSinglePage(env, row);
+        await purgeLists(env);
+        return json({ ok: true });
+    }
+
+    // POST /api/posts/batch（批量：delete / draft / publish）
+    if (path === '/api/posts/batch' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const ids = Array.isArray(body.ids) ? body.ids.map(Number).filter(function (n) { return n > 0; }) : [];
+        if (!ids.length) return json({ error: '没有选中文章' }, 400);
+        const action = body.action;
+        if (action !== 'delete' && action !== 'draft' && action !== 'publish' && action !== 'setcats') return json({ error: 'action 无效' }, 400);
+        const siteCtx = await getSiteContext(env);
+        const off = siteCtx.timezoneOffset || 0;
+        let done = 0;
+        if (action === 'delete') {
+            for (const id of ids) {
+                const row = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(id).first();
+                if (!row) continue;
+                await db.prepare('DELETE FROM post_taxonomy WHERE post_id = ?').bind(id).run();
+                await db.prepare('DELETE FROM posts WHERE wp_id = ?').bind(id).run();
+                await deleteSinglePage(env, row);
+                done++;
+            }
+        } else if (action === 'setcats') {
+            // body.categories 可为 [{name}] 数组或字符串/JSON；数组直通（parseTaxoList 只吃 JSON 字符串）
+            const catNames = Array.isArray(body.categories) ? body.categories : parseTaxoList(body.categories || []);
+            if (!catNames.length) return json({ error: '没有提供分类' }, 400);
+            const ph = ids.map(function () { return '?'; }).join(',');
+            const rows = await db.prepare('SELECT * FROM posts WHERE wp_id IN (' + ph + ')').bind(...ids).all();
+            for (const row of (rows.results || [])) {
+                // 只替换分类：清旧 category 关联后重建
+                await db.prepare('DELETE FROM post_taxonomy WHERE post_id = ? AND taxonomy_type = \'category\'').bind(row.wp_id).run();
+                const cats = await syncTaxonomy(db, row.wp_id, 'category', catNames);
+                await db.prepare('UPDATE posts SET categories = ?, modified = ? WHERE wp_id = ?').bind(JSON.stringify(cats), localDateTime(off), row.wp_id).run();
+                done++;
+            }
+        } else {
+            const ph = ids.map(function () { return '?'; }).join(',');
+            const rows = await db.prepare('SELECT * FROM posts WHERE wp_id IN (' + ph + ')').bind(...ids).all();
+            for (const row of (rows.results || [])) {
+                const want = action === 'publish' ? 'published' : action; // 库内状态值为 published/draft
+                if (row.status === want) { done++; continue; }
+                await db.prepare('UPDATE posts SET status = ?, modified = ? WHERE wp_id = ?').bind(want, localDateTime(off), row.wp_id).run();
+                if (action === 'publish') {
+                    const nr = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(row.wp_id).first();
+                    if (nr) await writeSinglePage(env, nr);
+                } else {
+                    await deleteSinglePage(env, row);
+                }
+                done++;
+            }
+        }
+        if (done) await purgeLists(env);
+        return json({ ok: true, done: done });
+    }
+
+    // POST /api/posts/rebuild-single（admin；分批重建全部已发布文章的静态单页）
+    if (path === '/api/posts/rebuild-single' && method === 'POST') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        const limit = Math.min(40, Math.max(1, parseInt(url.searchParams.get('limit') || '15', 10) || 15));
+        const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
+        const rows = await db.prepare("SELECT * FROM posts WHERE status = 'published' ORDER BY wp_id ASC LIMIT ? OFFSET ?").bind(limit, offset).all();
+        let rebuilt = 0;
+        for (const r of (rows.results || [])) {
+            if (await writeSinglePage(env, r)) rebuilt++;
+        }
+        const totalRows = await db.prepare("SELECT COUNT(*) AS c FROM posts WHERE status = 'published'").first();
+        const total = parseInt((totalRows && totalRows.c) || 0, 10);
+        const nextOffset = (offset + rebuilt) < total ? (offset + rebuilt) : null;
+        return json({ ok: true, rebuilt: rebuilt, total: total, nextOffset: nextOffset });
+    }
+
+    // ---- 模板管理（单页壳 / 列表条目；KV 存储，多套切换） ----
+    if (path === '/api/templates' && method === 'GET') {
+        const active = (await getActiveTpl(env)) || {};
+        const idx = await tplGetIndex(env);
+        const act = {};
+        for (const k of TPL_KINDS) {
+            act[k] = { id: (active[k] && active[k].id) || 'default', name: (active[k] && active[k].name) || '内置默认' };
+        }
+        return json({ active: act, index: idx, styles: await styleIndex(env) });
+    }
+    if (path === '/api/templates/content' && method === 'GET') {
+        const type = tplKind(url.searchParams.get('type'));
+        const id = String(url.searchParams.get('id') || '');
+        if (id === 'default' || id === '') return json({ content: '' });
+        const raw = await env.KV_CACHE.get('tpl:store:' + type + ':' + id);
+        if (!raw) return json({ error: 'not found' }, 404);
+        const o = JSON.parse(raw);
+        return json({ id: o.id, name: o.name, content: o.content, updated: o.updated });
+    }
+    if (path === '/api/templates/save' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const type = tplKind(body.type);
+        const content = String(body.content || '');
+        if (!content.trim()) return json({ error: '模板内容不能为空' }, 400);
+        if (content.length > 300 * 1024) return json({ error: '模板过大（上限 300KB）' }, 400);
+        const name = String(body.name || '').trim().slice(0, 40) || ('模板 ' + new Date().toISOString().slice(0, 16).replace('T', ' '));
+        let id = String(body.id || '');
+        if (!id) id = 'c' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
+        const rec = { id: id, name: name, content: content, updated: new Date().toISOString().slice(0, 19) };
+        await env.KV_CACHE.put('tpl:store:' + type + ':' + id, JSON.stringify(rec));
+        const idx = await tplGetIndex(env);
+        idx[type] = (idx[type] || []).filter(function (x) { return x.id !== id; });
+        idx[type].unshift({ id: id, name: name, updated: rec.updated });
+        await env.KV_CACHE.put('tpl:index', JSON.stringify(idx));
+        return json({ ok: true, id: id, name: name });
+    }
+    if (path === '/api/templates/activate' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const type = tplKind(body.type);
+        const id = String(body.id || 'default');
+        const active = (await getActiveTpl(env)) || {};
+        if (id === 'default') {
+            active[type] = { id: 'default', name: '内置默认', content: '' };
+        } else {
+            const raw = await env.KV_CACHE.get('tpl:store:' + type + ':' + id);
+            if (!raw) return json({ error: '模板不存在' }, 404);
+            const o = JSON.parse(raw);
+            active[type] = { id: o.id, name: o.name, content: o.content };
+        }
+        await env.KV_CACHE.put('tpl:active', JSON.stringify(active));
+        return json({ ok: true });
+    }
+    if (path === '/api/templates/delete' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const type = tplKind(body.type);
+        const id = String(body.id || '');
+        if (!id || id === 'default') return json({ error: '无效 id' }, 400);
+        await env.KV_CACHE.delete('tpl:store:' + type + ':' + id);
+        const idx = await tplGetIndex(env);
+        idx[type] = (idx[type] || []).filter(function (x) { return x.id !== id; });
+        await env.KV_CACHE.put('tpl:index', JSON.stringify(idx));
+        const active = (await getActiveTpl(env)) || {};
+        if (active[type] && active[type].id === id) {
+            active[type] = { id: 'default', name: '内置默认', content: '' };
+            await env.KV_CACHE.put('tpl:active', JSON.stringify(active));
+        }
+        return json({ ok: true });
+    }
+    if (path === '/api/templates/preview' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const type = tplKind(body.type);
+        const content = String(body.content || '');
+        if (!content.trim()) return json({ error: '模板内容为空' }, 400);
+        const html = await tplPreviewHtml(env, type, content, body.tplAll || null);
+        if (!html) return json({ error: '未知类型' }, 400);
+        return json({ html: html });
+    }
+
+    // ---- 风格包（整体应用/导入导出/多套）与风格静态资源（R2） ----
+    if (path === '/api/templates/styles' && method === 'GET') {
+        return json({ styles: await styleIndex(env) });
+    }
+    if (path === '/api/templates/style/preview' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        let tpl = (body.tpl && typeof body.tpl === 'object') ? body.tpl : null;
+        const id = String(body.id || '');
+        if (!tpl && id === '__default__') tpl = {};
+        if (!tpl && id) {
+            // 用户风格 → D1 当前版；内置风格前端先 fetch static tpl.json 后传 tpl
+            const prow = await env.D1_DATABASE.prepare('SELECT id, name, tpl_json FROM styles WHERE id = ? ORDER BY version DESC LIMIT 1').bind(id).first();
+            if (prow) { try { tpl = JSON.parse(prow.tpl_json || '{}'); } catch (e) { tpl = {}; } }
+            else {
+                const legacy = await env.KV_CACHE.get('tpl:style:' + id);
+                if (legacy) { try { tpl = (JSON.parse(legacy).tpl) || {}; } catch (e) { tpl = {}; } }
+                else return json({ error: 'style not found' }, 404);
+            }
+        }
+        if (!tpl) {
+            const active = (await getActiveTpl(env)) || {};
+            tpl = {};
+            for (const k of TPL_KINDS) tpl[k] = (active[k] && active[k].content) || '';
+        }
+        const pages = [];
+        const order = ['single', 'pageHome', 'pageCategory', 'pageTag', 'pageArchive', 'item'];
+        for (const t of order) {
+            const c = String(tpl[t] || '');
+            const html = await tplPreviewHtml(env, t, c, tpl);
+            pages.push({ kind: t, html: html });
+        }
+        return json({ pages: pages });
+    }
+    if (path === '/api/templates/style/get' && method === 'GET') {
+        await ensureStylesTable(env);
+        const id = String(url.searchParams.get('id') || '');
+        if (id) {
+            // 内置风格 → 返回 builtin 标记，内容由前端 fetch static /style/<id>/tpl.json
+            const builtinRaw = await env.KV_CACHE.get('tpl:sindex-builtin');
+            if (builtinRaw) {
+                const bi = JSON.parse(builtinRaw);
+                if (Array.isArray(bi) && bi.some(function (x) { return x.id === id; })) {
+                    return json({ id: id, name: (bi.find(function (x) { return x.id === id; }) || {}).name || id, builtin: true, tpl: {} });
+                }
+            }
+            // 用户风格 → D1 当前版本
+            const row = await env.D1_DATABASE.prepare('SELECT id, version, name, tpl_json FROM styles WHERE id = ? ORDER BY version DESC LIMIT 1').bind(id).first();
+            if (row) {
+                let tpl = {};
+                try { tpl = JSON.parse(row.tpl_json || '{}'); } catch (e) { tpl = {}; }
+                return json({ id: row.id, version: row.version, name: row.name, source: 'user', tpl: tpl });
+            }
+            // 迁移前兼容：回退旧 KV 风格
+            const legacy = await env.KV_CACHE.get('tpl:style:' + id);
+            if (legacy) {
+                const rec = JSON.parse(legacy);
+                return json({ id: rec.id || id, name: rec.name || id, source: 'legacy', tpl: (rec.tpl || {}) });
+            }
+            return json({ error: 'style not found' }, 404);
+        }
+        // 无 id → 返回当前生效组合
+        const active = (await getActiveTpl(env)) || {};
+        const tpl = {};
+        for (const k of TPL_KINDS) tpl[k] = (active[k] && active[k].content) || '';
+        return json({ id: '', name: '当前生效模板', tpl: tpl });
+    }
+
+    if (path === '/api/templates/style/save' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: 'bad body' }, 400); }
+        const src = (body.tpl && typeof body.tpl === 'object') ? body.tpl : body;
+        const tpl = {};
+        let total = 0;
+        for (const k of TPL_KINDS) {
+            const v = (src[k] === undefined || src[k] === null) ? '' : String(src[k]);
+            if (v.length > 300 * 1024) return json({ error: k + ' too large' }, 400);
+            tpl[k] = v; total += v.length;
+        }
+        if (total === 0) return json({ error: 'empty style' }, 400);
+        if (total > 900 * 1024) return json({ error: 'style too large' }, 400);
+        const name = String(body.name || '').trim().slice(0, 40) || ('style ' + new Date().toISOString().slice(0, 16).replace('T', ' '));
+        let id = String(body.id || '');
+        if (!id) id = 's' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
+        // 与内置风格同名 → 提示改名（slug 唯一）
+        const builtinRaw = await env.KV_CACHE.get('tpl:sindex-builtin');
+        if (builtinRaw) {
+            const bi = JSON.parse(builtinRaw);
+            if (Array.isArray(bi) && bi.some(function (x) { return x.id === id; })) {
+                return json({ error: 'name conflicts with builtin style, please rename' }, 400);
+            }
+        }
+        const now = new Date().toISOString().slice(0, 19);
+        const prev = await env.D1_DATABASE.prepare('SELECT MAX(version) AS v FROM styles WHERE id = ?').bind(id).first();
+        const version = ((prev && prev.v) ? parseInt(prev.v, 10) : 0) + 1;
+        await env.D1_DATABASE.prepare('INSERT INTO styles (id, version, name, tpl_json, updated_at) VALUES (?, ?, ?, ?, ?)').bind(id, version, name, JSON.stringify(tpl), now).run();
+        let idx = await styleIndex(env);
+        idx = idx.filter(function (x) { return x.id !== id; });
+        idx.unshift({ id: id, name: name, updated: now, source: 'user' });
+        await env.KV_CACHE.put('tpl:sindex', JSON.stringify(idx));
+        return json({ ok: true, id: id, name: name, version: version });
+    }
+
+    if (path === '/api/templates/style/apply' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: 'bad body' }, 400); }
+        const id = String(body.id || '');
+        if (id === '__default__') {
+            const active = (await getActiveTpl(env)) || {};
+            for (const k of TPL_KINDS) active[k] = { id: 'default', name: 'builtin', content: '' };
+            await env.KV_CACHE.put('tpl:active', JSON.stringify(active));
+            return json({ ok: true, name: 'Default (builtin)' });
+        }
+        let tpl = (body.tpl && typeof body.tpl === 'object') ? body.tpl : null;
+        let name = String(body.name || id);
+        if (!tpl) {
+            const row = await env.D1_DATABASE.prepare('SELECT id, name, tpl_json FROM styles WHERE id = ? ORDER BY version DESC LIMIT 1').bind(id).first();
+            if (!row) return json({ error: 'style not found' }, 404);
+            try { tpl = JSON.parse(row.tpl_json || '{}'); } catch (e) { tpl = {}; }
+            name = row.name || id;
+        }
+        const active = (await getActiveTpl(env)) || {};
+        for (const k of TPL_KINDS) {
+            const c = String((tpl && tpl[k]) || '');
+            active[k] = c ? { id: id, name: name, content: c } : { id: 'default', name: 'builtin', content: '' };
+        }
+        await env.KV_CACHE.put('tpl:active', JSON.stringify(active));
+        return json({ ok: true, name: name });
+    }
+
+    if (path === '/api/templates/style/delete' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: 'bad body' }, 400); }
+        const id = String(body.id || '');
+        if (!id) return json({ error: 'invalid id' }, 400);
+        const builtinRaw = await env.KV_CACHE.get('tpl:sindex-builtin');
+        if (builtinRaw) {
+            const bi = JSON.parse(builtinRaw);
+            if (Array.isArray(bi) && bi.some(function (x) { return x.id === id; })) {
+                return json({ error: 'builtin style cannot be deleted' }, 400);
+            }
+        }
+        await env.D1_DATABASE.prepare('DELETE FROM styles WHERE id = ?').bind(id).run();
+        let idx = await styleIndex(env);
+        idx = idx.filter(function (x) { return x.id !== id; });
+        await env.KV_CACHE.put('tpl:sindex', JSON.stringify(idx));
+        return json({ ok: true });
+    }
+
+    // 风格版本历史（回退用）
+    if (path === '/api/templates/style/versions' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: 'bad body' }, 400); }
+        const id = String(body.id || '');
+        if (!id) return json({ error: 'invalid id' }, 400);
+        const rows = await env.D1_DATABASE.prepare('SELECT id, version, name, updated_at FROM styles WHERE id = ? ORDER BY version DESC').bind(id).all();
+        return json({ versions: rows.results || [] });
+    }
+    // 回退到历史版本：另存为新版本（不删历史）+ 写 tpl:active
+    if (path === '/api/templates/style/revert' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: 'bad body' }, 400); }
+        const id = String(body.id || '');
+        const version = parseInt(body.version, 10);
+        if (!id || !version) return json({ error: 'invalid param' }, 400);
+        const row = await env.D1_DATABASE.prepare('SELECT id, name, tpl_json FROM styles WHERE id = ? AND version = ?').bind(id, version).first();
+        if (!row) return json({ error: 'version not found' }, 404);
+        const now = new Date().toISOString().slice(0, 19);
+        const prev = await env.D1_DATABASE.prepare('SELECT MAX(version) AS v FROM styles WHERE id = ?').bind(id).first();
+        const newVer = ((prev && prev.v) ? parseInt(prev.v, 10) : 0) + 1;
+        await env.D1_DATABASE.prepare('INSERT INTO styles (id, version, name, tpl_json, updated_at) VALUES (?, ?, ?, ?, ?)').bind(id, newVer, row.name + ' (r' + version + ')', row.tpl_json, now).run();
+        let tpl = {};
+        try { tpl = JSON.parse(row.tpl_json || '{}'); } catch (e) { tpl = {}; }
+        const active = (await getActiveTpl(env)) || {};
+        for (const k of TPL_KINDS) {
+            const c = String(tpl[k] || '');
+            active[k] = c ? { id: id, name: row.name, content: c } : { id: 'default', name: 'builtin', content: '' };
+        }
+        await env.KV_CACHE.put('tpl:active', JSON.stringify(active));
+        return json({ ok: true, name: row.name, version: newVer });
+    }
+    if (path === '/api/style-assets' && method === 'POST') {
+        let form;
+        try { form = await request.formData(); } catch (e) { return json({ error: '无效表单' }, 400); }
+        const file = form.get('file');
+        if (!file || typeof file === 'string') return json({ error: '缺少文件' }, 400);
+        if (file.size > 5 * 1024 * 1024) return json({ error: '单个资源不能超过 5MB' }, 413);
+        const styleSlug = String(form.get('style') || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+        if (!styleSlug) return json({ error: '缺少风格名（小写字母/数字/-）' }, 400);
+        const rawName = String(file.name || 'file');
+        const ext = rawName.includes('.') ? rawName.split('.').pop().toLowerCase() : '';
+        const allowed = ['css', 'js', 'mjs', 'json', 'map', 'svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'txt'];
+        if (!allowed.includes(ext)) return json({ error: '不支持的类型：.' + ext }, 400);
+        const safeBase = rawName.split('.').slice(0, -1).join('.').replace(/[^a-zA-Z0-9-]+/g, '-').slice(0, 80) || 'asset';
+        const relPath = String(form.get('path') || '');
+        let relSafe = '';
+        if (relPath) {
+            relSafe = relPath.split('/').map(function (seg) { return seg.replace(/[^a-zA-Z0-9._-]+/g, '-'); }).filter(function (seg) { return seg && seg !== '.' && seg !== '..'; }).join('/').slice(0, 160);
+        }
+        if (!relSafe) relSafe = safeBase + '.' + ext;
+        const key = 'style/' + styleSlug + '/' + relSafe;
+        const buf = await file.arrayBuffer();
+        const ct = file.type || (ext === 'css' ? 'text/css' : ext === 'js' ? 'application/javascript' : ext === 'svg' ? 'image/svg+xml' : ext === 'json' ? 'application/json' : 'application/octet-stream');
+        await env.R2_BUCKET.put(key, buf, { httpMetadata: { contentType: ct, cacheControl: 'public, max-age=3600' } });
+        return json({ ok: true, key: key, url: '/' + key });
+    }
+    if (path === '/api/style-assets' && method === 'GET') {
+        const styleSlug = String(url.searchParams.get('style') || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 40);
+        if (!styleSlug) return json({ items: [] });
+        const list = await env.R2_BUCKET.list({ prefix: 'style/' + styleSlug + '/' });
+        const items = (list.objects || []).map(function (o) { return { key: o.key, size: o.size, url: '/' + o.key }; });
+        return json({ items: items });
+    }
+    if (path === '/api/style-assets/delete' && method === 'POST') {
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const key = String(body.key || '');
+        if (!key.startsWith('style/')) return json({ error: '无效 key' }, 400);
+        await env.R2_BUCKET.delete(key);
+        return json({ ok: true });
+    }
+
+    // ---- 分类 / 标签 ----
+    const taxRoute = path.match(/^\/api\/(categories|tags)$/);
+    const taxType = taxRoute ? (taxRoute[1] === 'tags' ? 'tag' : 'category') : null;
+    if (taxType) {
+        if (method === 'GET') {
+            const rows = await db.prepare('SELECT t.slug, t.name, COUNT(ps.wp_id) AS cnt FROM taxonomies t LEFT JOIN post_taxonomy pt ON pt.taxonomy_type = t.type AND pt.taxonomy_slug = t.slug LEFT JOIN posts ps ON ps.wp_id = pt.post_id AND ps.status = \'published\' WHERE t.type = ? GROUP BY t.slug ORDER BY t.name COLLATE NOCASE ASC').bind(taxType).all();
+            return json({ items: rows.results || [] });
+        }
+        if (method === 'POST') {
+            let body = {};
+            try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+            const name = String(body.name || '').trim();
+            if (!name) return json({ error: '名称不能为空' }, 400);
+            const slug = body.slug ? String(body.slug) : slugify(name) || ('c' + Date.now().toString(36));
+            await db.prepare('INSERT INTO taxonomies (type, slug, name) VALUES (?, ?, ?) ON CONFLICT(type, slug) DO UPDATE SET name = excluded.name').bind(taxType, slug, name).run();
+            return json({ ok: true, slug, name });
+        }
+    }
+    const taxTerm = path.match(/^\/api\/(categories|tags)\/([^/]+)$/);
+    const termType = taxTerm ? (taxTerm[1] === 'tags' ? 'tag' : 'category') : null;
+    if (termType) {
+        const termSlug = decodeURIComponent(taxTerm[2]);
+        if (method === 'PUT') {
+            let body = {};
+            try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+            const name = String(body.name || '').trim();
+            const newSlug = body.slug ? String(body.slug) : termSlug;
+            await db.prepare('UPDATE taxonomies SET name = ?, slug = ? WHERE type = ? AND slug = ?').bind(name || termSlug, newSlug, termType, termSlug).run();
+            await db.prepare('UPDATE post_taxonomy SET taxonomy_slug = ? WHERE taxonomy_type = ? AND taxonomy_slug = ?').bind(newSlug, termType, termSlug).run();
+            // 同步存量文章 categories/tags JSON 里的 {name,slug}，保证前台列表/单页不残留旧名
+            const rel = await db.prepare('SELECT wp_id, categories, tags FROM posts WHERE wp_id IN (SELECT post_id FROM post_taxonomy WHERE taxonomy_type = ? AND taxonomy_slug = ?)').bind(termType, newSlug).all();
+            for (const r of (rel.results || [])) {
+                for (const col of ['categories', 'tags']) {
+                    let arr = parseTaxoList(r[col]);
+                    let changed = false;
+                    arr = arr.map(function (el) {
+                        if (el && String(el.slug) === termSlug) {
+                            changed = true;
+                            el.name = name || el.name;
+                            el.slug = newSlug;
+                        }
+                        return el;
+                    });
+                    if (changed) await db.prepare('UPDATE posts SET ' + col + ' = ? WHERE wp_id = ?').bind(JSON.stringify(arr), r.wp_id).run();
+                }
+            }
+            await purgeLists(env);
+            return json({ ok: true });
+        }
+        if (method === 'DELETE') {
+            const cnt = await db.prepare('SELECT COUNT(*) AS c FROM post_taxonomy WHERE taxonomy_type = ? AND taxonomy_slug = ?').bind(termType, termSlug).first();
+            const n = parseInt((cnt && cnt.c) || 0, 10);
+            if (n > 0) {
+                return json({ error: '该' + (termType === 'tag' ? '标签' : '分类') + '下仍有 ' + n + ' 篇文章，无法删除' }, 409);
+            }
+            await db.prepare('DELETE FROM taxonomies WHERE type = ? AND slug = ?').bind(termType, termSlug).run();
+            await db.prepare('DELETE FROM post_taxonomy WHERE taxonomy_type = ? AND taxonomy_slug = ?').bind(termType, termSlug).run();
+            await purgeLists(env);
+            return json({ ok: true });
+        }
+    }
+
+    // ---- 媒体（R2 wp-content/uploads）----
+    if (path === '/api/media' && method === 'POST') {
+        let form;
+        try { form = await request.formData(); } catch (e) { return json({ error: '无效表单' }, 400); }
+        const file = form.get('file');
+        if (!file || typeof file === 'string') return json({ error: '缺少文件' }, 400);
+        if (file.size > 10 * 1024 * 1024) return json({ error: '文件不能超过 10MB' }, 413);
+        const name = String(file.name || '').toLowerCase();
+        const ext = name.includes('.') ? name.split('.').pop() : '';
+        const allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+        if (!allowed.includes(ext)) return json({ error: '仅支持 jpg/png/gif/webp' }, 400);
+        const contentType = file.type || ('image/' + (ext === 'jpg' ? 'jpeg' : ext));
+        const now = new Date();
+        const y = now.getUTCFullYear();
+        const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+        const rand = Math.random().toString(36).slice(2, 10);
+        const safeBase = name.split('.').slice(0, -1).join('.').replace(/[^a-z0-9\u4e00-\u9fa5-]+/g, '-').slice(0, 60) || 'img';
+        const path = 'wp-content/uploads/' + y + '/' + mm + '/' + rand + '-' + safeBase + '.' + ext;
+        const buf = await file.arrayBuffer();
+        // 魔数嗅探：防止伪装扩展名上传非图片（sniff 前若干字节）
+        const head = new Uint8Array(buf, 0, 12);
+        const sig = function () { let s = ''; for (let i = 0; i < head.length; i++) s += String.fromCharCode(head[i]); return s; }();
+        const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4E && head[3] === 0x47;
+        const isJpeg = head[0] === 0xFF && head[1] === 0xD8 && head[2] === 0xFF;
+        const isGif = sig.slice(0, 4) === 'GIF8';
+        const isWebp = sig.slice(0, 4) === 'RIFF' && sig.slice(8, 12) === 'WEBP';
+        if (!isPng && !isJpeg && !isGif && !isWebp) return json({ error: '文件内容不是有效图片' }, 400);
+        try {
+            await env.R2_BUCKET.put(path, buf, { httpMetadata: { contentType: contentType } });
+        } catch (e) { console.error('media put failed:', e); return json({ error: '上传失败' }, 500); }
+        const site = await getSiteContext(env);
+        return json({ ok: true, path: path, url: (site.url || '') + '/' + path });
+    }
+
+    // PUT /api/media?key=...（同 key 覆盖替换；正文引用 URL 不变即自动生效）
+    if (path === '/api/media' && method === 'PUT') {
+        const key = decodeURIComponent(url.searchParams.get('key') || '');
+        if (!key || !key.startsWith('wp-content/uploads/')) return json({ error: '参数错误' }, 400);
+        const ext = key.includes('.') ? key.split('.').pop().toLowerCase() : '';
+        if (!['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) return json({ error: '仅支持 jpg/png/gif/webp' }, 400);
+        let form;
+        try { form = await request.formData(); } catch (e) { return json({ error: '无效表单' }, 400); }
+        const file = form.get('file');
+        if (!file || typeof file === 'string') return json({ error: '缺少文件' }, 400);
+        if (file.size > 10 * 1024 * 1024) return json({ error: '文件不能超过 10MB' }, 413);
+        const buf = await file.arrayBuffer();
+        const head = new Uint8Array(buf, 0, 12);
+        const sig = function () { let s = ''; for (let i = 0; i < head.length; i++) s += String.fromCharCode(head[i]); return s; }();
+        const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4E && head[3] === 0x47;
+        const isJpeg = head[0] === 0xFF && head[1] === 0xD8 && head[2] === 0xFF;
+        const isGif = sig.slice(0, 4) === 'GIF8';
+        const isWebp = sig.slice(0, 4) === 'RIFF' && sig.slice(8, 12) === 'WEBP';
+        if (!isPng && !isJpeg && !isGif && !isWebp) return json({ error: '文件内容不是有效图片' }, 400);
+        const contentType = file.type || ('image/' + (ext === 'jpg' ? 'jpeg' : ext));
+        try {
+            await env.R2_BUCKET.put(key, buf, { httpMetadata: { contentType: contentType } });
+        } catch (e) { console.error('media replace failed:', e); return json({ error: '替换失败' }, 500); }
+        const site = await getSiteContext(env);
+        return json({ ok: true, path: key, url: (site.url || '') + '/' + key });
+    }
+    if (path === '/api/media' && method === 'GET') {
+        const cursor = url.searchParams.get('cursor') || undefined;
+        const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '50', 10) || 50));
+        const list = await env.R2_BUCKET.list({ prefix: 'wp-content/uploads/', limit: limit, cursor: cursor });
+        const site = await getSiteContext(env);
+        const items = (list.objects || []).map(function (o) {
+            return { key: o.key, size: o.size, uploaded: o.uploaded, url: (site.url || '') + '/' + o.key };
+        });
+        return json({ items: items, truncated: !!list.truncated, cursor: list.truncated ? list.cursor : null });
+    }
+
+    // DELETE /api/media?key=wp-content/uploads/...（删除媒体对象）
+    if (path === '/api/media' && method === 'DELETE') {
+        const key = url.searchParams.get('key') || '';
+        if (!key || !key.startsWith('wp-content/uploads/')) return json({ error: '参数错误' }, 400);
+        try {
+            await env.R2_BUCKET.delete(key);
+        } catch (e) { console.error('media delete failed:', e); return json({ error: '删除失败' }, 500); }
+        return json({ ok: true, key: key });
+    }
+
+    // ---- 用户管理（仅 admin）----
+    if (path === '/api/users' && method === 'GET') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        const rows = await db.prepare("SELECT id, user_login, user_email, display_name, role, user_status, user_registered FROM users ORDER BY id ASC").all();
+        return json({ users: rows.results || [] });
+    }
+    if (path === '/api/users' && method === 'POST') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const login = String(body.username || '').trim();
+        const pass = String(body.password || '');
+        const email = String(body.email || '').trim();
+        const role = ['admin', 'editor', 'author', 'subscriber'].includes(body.role) ? body.role : 'editor';
+        if (!/^[a-zA-Z0-9_.-]{3,}$/.test(login)) return json({ error: '用户名需 3 位以上字母数字' }, 400);
+        if (pass.length < 8) return json({ error: '密码至少 8 位' }, 400);
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: '邮箱格式不正确' }, 400);
+        const dup = await db.prepare('SELECT id FROM users WHERE user_login = ?').bind(login).first();
+        if (dup) return json({ error: '用户名已存在' }, 409);
+        const store = await hashPassword(pass);
+        const res = await db.prepare("INSERT INTO users (user_login, user_pass, user_nicename, user_email, display_name, role, user_status) VALUES (?, ?, ?, ?, ?, ?, 1)")
+            .bind(login, store, login, email, String(body.display_name || '').trim() || login, role).run();
+        return json({ ok: true, id: res && res.meta && res.meta.last_row_id ? res.meta.last_row_id : 0 });
+    }
+    const um = path.match(/^\/api\/users\/(\d+)$/);
+    if (um && method === 'PUT') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        const id = parseInt(um[1], 10);
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const sets = [];
+        const params = [];
+        if (body.password !== undefined && String(body.password) !== '') {
+            const pw = String(body.password);
+            if (pw.length < 8) return json({ error: '密码至少 8 位' }, 400);
+            sets.push('user_pass = ?'); params.push(await hashPassword(pw));
+        }
+        if (body.display_name !== undefined) { sets.push('display_name = ?'); params.push(String(body.display_name).trim()); }
+        if (body.email !== undefined) {
+            const em = String(body.email).trim();
+            if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return json({ error: '邮箱格式不正确' }, 400);
+            sets.push('user_email = ?'); params.push(em);
+        }
+        if (body.role !== undefined) {
+            if (!['admin', 'editor', 'author', 'subscriber'].includes(body.role)) return json({ error: '角色无效' }, 400);
+            sets.push('role = ?'); params.push(body.role);
+        }
+        if (body.user_status !== undefined) {
+            const st = body.user_status === 1 ? 1 : 0;
+            if (id === authPayload.sub && st === 0) return json({ error: '不能禁用当前登录账号' }, 400);
+            sets.push('user_status = ?'); params.push(st);
+        }
+        if (!sets.length) return json({ error: '没有要更新的字段' }, 400);
+        sets.push('updated_at = CURRENT_TIMESTAMP');
+        params.push(id);
+        await db.prepare('UPDATE users SET ' + sets.join(', ') + ' WHERE id = ?').bind(...params).run();
+        return json({ ok: true });
+    }
+    if (um && method === 'DELETE') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        const id = parseInt(um[1], 10);
+        if (id === authPayload.sub) return json({ error: '不能删除当前登录账号' }, 400);
+        await db.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
+        return json({ ok: true });
+    }
+
+    // ---- 导出 / 导入（备份恢复）----
+    if (path === '/api/export' && method === 'GET') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        const rows = await db.prepare('SELECT wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image FROM posts ORDER BY date ASC').all();
+        return json({ exportedAt: nowDateTime(), total: (rows.results || []).length, posts: rows.results || [] });
+    }
+    if (path === '/api/import' && method === 'POST') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const siteCtx = await getSiteContext(env);
+        const off = siteCtx.timezoneOffset || 0;
+        const items = Array.isArray(body.posts) ? body.posts
+            : (body.posts && Array.isArray(body.posts.posts) ? body.posts.posts : []);
+        if (!items.length) return json({ error: '没有可导入的文章' }, 400);
+        const baseId = Math.floor(Date.now()) * 1000000;
+        let imported = 0;
+        const skipped = [];
+        for (let i = 0; i < items.length; i++) {
+            const it = items[i] || {};
+            const slug = String((it.slug || it.title || '').trim()).toLowerCase();
+            if (!slug || !String(it.title || '').trim()) { skipped.push({ slug: slug || '?', reason: '缺少标题或 slug' }); continue; }
+            const exists = await db.prepare('SELECT wp_id FROM posts WHERE slug = ?').bind(slug).first();
+            if (exists) { skipped.push({ slug: slug, reason: '已存在' }); continue; }
+            const itFmt = it.content_format === 'md' ? 'md' : 'html';
+            const content = itFmt === 'md' ? String(it.content || '') : scrubHtml(String(it.content || ''));
+            const excerpt = (it.excerpt !== undefined && String(it.excerpt).trim() !== '') ? String(it.excerpt).trim()
+                : (itFmt === 'md' ? mdToText(content, 200) : excerptOf(content));
+            const status = it.status === 'draft' ? 'draft' : 'published';
+            const wpId = baseId + i;
+            const cats = withDefaultCategory(parseTaxoList(it.categories));
+            const tags = parseTaxoList(it.tags);
+            await db.prepare('INSERT INTO posts (wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                .bind(wpId, slug, String(it.title), content, itFmt, excerpt, String(it.date || '').trim() || localDateTime(off), localDateTime(off), status, JSON.stringify(cats), JSON.stringify(tags), String(it.featured_image || '')).run();
+            await syncTaxonomy(db, wpId, 'category', cats);
+            await syncTaxonomy(db, wpId, 'tag', tags);
+            const nrow = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(wpId).first();
+            if (status === 'published' && nrow) await writeSinglePage(env, nrow);
+            imported++;
+        }
+        if (imported) await purgeLists(env);
+        return json({ ok: true, imported: imported, skipped: skipped });
+    }
+
+    // POST /api/cache/purge（admin：按前缀批量清 KV 缓存）
+    if (path === '/api/cache/purge' && method === 'POST') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const all = ['home:page:', 'sidebar:data', 'seo:', 'post:', 'rss:', 'site:ctx'];
+        const prefixes = Array.isArray(body.prefixes) && body.prefixes.length ? body.prefixes : all;
+        let cleared = 0;
+        for (const p of prefixes) {
+            try {
+                if (p === 'sidebar:data') { await deleteCache(env.KV_CACHE, 'sidebar:data'); cleared++; }
+                else { await purgeCache(env.KV_CACHE, String(p)); cleared++; }
+            } catch (e) { console.error('purge failed:', p, e); }
+        }
+        return json({ ok: true, cleared: cleared });
+    }
+
+    // GET /api/audit（内容质检：无分类 / 缺封面 / 超长标题 的已发布文章）
+    if (path === '/api/audit' && method === 'GET') {
+        const rows = await db.prepare("SELECT wp_id, title, slug, featured_image, categories FROM posts WHERE status = 'published' ORDER BY date DESC").all();
+        const noCat = [], noFeature = [], longTitle = [];
+        for (const r of (rows.results || [])) {
+            const arr = parseTaxoList(r.categories);
+            const item = { wp_id: r.wp_id, slug: r.slug, title: String(r.title || '') };
+            if (!arr.length) noCat.push(item);
+            if (!String(r.featured_image || '').trim()) noFeature.push(item);
+            if (item.title.length > 80) longTitle.push(item);
+        }
+        return json({
+            total: (rows.results || []).length,
+            noCat: noCat.length, noCatItems: noCat.slice(0, 100),
+            noFeature: noFeature.length, noFeatureItems: noFeature.slice(0, 100),
+            longTitle: longTitle.length, longTitleItems: longTitle.slice(0, 100),
+        });
+    }
+
+    // GET /api/export-media（媒体对象清单 JSON，供备份归档）
+    if (path === '/api/export-media' && method === 'GET') {
+        const out = [];
+        let cur = '';
+        try {
+            for (let i = 0; i < 50; i++) {
+                const page = await env.R2_BUCKET.list({ prefix: 'wp-content/uploads/', limit: 1000, cursor: cur || undefined });
+                for (const o of (page.objects || [])) out.push({ key: o.key, size: o.size, uploaded: o.uploaded });
+                if (!page.truncated) break;
+                cur = page.cursor || '';
+            }
+        } catch (e) { console.error('export-media failed:', e); return json({ error: '读取媒体失败' }, 500); }
+        return json({ exportedAt: nowDateTime(), total: out.length, items: out });
+    }
+
+    // ---- 统计（管理首页概览）----
+    if (path === '/api/stats' && method === 'GET') {
+        const q1 = await db.prepare('SELECT COUNT(*) AS c FROM posts').first();
+        const q2 = await db.prepare("SELECT COUNT(*) AS c FROM posts WHERE status = 'published'").first();
+        const q3 = await db.prepare("SELECT COUNT(*) AS c FROM posts WHERE status = 'draft'").first();
+        const q4 = await db.prepare("SELECT COUNT(*) AS c FROM taxonomies WHERE type = 'category'").first();
+        const q5 = await db.prepare("SELECT COUNT(*) AS c FROM taxonomies WHERE type = 'tag'").first();
+        let mediaCount = 0;
+        let mediaBytes = 0;
+        let mcursor = '';
+        try {
+            for (let i = 0; i < 10; i++) {
+                const page = await env.R2_BUCKET.list({ prefix: 'wp-content/uploads/', limit: 1000, cursor: mcursor || undefined });
+                for (const o of (page.objects || [])) { mediaCount++; mediaBytes += o.size || 0; }
+                if (!page.truncated) break;
+                mcursor = page.cursor || '';
+            }
+        } catch (e) { mediaCount = -1; }
+        return json({
+            posts: parseInt((q1 && q1.c) || 0, 10),
+            published: parseInt((q2 && q2.c) || 0, 10),
+            draft: parseInt((q3 && q3.c) || 0, 10),
+            categories: parseInt((q4 && q4.c) || 0, 10),
+            tags: parseInt((q5 && q5.c) || 0, 10),
+            media: mediaCount,
+            mediaBytes: mediaBytes,
+        });
+    }
+
+    return json({ error: '接口不存在' }, 404);
+}

@@ -1,0 +1,30 @@
+name = "wp-static-pro"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# 静态资源（主题 css/js/字体/图片）随 Worker 打包部署。
+# assets-first：命中静态文件的请求由 Cloudflare 边缘直接返回（免费、不计入 Worker 调用），
+# 未命中的请求（动态页 / R2 大图回源）才进入 Worker 逻辑。
+[assets]
+directory = "./static"
+
+[vars]
+ENABLE_COMPRESSION = true
+WORDPRESS_URL = ""
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "wordpress"
+
+[[d1_databases]]
+binding = "D1_DATABASE"
+database_id = "a8ebe26e-4ee6-43ba-8027-57c5138b3173"
+database_name = "wordpress"
+
+[[kv_namespaces]]
+binding = "KV_CACHE"
+id = "f4e7fdd895e247d7bec4250328a2d2ec"
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1

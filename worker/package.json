@@ -1,0 +1,17 @@
+{
+  "name": "wp-static-pro",
+  "version": "2.3.0",
+  "description": "WordPress静态导出Worker",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "logs": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "dependencies": {
+    "marked": "^12.0.2"
+  }
+}
