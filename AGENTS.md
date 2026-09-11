@@ -128,3 +128,19 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   4. 验证通过 `git add -A && git commit`；改坏了一键 `git restore <file>` 回滚。
 - **敏感信息提醒**：本 `AGENTS.md` 含服务器 root 密码、MySQL root 密码、Worker 测试账号。**目前只做本地仓库**；若要推送远程（GitHub/Gitee 等），必须先脱敏（改环境变量 / 密码管理器 / 私有库 + 清理历史），否则明文永久进 git 历史。
 - 尚未配置 remote；推送前先与用户确认平台与可见性（建议私有库）。
+
+## 九、导出渲染的 load-once 陷阱（2026-09 定位并修复）
+
+- **现象**：批量导出（`handle_bulk_export` → CLI 子进程 `tools/bulk-export-worker.php`）时，除了每个进程的第 1 篇，其余文章的静态单页会掉进 `generate_fallback_html()`（极简硬编码 HTML，丢主题样式）。
+- **根因 1（实测确认）**：WordPress 的 `load_template()` 参数 `$load_once` 默认 `true`，`get_header()/get_footer()/get_sidebar()` 内部也传 `true`（**只有 `get_template_part()` 是 `false`**）。`require_once` 记录是 **per-PHP-进程** 的，所以 `render_with_template()` 在同一进程内第二次渲染同一主题模板时：`load_template($tpl)` 整个不执行（**0 字节**）；改成 `$load_once=false` 也不行 —— header/footer 仍不输出（残片 ~4.8KB，`is_valid_html()` 一样不过关）。php-fpm 进程复用会让"后台逐篇导出"同样中招。
+  实测（twentyten，服务器容器内）：`render#1 = 36282B / 133ms`；`render#2 = 0B / 2ms`；`render#2 改 load_once=false = 4854B`。
+- **根因 2（CLI 专属）**：CLI 子进程没有 HTTP 上下文，本站 `wp-config.php` 按 `$_SERVER['HTTP_HOST']` 计算 `WP_HOME`，于是 `home_url()`/`get_permalink()` 退化成 `http://localhost/` → 降级用的 `fetch_from_frontend()` **必然连接失败**（cURL error 7）。所以"内部渲染失败 → 前台抓取"这条兜底链在 CLI 里整条断掉，直接落到硬编码模板。
+- **修复（WP 端，已同步到 `192.168.2.2` 的插件目录，无需 wrangler deploy）**：
+  1. `tools/bulk-export-worker.php` 新增 `--site=<原站URL>`，在 `require wp-load.php` **之前**补 `$_SERVER['HTTP_HOST'|'SERVER_NAME'|'SERVER_PORT'|'HTTPS'|'REQUEST_URI'|'REQUEST_METHOD'|'SCRIPT_NAME']`；
+  2. `cf-static-export-pro.php` 的 `export_posts_concurrent()` 用 `home_url('/')`（fpm 上下文正确）拼 `--site=` 传给子进程；
+  3. `render_with_template()` 用 `in_array($template, get_included_files(), true)` 做 guard：本进程已渲染过就返回 `null` 并记日志（省掉一次注定失败的渲染，降级原因可见）；
+  4. `fetch_from_frontend()` 对 WP_Error / 非 2xx / 无效内容记 WARNING 日志（降级不再静默）。
+- **验证方式（可复现）**：`/tmp/cfse-verify-loadonce.php` 用 `ReflectionMethod` 调真实插件的 `render_with_template()` / `fetch_from_frontend()`（只读，不写 R2/D1），同一脚本跑两次 —— 不带 `--site`：post#1 internal 36KB、post#2/#3 `fetch len=0`（旧行为）；带 `--site=http://192.168.2.2`：post#1 internal 36KB、post#2 `fetch len=36000+` 且 `body/wrapper/title` 齐全、无 fallback 标记。
+- **参考耗时**（服务器容器内）：`wp-load.php` boot ≈ 1000ms；一次内部渲染 ≈ 133ms；一次前台抓取 ≈ 1020–1126ms（含对端一次完整 WP 请求）。
+- **尚未采用的可选方案**：想让"内部渲染"在批量场景 100% 可用 = 改成**每篇一个 CLI 进程**（进程池轮次调度，不再每进程串行多篇）。成本约 +1s/篇（boot），与走前台抓取相当；好处是零 HTTP 依赖、全批走同一渲染路径（消除路径差异）。要做时改 `export_posts_concurrent()` 的调度即可。
+- **给未来会话的提示**：碰到"导出结果缺样式/极小/结构不对"，先看日志里是"内部模板渲染 / 使用前台抓取 / 使用硬编码模板（降级）"哪一条；两条降级都伴随 WARNING 日志。
