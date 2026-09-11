@@ -795,6 +795,49 @@ private function get_post_storage_path($post) {
         return $body;
     }
 
+    /**
+     * 把 HTML 里残留的源站地址统一改写成静态站地址（$this->config['site_url']）。
+     * str_replace(home_url(), ...) 只能命中字面形态，抓不到 WordPress 输出里真实存在的：
+     *   - 协议相对地址    //192.168.2.2                （<link rel="dns-prefetch">）
+     *   - percent-encoded http%3A%2F%2F192.168.2.2     （oEmbed 的 url= 参数）
+     *   - JSON 内转义     http:\/\/192.168.2.2
+     * 只处理源站 host 且要求前面带协议/协议分隔符，正文里裸写的 IP 不会被改动。
+     */
+    private function normalize_source_hosts($html) {
+        if (empty($html)) return $html;
+        $target = rtrim($this->config['site_url'], '/');
+        $target_host = $target !== '' ? parse_url($target, PHP_URL_HOST) : '';
+        if (empty($target_host)) return $html;
+
+        $hosts = array();
+        foreach (array(home_url(), site_url()) as $u) {
+            $h = parse_url($u, PHP_URL_HOST);
+            if (!empty($h) && $h !== $target_host) {
+                $hosts[$h] = true;
+            }
+        }
+        if (empty($hosts)) return $html;
+
+        $target_enc = str_replace(array(':', '/'), array('%3A', '%2F'), $target);
+        $target_esc = str_replace('/', '\/', $target);
+        $rel = '//' . $target_host;
+        $rel_enc = '%2F%2F' . $target_host;
+
+        foreach (array_keys($hosts) as $host) {
+            $q = preg_quote($host, '~');
+            // 1) 绝对地址 http(s)://host
+            $html = preg_replace_callback('~https?://' . $q . '(?=[/:"\'?&#\s>])~i', function () use ($target) { return $target; }, $html);
+            // 2) JSON 转义 http:\/\/host
+            $html = preg_replace_callback('~https?:\\\\/\\\\/' . $q . '~i', function () use ($target_esc) { return $target_esc; }, $html);
+            // 3) percent-encoded（带协议编码 / 裸协议分隔符）
+            $html = preg_replace_callback('~https?%3A%2F%2F' . $q . '~i', function () use ($target_enc) { return $target_enc; }, $html);
+            $html = preg_replace_callback('~(?<!%3A)%2F%2F' . $q . '~i', function () use ($rel_enc) { return $rel_enc; }, $html);
+            // 4) 协议相对 //host
+            $html = preg_replace_callback('~(?<![:%])//' . $q . '(?=[/:"\'?&#\s>])~i', function () use ($rel) { return $rel; }, $html);
+        }
+        return $html;
+    }
+
     private function generate_fallback_html($post) {
         $site_url = $this->config['site_url'];
         $content = apply_filters('the_content', $post->post_content);
@@ -823,6 +866,9 @@ private function get_post_storage_path($post) {
         $html = str_replace(home_url(), $site_url, $html);
         $html = str_replace(content_url(), $site_url . '/wp-content', $html);
         $html = str_replace(includes_url(), $site_url . '/wp-includes', $html);
+        // 上面这些 str_replace 只命中字面形态；源站 host 的其它写法（协议相对 //host、
+        // percent-encoded、JSON 转义）会漏网（典型：dns-prefetch、oEmbed 的 url= 参数）。
+        $html = $this->normalize_source_hosts($html);
         if ($this->config['clean_scripts']) {
             $html = preg_replace('/<script[^>]*src="[^"]*wp-includes\/js\/[^"]*"[^>]*><\/script>/', '', $html);
             $html = preg_replace('/<script[^>]*src="[^"]*wp-content\/plugins\/[^"]*"[^>]*><\/script>/', '', $html);
