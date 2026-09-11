@@ -1741,12 +1741,21 @@ function cfse_create_style_package($display_name = '', $unique_suffix = true) {
     // 2) 主题资源 → wp-content/themes/<slug>/（保留原生 WP 路径，Worker 端 assets 直出）
     $theme_dirs = array_unique(array(get_template_directory(), get_stylesheet_directory()));
     $dest_theme = $dst_dir . '/wp-content/themes/' . $slug;
-    if (!wp_mkdir_p($dest_theme)) {
-        cfse_log_message('风格资源目录创建失败: ' . $dest_theme, 'ERROR');
-        $logs[] = '风格资源目录创建失败: ' . $dest_theme;
-        return array('ok' => false, 'slug' => '', 'dir' => '', 'files' => 0, 'tpl' => array(), 'logs' => $logs);
+    // 镜像一份到 Worker 的 static 资源目录：内置风格约定 tpl.json + 主题资源走 assets 直出，
+    // 部署（wrangler deploy）后 Worker 才能 fetch /wp-content/themes/<slug>/tpl.json 应用该风格。
+    $static_theme = CFSE_PLUGIN_DIR . 'worker/static/wp-content/themes/' . $slug;
+    $mirrors = array($dest_theme, $static_theme);
+    foreach ($mirrors as $mirror) {
+        if (!wp_mkdir_p($mirror)) {
+            cfse_log_message('风格资源目录创建失败: ' . $mirror, 'ERROR');
+            $logs[] = '风格资源目录创建失败: ' . $mirror;
+            return array('ok' => false, 'slug' => '', 'dir' => '', 'files' => 0, 'tpl' => array(), 'logs' => $logs);
+        }
     }
-    file_put_contents($dest_theme . '/tpl.json', wp_json_encode($tpl_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+    $tpl_json_str = wp_json_encode($tpl_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    foreach ($mirrors as $mirror) {
+        file_put_contents($mirror . '/tpl.json', $tpl_json_str);
+    }
     $allowed = array('css', 'js', 'mjs', 'json', 'map', 'svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'txt');
     $max_bytes = 8 * 1024 * 1024;
     $copied_files = 0;
@@ -1760,9 +1769,11 @@ function cfse_create_style_package($display_name = '', $unique_suffix = true) {
             if ($file->getSize() > $max_bytes) continue;
             $rel = substr($file->getPathname(), strlen($theme_dir));
             $rel = ltrim($rel, '/\\');
-            $rel_path = $dest_theme . '/' . $rel;
-            if (!is_dir(dirname($rel_path))) wp_mkdir_p(dirname($rel_path));
-            if (copy($file->getPathname(), $rel_path)) $copied_files++;
+            foreach ($mirrors as $mirror) {
+                $rel_path = $mirror . '/' . $rel;
+                if (!is_dir(dirname($rel_path))) wp_mkdir_p(dirname($rel_path));
+                if (copy($file->getPathname(), $rel_path) && $mirror === $dest_theme) $copied_files++;
+            }
         }
     }
 
@@ -1771,6 +1782,7 @@ function cfse_create_style_package($display_name = '', $unique_suffix = true) {
 
     cfse_log_message('已创建风格包: ' . $slug . '（tpl.json + 主题资源 ' . $copied_files . ' 个，内置索引已同步）', 'INFO');
     $logs[] = '风格包已生成: styles/' . $slug . '（tpl.json + 主题资源 ' . $copied_files . ' 个，已同步内置索引）';
+    $logs[] = '已镜像到 worker/static/wp-content/themes/' . $slug . '/（本地 wrangler deploy 后该内置风格即可用）';
     return array('ok' => true, 'slug' => $slug, 'dir' => $dst_dir, 'files' => $copied_files, 'tpl' => $tpl_payload, 'logs' => $logs);
 }
 
