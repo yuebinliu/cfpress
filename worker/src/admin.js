@@ -150,6 +150,24 @@ async function styleIndex(env) {
     return out;
 }
 
+/**
+ * 读【用户风格】清单：只读 tpl:sindex 本身。
+ * 注意不能拿 styleIndex() 的合并结果回写 tpl:sindex —— 那会把 builtin 项写进用户索引，
+ * 下一次合并时 builtin 又被 userIds 过滤掉，内置风格就会"变成"私人包。
+ * 这里同时剔除历史上被误写进来的 builtin 项（source==='builtin'）。
+ */
+async function userStyleIndex(env) {
+    let out = [];
+    try {
+        const v = await env.KV_CACHE.get('tpl:sindex');
+        if (v) {
+            const o = JSON.parse(v);
+            if (Array.isArray(o)) out = o;
+        }
+    } catch (e) { /* fallthrough */ }
+    return out.filter(function (x) { return x && x.source !== 'builtin'; });
+}
+
 /** 确保 styles 表存在（幂等；WP 端 schema 迁移也会建，这里兜底） */
 async function ensureStylesTable(env) {
     try {
@@ -933,7 +951,7 @@ export async function handleAdminRequest(request, env) {
         const prev = await env.D1_DATABASE.prepare('SELECT MAX(version) AS v FROM styles WHERE id = ?').bind(id).first();
         const version = ((prev && prev.v) ? parseInt(prev.v, 10) : 0) + 1;
         await env.D1_DATABASE.prepare('INSERT INTO styles (id, version, name, tpl_json, updated_at) VALUES (?, ?, ?, ?, ?)').bind(id, version, name, JSON.stringify(tpl), now).run();
-        let idx = await styleIndex(env);
+        let idx = await userStyleIndex(env);
         idx = idx.filter(function (x) { return x.id !== id; });
         idx.unshift({ id: id, name: name, updated: now, source: 'user' });
         await env.KV_CACHE.put('tpl:sindex', JSON.stringify(idx));
@@ -980,7 +998,7 @@ export async function handleAdminRequest(request, env) {
             }
         }
         await env.D1_DATABASE.prepare('DELETE FROM styles WHERE id = ?').bind(id).run();
-        let idx = await styleIndex(env);
+        let idx = await userStyleIndex(env);
         idx = idx.filter(function (x) { return x.id !== id; });
         await env.KV_CACHE.put('tpl:sindex', JSON.stringify(idx));
         return json({ ok: true });
