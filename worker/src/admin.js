@@ -135,29 +135,20 @@ async function tplGetIndex(env) {
  * 这样即使 KV 被删掉，下一个请求也会自动补全。
  */
 async function builtinIndex(env) {
-    // 权威来源 = static 的 /wp-content/themes/index.json（部署产物，与风格目录同层）。
-    // 每次请求都读它，所以**新增/更新内置风格后立即反映**，不需要清 KV 缓存。
-    // （KV 只在 assets 不可用时兜底，不做写缓存 —— 旧写法"KV 优先"会把清单锁死。）
+    // 内置风格清单的唯一来源 = KV tpl:index。
+    // 它由**部署时**的 scripts/sync-themes-index.mjs 扫描 static/wp-content/themes/*/tpl.json 注入
+    // （所以新增/删除风格只要 npm run deploy 就立即反映；也不再需要任何 list/index 静态文件）。
+    // 旧键 tpl:sindex-builtin 兼容读取一段时间。
     let out = [];
-    try {
-        const url = 'https://assets.local/wp-content/themes/index.json';
-        const res = env.ASSETS ? await env.ASSETS.fetch(new Request(url)) : null;
-        if (res && res.ok) {
-            const o = await res.json();
-            if (Array.isArray(o)) out = o;
-        }
-    } catch (e) { /* fallthrough */ }
-    if (!out.length) {
-        for (const key of ['tpl:index', 'tpl:sindex-builtin']) {
-            if (out.length) break;
-            try {
-                const v = await env.KV_CACHE.get(key);
-                if (v) {
-                    const o = JSON.parse(v);
-                    if (Array.isArray(o) && o.length) out = o;
-                }
-            } catch (e) { /* fallthrough */ }
-        }
+    for (const key of ['tpl:index', 'tpl:sindex-builtin']) {
+        if (out.length) break;
+        try {
+            const v = await env.KV_CACHE.get(key);
+            if (v) {
+                const o = JSON.parse(v);
+                if (Array.isArray(o) && o.length) out = o;
+            }
+        } catch (e) { /* fallthrough */ }
     }
     return out.map(function (x) {
         return { id: String(x.id || ''), name: String(x.name || x.id || ''), updated: String(x.updated || ''), source: 'builtin' };

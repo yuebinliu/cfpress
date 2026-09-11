@@ -5,9 +5,9 @@
   "main": "src/index.js",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "node scripts/build-themes-index.mjs && wrangler deploy",
+    "deploy": "node scripts/sync-themes-index.mjs && wrangler deploy",
     "logs": "wrangler tail",
-    "themes-index": "node scripts/build-themes-index.mjs"
+    "themes-index": "node scripts/sync-themes-index.mjs"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"
