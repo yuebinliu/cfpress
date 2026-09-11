@@ -1268,7 +1268,7 @@
       '<button class="btn btn-sm btn-danger" id="st-del">🗑 删除风格</button>' +
       '</div>' +
       '<p class="muted" style="margin:8px 0 0;">风格目录：<code>pageHome.html</code>（或 <code>home.html</code>）、<code>pageCategory.html</code>（<code>category.html</code>）、<code>pageTag.html</code>（<code>tag.html</code>）、<code>pageArchive.html</code>（<code>archive.html</code>）、<code>single.html</code>、<code>item.html</code>，可选 <code>style.json</code> 提供风格名；其余文件（css/js/字体/图片）自动作为风格资源上传 R2。</p>' +
-      '<p class="muted" style="margin:4px 0 0;">资源引用建议：把资源放进风格目录、模板里用 <code>/style/&lt;风格名&gt;/文件名</code> 引用（R2 直出、与部署解耦）；引用 <code>/wp-content/themes/...</code> 依赖部署打包的 static（assets 免费直出，未命中自动回退 R2），改动主题后需在 WP 后台点「同步主题资源」再 <code>wrangler deploy</code>；引用 <code>{{SITE_URL}}/wp-content/...</code> 则走 WP 原站。</p>' +
+      '<p class="muted" style="margin:4px 0 0;">资源引用建议：<b>风格自己的资源放在风格目录，模板里用 <code>/wp-content/themes/&lt;风格名&gt;/文件名</code> 引用</b>（与 tpl.json 同层；内置风格走部署的 static，私人风格走 R2 同路径）；引用其它 <code>/wp-content/...</code>（uploads/plugins/别的主题）依赖部署快照或原站；引用 <code>{{SITE_URL}}/...</code> 则走 WP 原站。</p>' +
       '</div>';
 
     html += '<div class="card grid"><h3 style="margin:0 0 8px;">自定义风格</h3>' +
@@ -1417,8 +1417,17 @@
       }
       getTpl.then(function (g) {
         var txt = Object.keys(g.tpl || {}).map(function (k) { return String(g.tpl[k] || ''); }).join('\n');
-        if (/\/wp-content\//.test(txt)) {
-          if (!confirm('该风格引用了 /wp-content/... 静态资源。\n\n这类资源由：部署打包的 static（assets 免费直出）→ 未命中回退 R2。改动主题后需在 WP 后台点「同步主题资源」再 wrangler deploy。\n\n若不想依赖部署，建议把资源放进风格目录、模板里改用 /style/<风格名>/文件名 引用（R2 直出）。\n\n仍要应用吗？')) return null;
+        // 只提示"非本风格目录"的 /wp-content/ 引用：风格自己的资源就在
+        // /wp-content/themes/<风格名>/（与 tpl.json 同层），属正常用法，不必打扰。
+        var selfDir = '/wp-content/themes/' + id + '/';
+        var refs = (txt.match(/\/wp-content\/[^"'\s)<>]+/g) || []).filter(function (p) {
+          return id !== '__default__' && p.indexOf(selfDir) !== 0;
+        });
+        if (refs.length) {
+          var uniq = refs.filter(function (v, i, a) { return a.indexOf(v) === i; }).slice(0, 6);
+          if (!confirm('该风格还引用了 ' + refs.length + ' 处「非本风格目录」的 /wp-content/ 资源：\n\n' + uniq.join('\n')
+            + '\n\n这类资源来自部署打包的 static（assets 直出）→ 未命中回退 R2，改动主题后需在 WP 后台点「同步主题资源」再 wrangler deploy；若指向原站则走 {{SITE_URL}}。'
+            + '\n\n提示：风格自己的资源应放在风格目录里，用 /wp-content/themes/<风格名>/ 引用（与 tpl.json 同层）。\n\n仍要应用吗？')) return null;
         }
         return api('/api/templates/style/apply', { method: 'POST', body: { id: id, name: g.name, tpl: g.tpl } });
       }).then(function (d) {
