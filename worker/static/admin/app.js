@@ -1334,8 +1334,8 @@
       var mine = [];
       styles.forEach(function (s) { (s.source === 'builtin' ? builtin : mine).push(s); });
 
-      var opts = '<option value="">（选择风格…）</option>'
-        + '<option value="__default__">默认风格（当前主题的内置包）</option>';
+      // 两端解耦：Worker 端只列“内置包 / 我的包”，选哪个应用哪个（WP 后台的选择不影响这里）
+      var opts = '<option value="">（选择风格…）</option>';
       if (builtin.length) {
         opts += '<optgroup label="📦 内置风格（随 wrangler deploy 更新）">'
           + builtin.map(styleOptHtml).join('') + '</optgroup>';
@@ -1421,21 +1421,8 @@
       var prog = document.getElementById('st-prog');
       var getTpl = null;
       if (id === '__default__') {
-        // “默认风格” = 当前主题对应的那个内置包：读它的 tpl.json 写满 tpl:active
-        // （没有 current 标记的旧索引时才回退“清空 → 渲染回退部署内置模板”）
-        var cur = (styles || []).filter(function (s) { return s.current; })[0];
-        if (cur) {
-          id = cur.id;
-          getTpl = fetch('/wp-content/themes/' + encodeURIComponent(cur.id) + '/tpl.json').then(function (r) {
-            if (!r.ok) throw new Error('内置风格资源未部署（' + r.status + '）：请先 npm run deploy');
-            return r.json();
-          }).then(function (obj) {
-            var tp = (obj && obj.tpl) ? obj.tpl : obj;
-            return { tpl: tp, name: cur.name || cur.id };
-          });
-        } else {
-          getTpl = Promise.resolve({ tpl: {}, name: '默认风格（部署内置模板）' });
-        }
+        // 兜底（下拉里已不再提供该项）：清空 tpl:active → 渲染回退部署内置模板
+        getTpl = Promise.resolve({ tpl: {}, name: '部署内置模板' });
       } else {
         getTpl = api('/api/templates/style/get?id=' + encodeURIComponent(id)).then(function (g) {
           if (g.builtin) {

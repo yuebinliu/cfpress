@@ -150,16 +150,8 @@ async function builtinIndex(env) {
             }
         } catch (e) { /* fallthrough */ }
     }
-    let currentId = '';
-    try { currentId = (await env.KV_CACHE.get('tpl:builtin-current')) || ''; } catch (e) { /* fallthrough */ }
     return out.map(function (x) {
-        return {
-            id: String(x.id || ''),
-            name: String(x.name || x.id || ''),
-            updated: String(x.updated || ''),
-            source: 'builtin',
-            current: !!x.current || (currentId !== '' && String(x.id) === currentId),
-        };
+        return { id: String(x.id || ''), name: String(x.name || x.id || ''), updated: String(x.updated || ''), source: 'builtin' };
     }).filter(function (x) { return x.id; });
 }
 

@@ -1838,7 +1838,7 @@ function cfse_sync_builtin_styles() {
         'timeout' => 30,
         'sslverify' => false,
         'headers' => array('X-Auth-Key' => $auth, 'Content-Type' => 'application/json'),
-        'body' => wp_json_encode(array('styles' => $items, 'current' => (string) get_option('stylesheet'))),
+        'body' => wp_json_encode(array('styles' => $items)),
     ));
     if (is_wp_error($resp)) {
         cfse_log_message('内置风格索引同步失败: ' . $resp->get_error_message(), 'WARNING');
