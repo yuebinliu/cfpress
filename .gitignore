@@ -20,3 +20,6 @@ Thumbs.db
 /tmp/
 *.tmp
 *.log
+
+# 主题资源快照只作部署源，不入库（体积大：kirki/图片等；需要时重新抓取或从服务器镜像）
+worker/static/wp-content/themes/
