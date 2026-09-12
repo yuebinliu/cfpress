@@ -197,28 +197,6 @@ function cfse_skin_replace_item($item, $ctx, $is_single) {
     }
     if (!$done_date) $warns[] = '未在条目容器内匹配到日期文本（' . implode(' / ', array_slice($ctx['date_candidates'], 0, 3)) . '），{{POST_DATE}} 可能缺失';
     // 5) 分类名 / 标签名 → 占位符（只在本容器内，避免误伤侧边栏同名文本）
-    // 分类/标签区 → 条件块（{{#IF_CATEGORIES}} / {{#IF_TAGS}}）：
-    // 没有分类或标签的文章不该留下 "and tagged ." 这类残句。做法：找到同时包含分类名与
-    // 标签名的“最小公共祖先”（通常是 div.entry-utility），把它的内容换成带 IF 块的固定结构。
-    $cp = false;
-    foreach ((array) $ctx['cat_names'] as $n) { if ($n !== '' && ($x = strpos($item, $n)) !== false) { $cp = $x; break; } }
-    $tp = false;
-    foreach ((array) $ctx['tag_names'] as $n) { if ($n !== '' && ($x = strpos($item, $n)) !== false) { $tp = $x; break; } }
-    if ($cp !== false && $tp !== false) {
-        $lca = cfse_skin_lca($item, min($cp, $tp), max($cp, $tp));
-        if ($lca) {
-            $close = cfse_html_find_close($item, $lca['content_start'], $lca['tag']);
-            $span = $close ? ($close['close_start'] - $lca['content_start']) : 0;
-            if ($close && $span > 0 && $span < 3000) {
-                $block = '{{#IF_CATEGORIES}}<span class="cat-links"><span class="entry-utility-prep entry-utility-prep-cat-links">Posted in</span> {{POST_CATEGORIES}}</span>{{/IF_CATEGORIES}}'
-                    . '{{#IF_TAGS}}<span class="tag-links"><span class="entry-utility-prep entry-utility-prep-tag-links">Tagged</span> {{POST_TAGS}}</span>{{/IF_TAGS}}';
-                $item = substr($item, 0, $lca['content_start']) . $block . substr($item, $close['close_start']);
-            } else {
-                $warns[] = '分类/标签容器过大或异常，未做条件块化（可能出现 “and tagged .” 残句）';
-            }
-        }
-    }
-
     // 注意要**全量**替换：探针可挂多个分类/标签，每个都会产出一个占位符
     foreach ($ctx['cat_names'] as $name) {
         if ($name === '') continue;
@@ -235,6 +213,27 @@ function cfse_skin_replace_item($item, $ctx, $is_single) {
         $item = preg_replace('~\{\{POST_CATEGORIES\}\}(?:\s*[,、/&]?\s*(?:and|和)?\s*\{\{POST_CATEGORIES\}\})+~u', '{{POST_CATEGORIES}}', $item);
         $item = preg_replace('~\{\{POST_TAGS\}\}(?:\s*[,、/&]?\s*(?:and|和)?\s*\{\{POST_TAGS\}\})+~u', '{{POST_TAGS}}', $item);
     }
+    // 5b) 分类/标签区 → 条件块（{{#IF_CATEGORIES}} / {{#IF_TAGS}}）
+    // 直接在占位符层面处理（不依赖主题类名/文案）：把“紧邻的说明文字 + 占位符序列”一起包进 IF，
+    // 这样没有分类/标签的文章不会留下 “and tagged .” 这类残句。
+    // 分类/标签区 → 条件块：在占位符序列前后插入 {{#IF_*}}…{{/IF_*}}，并把**紧邻的接头语**
+    // 一起包进去（如 “This entry was posted in” / “ and tagged”）。这样没有分类/标签的文章
+    // 整段消失，不会留下 “and tagged .” 这类残句。用纯字符串位置操作，不做正则捕获（更可预测）。
+    foreach (array('{{POST_CATEGORIES}}' => '{{#IF_CATEGORIES}}', '{{POST_TAGS}}' => '{{#IF_TAGS}}') as $ph => $open_tag) {
+        $p1 = strpos($item, $ph);
+        if ($p1 === false) continue;
+        $p2 = strrpos($item, $ph) + strlen($ph);
+        $close_tag = str_replace('#IF_', '/IF_', $open_tag);
+        $back = $p1;
+        $lim = max(0, $p1 - 60);
+        while ($back > $lim) {
+            $ch = substr($item, $back - 1, 1);
+            if ($ch === '{' || $ch === '}' || $ch === '<' || $ch === '>') break;
+            $back--;
+        }
+        $item = substr($item, 0, $back) . $open_tag . substr($item, $back, $p2 - $back) . $close_tag . substr($item, $p2);
+    }
+
     // 6) 站点级替换。作者归档等站点链接**保留** {{SITE_URL}} 占位符：
     //    渲染端 cfseRenderItem() 会填充它，而 /author/<slug>/ 这类路径由 Worker 路由文件支持。
     $item = cfse_skin_replace_site($item, $ctx);
@@ -487,7 +486,17 @@ function cfse_skin_single_shell($html, $ctx) {
     $html = preg_replace('~<(div|nav)[^>]*class="[^"]*nav-next[^"]*"[^>]*>.*?</\1>~s', '', $html);
 
     // 正文/标题/日期/分类/标签/URL：整页当一个容器处理
-    list($html, $warns2) = cfse_skin_replace_item($html, $ctx, true);
+    // 只对「文章主体容器」做占位替换：整页处理会波及导航菜单/侧边栏里的同名分类名与标签名
+    // （菜单会被替换成 {{POST_CATEGORIES}}/{{#IF_...}}，而 entry-utility 的那处反而被 limit 吃掉）
+    $box = cfse_html_element_by_marker($html, 'id="post-' . (int) $ctx['probe_id'] . '"');
+    if ($box) {
+        $seg = substr($html, $box['start'], $box['close_end'] - $box['start']);
+        list($seg2, $warns2) = cfse_skin_replace_item($seg, $ctx, true);
+        $html = substr($html, 0, $box['start']) . $seg2 . substr($html, $box['close_end']);
+    } else {
+        $warns[] = '未找到文章主体容器（id="post-N"），已退回整页替换（可能波及菜单/侧边栏）';
+        list($html, $warns2) = cfse_skin_replace_item($html, $ctx, true);
+    }
     // 条目注释锚同样清掉
     $html = preg_replace('~<!--\s*#post-\d+\s*-->~', '', $html);
     // 分类 / 标签 feed link（静态站无该路由）
