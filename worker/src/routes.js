@@ -109,7 +109,7 @@ export async function handleRequest(request, env) {
         try { payload = await request.json(); } catch (e) { payload = {}; }
         const items = Array.isArray(payload.styles) ? payload.styles : [];
         const clean = items.map(function (x) {
-            return { id: String(x.id || '').slice(0, 60), name: String(x.name || x.id || '').slice(0, 60), updated: String(x.updated || '').slice(0, 19), source: 'builtin' };
+            return { id: String(x.id || '').slice(0, 60), name: String(x.name || x.id || '').slice(0, 60), updated: String(x.updated || '').slice(0, 19), source: 'builtin', current: !!x.current };
         }).filter(function (x) { return x.id; });
         // 内置包索引：tpl:index 为准（旧键 tpl:sindex-builtin 双写一段时间做兼容）
         await env.KV_CACHE.put('tpl:index', JSON.stringify(clean));

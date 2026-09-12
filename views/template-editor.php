@@ -1828,6 +1828,8 @@ function cfse_sync_builtin_styles() {
                 'id' => $slug,
                 'name' => $name,
                 'updated' => $mtime ? gmdate('Y-m-d H:i:s', $mtime) : gmdate('Y-m-d H:i:s'),
+                // 标记“当前主题对应的内置包”：Worker 端“默认风格”应用时就用它
+                'current' => ($slug === (string) get_option('stylesheet')),
             );
         }
     }
