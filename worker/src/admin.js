@@ -188,6 +188,21 @@ async function userStyleIndex(env) {
     return out.filter(function (x) { return x && x.source !== 'builtin'; });
 }
 
+/**
+ * 只保留某私人风格的最近 N 个版本（默认 5）。
+ * 不做“永久保留 v1”这类特殊处理：想回到原生，直接应用对应的内置包即可。
+ */
+async function pruneStyleVersions(env, id, keep = 5) {
+    try {
+        const row = await env.D1_DATABASE.prepare('SELECT MAX(version) AS v FROM styles WHERE id = ?').bind(id).first();
+        const max = (row && row.v) ? parseInt(row.v, 10) : 0;
+        const floor = max - keep + 1;
+        if (max > keep && floor > 1) {
+            await env.D1_DATABASE.prepare('DELETE FROM styles WHERE id = ? AND version < ?').bind(id, floor).run();
+        }
+    } catch (e) { /* 清理失败不影响主流程 */ }
+}
+
 /** 确保 styles 表存在（幂等；WP 端 schema 迁移也会建，这里兜底） */
 async function ensureStylesTable(env) {
     try {
@@ -975,6 +990,7 @@ export async function handleAdminRequest(request, env) {
         idx = idx.filter(function (x) { return x.id !== id; });
         idx.unshift({ id: id, name: name, updated: now, source: 'user' });
         await env.KV_CACHE.put('tpl:sindex', JSON.stringify(idx));
+        await pruneStyleVersions(env, id, 5);
         return json({ ok: true, id: id, name: name, version: version });
     }
 
@@ -1046,6 +1062,7 @@ export async function handleAdminRequest(request, env) {
         const prev = await env.D1_DATABASE.prepare('SELECT MAX(version) AS v FROM styles WHERE id = ?').bind(id).first();
         const newVer = ((prev && prev.v) ? parseInt(prev.v, 10) : 0) + 1;
         await env.D1_DATABASE.prepare('INSERT INTO styles (id, version, name, tpl_json, updated_at) VALUES (?, ?, ?, ?, ?)').bind(id, newVer, row.name + ' (r' + version + ')', row.tpl_json, now).run();
+        await pruneStyleVersions(env, id, 5);
         let tpl = {};
         try { tpl = JSON.parse(row.tpl_json || '{}'); } catch (e) { tpl = {}; }
         const active = (await getActiveTpl(env)) || {};
