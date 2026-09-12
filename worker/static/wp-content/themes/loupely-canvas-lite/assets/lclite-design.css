@@ -1,0 +1,317 @@
+/*
+  Loupely Canvas Lite - design layer
+  Loaded only when Start from a blank canvas is off. Holds the fonts, the type
+  system, the header and footer, and the content styling. Turning the blank
+  canvas on unloads this file, leaving the base reset alone.
+
+  Content typography is scoped to .lclite-prose and the measure to .lclite-page
+  and .lclite-blog, so a full width page that renders outside those containers
+  is left for you to style.
+*/
+
+@font-face {
+  font-family: "Lora";
+  src: url(fonts/lora-latin.woff2) format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url(fonts/inter-latin.woff2) format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --lclite-sage: #7a9e87;
+  --lclite-sage-deep: #5c7f68;
+  --lclite-rule: #d5ded6;
+  --lclite-ink: #1a2420;
+  --lclite-ink-mid: #4a5e52;
+  --lclite-ink-muted: #7a9087;
+  --lclite-canvas: #f5f7f5;
+  --lclite-card: #ffffff;
+
+  --lclite-display: "Lora", Georgia, "Times New Roman", serif;
+  --lclite-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --lclite-mono: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --lclite-measure: 44rem;
+  --lclite-wide: 64rem;
+}
+
+body {
+  background: var(--lclite-canvas);
+  color: var(--lclite-ink);
+  font-family: var(--lclite-body);
+  font-size: 1.0625rem;
+  line-height: 1.7;
+}
+
+a { color: var(--lclite-sage-deep); }
+a:hover { color: var(--lclite-ink); }
+
+:focus-visible { outline: 2px solid var(--lclite-sage-deep); outline-offset: 2px; }
+
+/* ---- Measure containers ---- */
+.lclite-page,
+.lclite-blog {
+  max-width: var(--lclite-measure);
+  margin-inline: auto;
+  padding: 3.75rem 1.5rem 5rem;
+}
+
+/* ---- Site header ---- */
+.lclite-site-header {
+  border-bottom: 1px solid var(--lclite-rule);
+  background: var(--lclite-card);
+}
+.lclite-header-inner {
+  max-width: var(--lclite-wide);
+  margin-inline: auto;
+  padding: 1.4rem 1.5rem;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+.lclite-branding { display: flex; align-items: baseline; gap: 0.85rem; flex-wrap: wrap; }
+.lclite-site-title {
+  font-family: var(--lclite-display);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.1;
+  text-decoration: none;
+  color: var(--lclite-ink);
+}
+.lclite-site-title:hover { color: var(--lclite-sage-deep); }
+.lclite-tagline {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--lclite-ink-muted);
+}
+.lclite-branding .custom-logo-link img { display: block; }
+
+.lclite-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.4rem;
+}
+.lclite-nav a {
+  text-decoration: none;
+  color: var(--lclite-ink-mid);
+  font-size: 0.95rem;
+}
+.lclite-nav a:hover,
+.lclite-nav .current-menu-item > a { color: var(--lclite-sage-deep); }
+
+/* ---- Site footer ---- */
+.lclite-site-footer {
+  border-top: 1px solid var(--lclite-rule);
+  margin-top: 2rem;
+}
+.lclite-footer-inner {
+  max-width: var(--lclite-wide);
+  margin-inline: auto;
+  padding: 2.5rem 1.5rem 3rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 1.75rem;
+}
+.lclite-footer-title {
+  font-family: var(--lclite-display);
+  font-size: 1.15rem;
+  color: var(--lclite-ink);
+}
+.lclite-footer-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.1rem;
+}
+.lclite-footer-nav a {
+  font-family: var(--lclite-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  color: var(--lclite-ink-mid);
+}
+.lclite-footer-nav a:hover { color: var(--lclite-sage-deep); }
+.lclite-colophon {
+  margin: 0;
+  margin-left: auto;
+  font-family: var(--lclite-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+  color: var(--lclite-ink-muted);
+}
+
+/* ---- Headings and prose ---- */
+.lclite-entry-title {
+  font-family: var(--lclite-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  color: var(--lclite-ink);
+  margin: 0 0 0.6rem;
+}
+.lclite-content .lclite-page .lclite-entry-title { font-size: clamp(2rem, 4vw, 2.7rem); }
+.lclite-blog .lclite-post .lclite-entry-title { font-size: 1.65rem; margin-bottom: 0.4rem; }
+.lclite-entry-title a { text-decoration: none; color: inherit; }
+.lclite-entry-title a:hover { color: var(--lclite-sage-deep); }
+
+/* The metadata line: the one signature element, set in the code face like a
+   data label, which suits a theme made for people who write code. */
+.lclite-entry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0 0 1.5rem;
+  font-family: var(--lclite-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--lclite-ink-muted);
+}
+
+.lclite-prose { font-size: 1.0625rem; }
+.lclite-prose > * { margin-block: 0 1.3rem; }
+.lclite-prose > *:first-child { margin-top: 0; }
+.lclite-prose h2 { font-family: var(--lclite-display); font-weight: 600; font-size: 1.7rem; line-height: 1.2; margin-top: 2.4rem; }
+.lclite-prose h3 { font-family: var(--lclite-display); font-weight: 600; font-size: 1.35rem; margin-top: 2rem; }
+.lclite-prose h4 { font-weight: 600; font-size: 1.1rem; margin-top: 1.6rem; }
+.lclite-prose a { text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--lclite-rule); }
+.lclite-prose a:hover { text-decoration-color: currentColor; }
+.lclite-prose ul, .lclite-prose ol { padding-left: 1.4rem; }
+.lclite-prose li { margin-bottom: 0.5rem; }
+.lclite-prose blockquote {
+  margin-inline: 0;
+  padding: 0.2rem 0 0.2rem 1.25rem;
+  border-left: 3px solid var(--lclite-sage);
+  color: var(--lclite-ink-mid);
+  font-style: italic;
+}
+.lclite-prose hr { border: 0; border-top: 1px solid var(--lclite-rule); margin: 2.5rem 0; }
+.lclite-prose img { border-radius: 4px; }
+.lclite-prose figcaption { font-size: 0.85rem; color: var(--lclite-ink-muted); text-align: center; margin-top: 0.5rem; }
+.lclite-prose table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+.lclite-prose th, .lclite-prose td { border: 1px solid var(--lclite-rule); padding: 0.55rem 0.75rem; text-align: left; }
+.lclite-prose th { background: var(--lclite-canvas); }
+
+/* Code is the only place a dark surface appears, by brand. */
+.lclite-prose code, .lclite-prose kbd {
+  font-family: var(--lclite-mono);
+  font-size: 0.9em;
+  background: rgba(26, 36, 32, 0.06);
+  padding: 0.12em 0.38em;
+  border-radius: 4px;
+}
+.lclite-prose pre {
+  background: var(--lclite-ink);
+  color: var(--lclite-canvas);
+  font-family: var(--lclite-mono);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  padding: 1.1rem 1.3rem;
+  border-radius: 8px;
+  overflow: auto;
+}
+.lclite-prose pre code { background: none; padding: 0; font-size: inherit; color: inherit; }
+
+/* ---- Featured image and entry footer ---- */
+.lclite-entry-thumb { display: block; margin: 0 0 1.5rem; }
+.lclite-entry-thumb img { width: 100%; border-radius: 6px; }
+.lclite-entry-summary { margin: 0 0 1rem; color: var(--lclite-ink-mid); }
+.lclite-readmore a { font-family: var(--lclite-mono); font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; text-decoration: none; }
+.lclite-readmore a:hover { color: var(--lclite-ink); }
+.lclite-post { margin: 0 0 3.5rem; }
+.lclite-post + .lclite-post { border-top: 1px solid var(--lclite-rule); padding-top: 3rem; }
+
+.lclite-entry-footer {
+  margin-top: 2.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--lclite-rule);
+  font-family: var(--lclite-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  color: var(--lclite-ink-muted);
+}
+.lclite-entry-footer p { margin: 0.3rem 0 0; }
+
+/* ---- Archive header ---- */
+.lclite-archive-header { margin-bottom: 3rem; }
+.lclite-archive-title { font-family: var(--lclite-display); font-weight: 600; font-size: 2rem; margin: 0 0 0.5rem; }
+.lclite-archive-description { color: var(--lclite-ink-mid); }
+
+/* ---- Navigation and pagination ---- */
+.lclite-blog .pagination .nav-links,
+.lclite-blog .navigation .nav-links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 3rem; }
+.lclite-blog .page-numbers {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--lclite-rule);
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--lclite-sage-deep);
+}
+.lclite-blog .page-numbers.current { background: var(--lclite-sage); border-color: var(--lclite-sage-deep); color: #fff; }
+.lclite-blog .post-navigation { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--lclite-rule); }
+.lclite-blog .post-navigation .nav-links { display: flex; justify-content: space-between; gap: 1.5rem; flex-wrap: wrap; }
+.lclite-nav-label { display: block; font-family: var(--lclite-mono); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--lclite-ink-muted); }
+
+/* ---- Forms ---- */
+.lclite-blog input[type="text"],
+.lclite-blog input[type="email"],
+.lclite-blog input[type="url"],
+.lclite-blog input[type="search"],
+.lclite-blog textarea {
+  width: 100%;
+  font: inherit;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--lclite-rule);
+  border-radius: 6px;
+  background: var(--lclite-card);
+  color: var(--lclite-ink);
+}
+.lclite-blog input:focus, .lclite-blog textarea:focus { outline: none; border-color: var(--lclite-sage-deep); }
+.lclite-blog input[type="submit"], .lclite-blog button {
+  font-family: var(--lclite-body);
+  font-weight: 600;
+  background: var(--lclite-sage);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.6rem 1.1rem;
+  cursor: pointer;
+}
+.lclite-blog input[type="submit"]:hover, .lclite-blog button:hover { background: var(--lclite-sage-deep); }
+
+/* ---- Comments ---- */
+.lclite-comments { margin-top: 3.5rem; padding-top: 2rem; border-top: 1px solid var(--lclite-rule); }
+.lclite-comments .comment-list { list-style: none; margin: 0; padding: 0; }
+.lclite-comments .comment-list ol { list-style: none; }
+.lclite-comments .comment-body { padding: 1.25rem 0; border-bottom: 1px solid var(--lclite-rule); }
+.lclite-comments .comment-meta { font-family: var(--lclite-mono); font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--lclite-ink-muted); }
+.lclite-comments .comment-meta a { color: var(--lclite-ink-muted); text-decoration: none; }
+
+/* ---- Full width opt out ---- */
+body.lclite-fullwidth .lclite-page { max-width: 100%; padding-left: 0; padding-right: 0; }
+
+/* ---- Responsive ---- */
+@media (max-width: 600px) {
+  .lclite-header-inner { flex-direction: column; align-items: flex-start; gap: 0.85rem; }
+  .lclite-colophon { margin-left: 0; }
+  .lclite-page, .lclite-blog { padding-top: 2.5rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
