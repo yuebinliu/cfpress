@@ -1092,7 +1092,8 @@ export async function handleAdminRequest(request, env) {
             relSafe = relPath.split('/').map(function (seg) { return seg.replace(/[^a-zA-Z0-9._-]+/g, '-'); }).filter(function (seg) { return seg && seg !== '.' && seg !== '..'; }).join('/').slice(0, 160);
         }
         if (!relSafe) relSafe = safeBase + '.' + ext;
-        const key = 'style/' + styleSlug + '/' + relSafe;
+        // 私人风格资源与内置风格同形：都走 /wp-content/themes/<slug>/（请求链 assets 命中 → 未命中落 R2 同路径）
+        const key = 'wp-content/themes/' + styleSlug + '/' + relSafe;
         const buf = await file.arrayBuffer();
         const ct = file.type || (ext === 'css' ? 'text/css' : ext === 'js' ? 'application/javascript' : ext === 'svg' ? 'image/svg+xml' : ext === 'json' ? 'application/json' : 'application/octet-stream');
         await env.R2_BUCKET.put(key, buf, { httpMetadata: { contentType: ct, cacheControl: 'public, max-age=3600' } });
@@ -1101,7 +1102,7 @@ export async function handleAdminRequest(request, env) {
     if (path === '/api/style-assets' && method === 'GET') {
         const styleSlug = String(url.searchParams.get('style') || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 40);
         if (!styleSlug) return json({ items: [] });
-        const list = await env.R2_BUCKET.list({ prefix: 'style/' + styleSlug + '/' });
+        const list = await env.R2_BUCKET.list({ prefix: 'wp-content/themes/' + styleSlug + '/' });
         const items = (list.objects || []).map(function (o) { return { key: o.key, size: o.size, url: '/' + o.key }; });
         return json({ items: items });
     }
@@ -1109,7 +1110,7 @@ export async function handleAdminRequest(request, env) {
         let body = {};
         try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
         const key = String(body.key || '');
-        if (!key.startsWith('style/')) return json({ error: '无效 key' }, 400);
+        if (!key.startsWith('wp-content/themes/') && !key.startsWith('style/')) return json({ error: '无效 key' }, 400);
         await env.R2_BUCKET.delete(key);
         return json({ ok: true });
     }
