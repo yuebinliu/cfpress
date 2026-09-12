@@ -114,6 +114,11 @@ export async function handleRequest(request, env) {
         // 内置包索引：tpl:index 为准（旧键 tpl:sindex-builtin 双写一段时间做兼容）
         await env.KV_CACHE.put('tpl:index', JSON.stringify(clean));
         await env.KV_CACHE.put('tpl:sindex-builtin', JSON.stringify(clean));
+        // “当前主题对应的内置包”单独存一个键：这样本地扫描生成的 tpl:index（不含 current）
+        // 不会把它抹掉
+        if (payload.current) {
+            await env.KV_CACHE.put('tpl:builtin-current', String(payload.current).slice(0, 60));
+        }
         return new Response(JSON.stringify({ ok: true, count: clean.length }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },

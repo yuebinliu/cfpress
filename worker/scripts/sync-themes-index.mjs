@@ -27,6 +27,20 @@ if (!nsId) {
   process.exit(0);
 }
 
+// 读取现有 KV 清单，保留其中的 current 标记（“当前主题对应的那个包”只有 WP 端知道，
+// 本地扫描不能把它抹掉）
+let prevItems = [];
+try {
+  const prevRaw = execFileSync(
+    'npx',
+    ['wrangler', 'kv:key', 'get', 'tpl:index', '--namespace-id=' + nsId],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: process.platform === 'win32' }
+  );
+  const parsed = JSON.parse(prevRaw);
+  if (Array.isArray(parsed)) prevItems = parsed;
+} catch (e) { /* 首次部署没有 KV 是正常的 */ }
+const currentIds = new Set(prevItems.filter((x) => x && x.current).map((x) => x.id));
+
 const items = [];
 if (fs.existsSync(themesRoot)) {
   for (const name of fs.readdirSync(themesRoot).sort()) {
@@ -48,7 +62,7 @@ if (fs.existsSync(themesRoot)) {
     const updated = `${mt.getUTCFullYear()}-${pad(mt.getUTCMonth() + 1)}-${pad(mt.getUTCDate())} `
       + `${pad(mt.getUTCHours())}:${pad(mt.getUTCMinutes())}:${pad(mt.getUTCSeconds())}`;
 
-    items.push({ id: name, name: displayName, updated, source: 'builtin' });
+    items.push({ id: name, name: displayName, updated, source: 'builtin', current: currentIds.has(name) });
   }
 }
 
