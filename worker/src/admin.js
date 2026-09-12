@@ -151,7 +151,7 @@ async function builtinIndex(env) {
         } catch (e) { /* fallthrough */ }
     }
     return out.map(function (x) {
-        return { id: String(x.id || ''), name: String(x.name || x.id || ''), updated: String(x.updated || ''), source: 'builtin' };
+        return { id: String(x.id || ''), name: String(x.name || x.id || ''), updated: String(x.updated || ''), source: 'builtin', current: !!x.current };
     }).filter(function (x) { return x.id; });
 }
 
