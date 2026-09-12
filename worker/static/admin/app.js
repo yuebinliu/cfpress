@@ -451,15 +451,19 @@
       flash('flash-main', '已取正文首图为封面', 'ok');
     });
     // ===== 富文本 / Markdown 双模式编辑器 =====
-    var isMdDoc = (p.content_format === 'md') && !!p.content;
-    var edMode = isMdDoc ? 'md' : 'wysiwyg'; // md 原稿文档默认进入 md 模式
+    // docFormat = 本文档的格式（编辑已有文档时取其 content_format；新建默认 html）。
+    // 只有"本文档格式"对应的页签可编辑，另一个页签是**只读预览** ——
+    // 绝不能把一边的内容塞进另一边（那会把 md 原稿污染成 HTML，且保存后 format 与内容不符）。
+    var docFormat = ((p.content_format === 'md') && p.content) ? 'md' : 'html';
+    var edMode = docFormat === 'md' ? 'md' : 'wysiwyg';
     var edBody = document.getElementById('ed-body');
     var mdArea = document.getElementById('f-content-md');
-    if (isMdDoc) {
-      edBody.innerHTML = mdToHtml(p.content);
+    if (docFormat === 'md') {
       mdArea.value = p.content;
+      edBody.innerHTML = mdToHtml(p.content);
     } else {
       edBody.innerHTML = p.content || '';
+      mdArea.value = p.content || '';
     }
     function mdToHtml(src) {
       try { return (window.marked && marked.parse) ? marked.parse(src) : String(src || ''); } catch (e) { return String(src || ''); }
@@ -481,6 +485,12 @@
       edMode = m;
       document.getElementById('ed-wysiwyg').style.display = m === 'wysiwyg' ? '' : 'none';
       document.getElementById('ed-md').style.display = m === 'md' ? '' : 'none';
+      var bodyEditable = (docFormat === 'html' && m === 'wysiwyg');
+      edBody.setAttribute('contenteditable', bodyEditable ? 'true' : 'false');
+      edBody.style.background = bodyEditable ? '' : '#f6f7f7';
+      var mdEditable = (docFormat === 'md' && m === 'md');
+      mdArea.readOnly = !mdEditable;
+      mdArea.style.background = mdEditable ? '' : '#f6f7f7';
       document.querySelectorAll('[data-ed-mode]').forEach(function (b) {
         b.classList.toggle('btn-primary', b.getAttribute('data-ed-mode') === m);
       });
@@ -488,18 +498,29 @@
     document.querySelectorAll('[data-ed-mode]').forEach(function (b) {
       b.addEventListener('click', function () {
         var m = b.getAttribute('data-ed-mode');
-        if (m === 'md') { mdArea.value = edBody.innerHTML; renderMdPrev(); }
-        else {
-          edBody.innerHTML = mdToHtml(mdArea.value); edSync();
-          if (isMdDoc) flash('flash-main', '切到富文本后若保存，该文将转为 HTML 格式（md 原稿将不再保留）', 'ok');
+        var isEmptyNew = !p.wp_id && !String(edBody.textContent || '').trim() && !String(mdArea.value || '').trim();
+        if (isEmptyNew) {
+          // 新建且还没内容时，点页签 = 选择本文档格式（一旦有内容就只能靠"格式"栏切换）
+          docFormat = (m === 'md') ? 'md' : 'html';
+        }
+        if (docFormat === 'md') {
+          // 富文本区 = md 的只读渲染预览
+          edBody.innerHTML = mdToHtml(mdArea.value);
+        } else {
+          // md 页签 = HTML 源码的只读预览
+          mdArea.value = edBody.innerHTML;
+          renderMdPrev();
         }
         setEdMode(m);
+        if ((m === 'wysiwyg' && docFormat === 'md') || (m === 'md' && docFormat === 'html')) {
+          flash('flash-main', '该页签是只读预览（本文档格式：' + (docFormat === 'md' ? 'Markdown' : 'HTML') + '）', 'ok');
+        }
       });
     });
     setEdMode(edMode);
     function editorContent() {
-      if (edMode === 'md') return mdToHtml(mdArea.value);
-      return edBody.innerHTML;
+      // 永远返回"本文档格式"的内容（md 文档返回 md 原稿，而非渲染后的 HTML）
+      return (docFormat === 'md') ? mdArea.value : edBody.innerHTML;
     }
     document.getElementById('btn-ed-full').addEventListener('click', function () {
       document.body.classList.toggle('ed-full');
@@ -738,8 +759,8 @@
         title: document.getElementById('f-title').value.trim(),
         slug: document.getElementById('f-slug').value.trim(),
         status: document.getElementById('f-status').value,
-        content: (edMode === 'md') ? mdArea.value : edBody.innerHTML,
-        content_format: (edMode === 'md') ? 'md' : 'html',
+        content: (docFormat === 'md') ? mdArea.value : edBody.innerHTML,
+        content_format: docFormat,
         excerpt: document.getElementById('f-excerpt') ? document.getElementById('f-excerpt').value.trim() : '',
         featured_image: document.getElementById('f-image').value.trim(),
         categories: splitNames(document.getElementById('f-cats').value),
