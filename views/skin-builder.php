@@ -231,6 +231,12 @@ function cfse_skin_replace_item($item, $ctx, $is_single) {
             if ($ch === '{' || $ch === '}' || $ch === '<' || $ch === '>') break;
             $back--;
         }
+        // 主题的说明文字常常包在 span 里（如 <span class="…prep-tag-links">Tagged</span>）：
+        // 若它紧邻占位符，一并纳入条件块，否则没有标签时仍会留下孤零零的 “Tagged”。
+        $pre = substr($item, 0, $back);
+        if (preg_match('~<span\b[^>]*>[^<>]{0,40}</span>\s*$~i', $pre, $mm, PREG_OFFSET_CAPTURE)) {
+            $back = $mm[0][1];
+        }
         $item = substr($item, 0, $back) . $open_tag . substr($item, $back, $p2 - $back) . $close_tag . substr($item, $p2);
     }
 
