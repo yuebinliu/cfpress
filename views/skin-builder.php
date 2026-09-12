@@ -197,6 +197,28 @@ function cfse_skin_replace_item($item, $ctx, $is_single) {
     }
     if (!$done_date) $warns[] = '未在条目容器内匹配到日期文本（' . implode(' / ', array_slice($ctx['date_candidates'], 0, 3)) . '），{{POST_DATE}} 可能缺失';
     // 5) 分类名 / 标签名 → 占位符（只在本容器内，避免误伤侧边栏同名文本）
+    // 分类/标签区 → 条件块（{{#IF_CATEGORIES}} / {{#IF_TAGS}}）：
+    // 没有分类或标签的文章不该留下 "and tagged ." 这类残句。做法：找到同时包含分类名与
+    // 标签名的“最小公共祖先”（通常是 div.entry-utility），把它的内容换成带 IF 块的固定结构。
+    $cp = false;
+    foreach ((array) $ctx['cat_names'] as $n) { if ($n !== '' && ($x = strpos($item, $n)) !== false) { $cp = $x; break; } }
+    $tp = false;
+    foreach ((array) $ctx['tag_names'] as $n) { if ($n !== '' && ($x = strpos($item, $n)) !== false) { $tp = $x; break; } }
+    if ($cp !== false && $tp !== false) {
+        $lca = cfse_skin_lca($item, min($cp, $tp), max($cp, $tp));
+        if ($lca) {
+            $close = cfse_html_find_close($item, $lca['content_start'], $lca['tag']);
+            $span = $close ? ($close['close_start'] - $lca['content_start']) : 0;
+            if ($close && $span > 0 && $span < 3000) {
+                $block = '{{#IF_CATEGORIES}}<span class="cat-links"><span class="entry-utility-prep entry-utility-prep-cat-links">Posted in</span> {{POST_CATEGORIES}}</span>{{/IF_CATEGORIES}}'
+                    . '{{#IF_TAGS}}<span class="tag-links"><span class="entry-utility-prep entry-utility-prep-tag-links">Tagged</span> {{POST_TAGS}}</span>{{/IF_TAGS}}';
+                $item = substr($item, 0, $lca['content_start']) . $block . substr($item, $close['close_start']);
+            } else {
+                $warns[] = '分类/标签容器过大或异常，未做条件块化（可能出现 “and tagged .” 残句）';
+            }
+        }
+    }
+
     // 注意要**全量**替换：探针可挂多个分类/标签，每个都会产出一个占位符
     foreach ($ctx['cat_names'] as $name) {
         if ($name === '') continue;
@@ -288,6 +310,19 @@ function cfse_skin_sidebar_replace(&$html, $classes, $ph) {
         return true;
     }
     return false;
+}
+
+/** 找同时包含 $posA/$posB 的最小公共祖先元素（用于定位“分类+标签”所在的那个容器） */
+function cfse_skin_lca($html, $posA, $posB) {
+    $cur = $posA;
+    for ($i = 0; $i < 12 && $cur > 0; $i++) {
+        $loc = cfse_html_loc_tag($html, $cur);
+        if (!$loc) return null;
+        $close = cfse_html_find_close($html, $loc['content_start'], $loc['tag']);
+        if ($close && $close['close_end'] >= $posB) return $loc;
+        $cur = $loc['start'] - 1;
+    }
+    return null;
 }
 
 /** 页面壳：列表区 → {{CONTENT}}、分页 → 占位符、侧边栏 → 占位符、站点级替换 */
