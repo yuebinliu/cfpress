@@ -284,6 +284,10 @@ if (!function_exists('cfse_skin_sanitize_template')) {
         }, $html);
         // 4) links that embed the probe slug
         $html = preg_replace('~<link\b[^>]*cfseprobe[^>]*>~i', '', $html);
+        // 4b) 探针/动态端点 link：单篇 wp-json（含探针文章 id）、RSD、站点 API 发现
+        $html = preg_replace('~<link\b[^>]*wp-json/wp/v2/posts/[0-9]+[^>]*>~i', '', $html);
+        $html = preg_replace('~<link\b[^>]*rel=["\']EditURI["\'][^>]*>~i', '', $html);
+        $html = preg_replace('~<link\b[^>]*rel=["\']https://api\.w\.org/["\'][^>]*>~i', '', $html);
         return $html;
     }
 }
