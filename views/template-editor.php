@@ -1813,7 +1813,7 @@ function cfse_handle_create_style() {
 }
 
 /**
- * 把 styles/ 目录下所有内置风格写入 Worker KV 索引（tpl:sindex-builtin，X-Auth-Key 鉴权）。
+ * 把 styles/ 目录下所有内置风格写入 Worker KV 索引（tpl:index，X-Auth-Key 鉴权）。
  * 部署后调用：扫描 styles/<slug>/wp-content/themes/<slug>/tpl.json → 调 Worker /api/templates/style/builtin-sync。
  */
 function cfse_sync_builtin_styles() {

@@ -130,26 +130,22 @@ async function tplGetIndex(env) {
 
 /**
  * 读【内置包索引】。
- * 顺序：KV tpl:index（快） → 旧键 tpl:sindex-builtin（兼容） → static 的
- * /wp-content/themes/index.json（权威清单，走 assets；读到后回写 KV 缓存）。
- * 这样即使 KV 被删掉，下一个请求也会自动补全。
+ * 唯一来源 = KV tpl:index（部署时由 scripts/sync-themes-index.mjs 扫描
+ * static/wp-content/themes/<slug>/tpl.json 注入）。
  */
 async function builtinIndex(env) {
     // 内置风格清单的唯一来源 = KV tpl:index。
     // 它由**部署时**的 scripts/sync-themes-index.mjs 扫描 static/wp-content/themes/*/tpl.json 注入
     // （所以新增/删除风格只要 npm run deploy 就立即反映；也不再需要任何 list/index 静态文件）。
-    // 旧键 tpl:sindex-builtin 兼容读取一段时间。
+    // 唯一来源 = tpl:index（旧键 tpl:sindex-builtin 已废弃并清理，不再读写）。
     let out = [];
-    for (const key of ['tpl:index', 'tpl:sindex-builtin']) {
-        if (out.length) break;
-        try {
-            const v = await env.KV_CACHE.get(key);
-            if (v) {
-                const o = JSON.parse(v);
-                if (Array.isArray(o) && o.length) out = o;
-            }
-        } catch (e) { /* fallthrough */ }
-    }
+    try {
+        const v = await env.KV_CACHE.get('tpl:index');
+        if (v) {
+            const o = JSON.parse(v);
+            if (Array.isArray(o)) out = o;
+        }
+    } catch (e) { /* fallthrough */ }
     return out.map(function (x) {
         return { id: String(x.id || ''), name: String(x.name || x.id || ''), updated: String(x.updated || ''), source: 'builtin' };
     }).filter(function (x) { return x.id; });
@@ -929,12 +925,10 @@ export async function handleAdminRequest(request, env) {
         }
         if (id) {
             // 内置风格 → 返回 builtin 标记，内容由前端 fetch static /style/<id>/tpl.json
-            const builtinRaw = await env.KV_CACHE.get('tpl:sindex-builtin');
-            if (builtinRaw) {
-                const bi = JSON.parse(builtinRaw);
-                if (Array.isArray(bi) && bi.some(function (x) { return x.id === id; })) {
-                    return json({ id: id, name: (bi.find(function (x) { return x.id === id; }) || {}).name || id, builtin: true, tpl: {} });
-                }
+            const bi = await builtinIndex(env);
+            const biHit = bi.find(function (x) { return x.id === id; });
+            if (biHit) {
+                return json({ id: id, name: biHit.name || id, builtin: true, tpl: {} });
             }
             // 用户风格 → D1 当前版本
             const row = await env.D1_DATABASE.prepare('SELECT id, version, name, tpl_json FROM styles WHERE id = ? ORDER BY version DESC LIMIT 1').bind(id).first();
@@ -975,12 +969,9 @@ export async function handleAdminRequest(request, env) {
         let id = String(body.id || '');
         if (!id) id = 's' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
         // 与内置风格同名 → 提示改名（slug 唯一）
-        const builtinRaw = await env.KV_CACHE.get('tpl:sindex-builtin');
-        if (builtinRaw) {
-            const bi = JSON.parse(builtinRaw);
-            if (Array.isArray(bi) && bi.some(function (x) { return x.id === id; })) {
-                return json({ error: 'name conflicts with builtin style, please rename' }, 400);
-            }
+        const bi = await builtinIndex(env);
+        if (bi.some(function (x) { return x.id === id; })) {
+            return json({ error: 'name conflicts with builtin style, please rename' }, 400);
         }
         const now = new Date().toISOString().slice(0, 19);
         const prev = await env.D1_DATABASE.prepare('SELECT MAX(version) AS v FROM styles WHERE id = ?').bind(id).first();
@@ -1026,12 +1017,9 @@ export async function handleAdminRequest(request, env) {
         try { body = await request.json(); } catch (e) { return json({ error: 'bad body' }, 400); }
         const id = String(body.id || '');
         if (!id) return json({ error: 'invalid id' }, 400);
-        const builtinRaw = await env.KV_CACHE.get('tpl:sindex-builtin');
-        if (builtinRaw) {
-            const bi = JSON.parse(builtinRaw);
-            if (Array.isArray(bi) && bi.some(function (x) { return x.id === id; })) {
-                return json({ error: 'builtin style cannot be deleted' }, 400);
-            }
+        const bi = await builtinIndex(env);
+        if (bi.some(function (x) { return x.id === id; })) {
+            return json({ error: 'builtin style cannot be deleted' }, 400);
         }
         await env.D1_DATABASE.prepare('DELETE FROM styles WHERE id = ?').bind(id).run();
         let idx = await userStyleIndex(env);
