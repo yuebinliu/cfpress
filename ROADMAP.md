@@ -38,7 +38,7 @@
 
 ---
 
-## B. 单页 permalink 交给本项目自己驱动 —— ✅ **已选定：方案 A（搬迁 R2）**，未实施
+## B. 单页 permalink 交给本项目自己驱动 —— ✅ **方案 A 已实现（2026-09-13）**，等你定目标结构后即可迁移
 
 **目标**：permalink 结构由 KV（站点基础设置）说了算，不再依赖 WP 的「同步路由规则」把手写 pattern 灌进来。**列表页不受影响** —— 首页/分类/标签/归档的 URL 空间与文章 permalink 无关（由 `category_base`/`tag_base` 决定，默认不变）；受影响的只有「单页地址」和「列表页里指向单页的链接」。
 
@@ -63,6 +63,8 @@
 - 迁移必须三件套：① **分批 + 幂等**（`POST /api/permalink/migrate`，每批 N 篇、返回进度、可续做）；② 顺序 **先 copy 全量 → 切 pattern → 再删旧 key**（中途无 404 窗口，顶多短时间两份共存）；③ **旧 URL：不做重定向（用户 2026-09-13 决定）** —— 站点新建、SEO 包袱轻，让旧 URL 自然 404、搜索引擎自行替换记录。省掉的复杂度：重定向表、路由里「R2 未命中 → 查 KV」分支、以及**泛化重写规则的误伤风险**（曾讨论过：泛化规则要自己排雷排除 `/category/`、`/tag/`、`/api/`… 漏一个就误伤，还可能让新文章自己重定向自己）。**唯一实际影响**：文章正文/菜单里硬写的站内旧链接会失效 —— 重定向表本来也救不了这类"文本里的旧 URL"，所以代价很小。
 - **语义风险**：改 slug / 改发布日期 → 该篇 key 变；用 `{category}` → 改分类 slug 会让**一整批**文章 key 变。所以迁移工具是必需品（顺带可加「R2 孤儿 key 清理」）。
 - 落成后 `routes.template.js` + 设置页「🔄 同步路由规则」按钮可**退役**（permalink 不再需要 WP 灌入）—— 与「选项 B：废掉模板机制」是同一个决定。
+
+**✅ 已实现（2026-09-13）** —— commit 见 git log，deploy `1ee77135-8c4a-4192-835d-a5cff52edb1c`：后端 `permalinkToPattern()/patternToPermalink()`（WP 风格 `%xxx%` ↔ `storagePattern {xxx}`，会报告不支持记号如 `%author%`）、`POST /api/permalink/preview`（转换 + 3 篇新旧 URL / R2 key 样例）、`POST /api/permalink/migrate`（**复用批量执行器**：逐篇把 R2 对象按新结构 copy，**旧对象保留**，全部完成后才切 `storagePattern` + 清缓存；进度键 `task:permalink:progress` 可续做）、`POST /api/permalink/cleanup`（删迁移时记录的旧 key）；`postStoragePath()`/`cfsePostUrl()` 均接通 `{category}`（取首个分类 slug）；后台设置页新增「URL 结构（permalink）」卡（当前/新结构 + 预览 + 迁移进度 + 清理旧文件）。**顺序设计成"先 copy 全量 → 再切 pattern"⇒ 中途失败不影响线上旧 URL，天然可回滚。**实测：预览转换正确（`%year%/%monthnum%` → `/2010/03/…`、`{category}` → `/hosting/…`）；小批量真实 copy 一批成功且 pattern 未切换。**待你定：是否迁移、迁到哪个结构**（迁移是写操作，跑之前建议先点预览确认样例）。
 
 **执行顺序（用户 2026-09-13 决定）**：**先做 C 节第 8 条的「Worker 端批量重建的并发 + 断点」**，再实施 permalink 迁移 —— 因为两者的调度骨架**完全一样**（分批取文章 → 并发处理 → 进度可续做），差别只在"每篇做什么"（渲染 vs 按新结构 copy/delete）。建议抽成一个通用执行器（如 `POST /api/batch/run?job=rebuild|migrate&cursor=…&limit=…` → `{done, cursor, processed, errors}`），permalink 迁移直接复用。
 
