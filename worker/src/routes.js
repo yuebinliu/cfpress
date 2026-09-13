@@ -187,53 +187,17 @@ export async function handleRequest(request, env) {
     }
 
     // ============================================
-    // Sitemap / Robots.txt（SEO，KV 缓存 600s）
     // ============================================
-    if (path === '/sitemap.xml' || path === '/robots.txt') {
-        const cacheKey = 'seo:' + path.slice(1);
-        const cached = await getCache(env.KV_CACHE, cacheKey);
-        if (cached) {
-            return new Response(cached, {
-                headers: {
-                    'Content-Type': (path === '/robots.txt' ? 'text/plain; charset=utf-8' : 'application/xml; charset=utf-8'),
-                    'Cache-Control': 'public, max-age=3600',
-                    'X-Cache': 'HIT',
-                }
-            });
-        }
-        const site = await getSiteContext(env);
-        let body = '';
-        if (path === '/robots.txt') {
-            body = 'User-agent: *\nAllow: /\nSitemap: ' + (site.url || '') + '/sitemap.xml\n';
-        } else {
-            const rows = await env.D1_DATABASE.prepare("SELECT wp_id, slug, date, modified FROM posts WHERE status = 'published' ORDER BY date DESC").all();
-            const items = (rows.results || []).map(function (p) {
-                const d = String(p.date || '');
-                const vals = {
-                    slug: String(p.slug || ''), id: String(p.wp_id || ''),
-                    year: d.slice(0, 4), month: d.slice(5, 7), day: d.slice(8, 10),
-                    hour: d.slice(11, 13), minute: d.slice(14, 16), second: d.slice(17, 19),
-                };
-                let pat = site.storagePattern || '{slug}/index.html';
-                Object.keys(vals).forEach(function (k) { pat = pat.split('{' + k + '}').join(vals[k]); });
-                const u = (site.url || '') + '/' + pat.replace(/\/?index\.html$/, '').split('/').filter(Boolean).join('/') + '/';
-                const lastmod = String(p.modified || p.date || '').slice(0, 10);
-                return '<url><loc>' + htmlEsc(u) + '</loc><lastmod>' + lastmod + '</lastmod></url>';
-            }).join('');
-            const taxRows = await env.D1_DATABASE.prepare("SELECT DISTINCT t.type, t.slug FROM taxonomies t JOIN post_taxonomy pt ON pt.taxonomy_type = t.type AND pt.taxonomy_slug = t.slug JOIN posts ps ON ps.wp_id = pt.post_id AND ps.status = 'published' ORDER BY t.type, t.slug").all();
-            const taxItems = (taxRows.results || []).map(function (x) {
-                const prefix = x.type === 'tag' ? 'tag' : 'category';
-                const u = (site.url || '') + '/' + prefix + '/' + String(x.slug || '') + '/';
-                return '<url><loc>' + htmlEsc(u) + '</loc></url>';
-            }).join('');
-            body = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>' + htmlEsc((site.url || '') + '/') + '</loc></url>' + items + taxItems + '</urlset>';
-        }
-        await setCache(env.KV_CACHE, cacheKey, body, 3600);
-        return new Response(body, {
+    // robots.txt：静态常量（不查库、不缓存；顺带挡爬虫抓后台与 API）
+    // /sitemap.xml 已废弃：原先是「按需全量生成 + KV 缓存」，文章量大时单个请求要吃下
+    // 全表查询 + 全量拼接（可能撞免费档 CPU 上限），对「有 RSS + 内链完整」的站点边际
+    // 价值也很低 —— 现在不拦它，让它走后面的分支自然落到 404。
+    // ============================================
+    if (path === '/robots.txt') {
+        return new Response('User-agent: *\nAllow: /\nDisallow: /admin/\nDisallow: /api/\n', {
             headers: {
-                'Content-Type': (path === '/robots.txt' ? 'text/plain; charset=utf-8' : 'application/xml; charset=utf-8'),
-                'Cache-Control': 'public, max-age=3600',
-                'X-Cache': 'MISS',
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Cache-Control': 'public, max-age=86400',
             }
         });
     }

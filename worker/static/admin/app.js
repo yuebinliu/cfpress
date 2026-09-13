@@ -1183,7 +1183,7 @@
 
     document.getElementById('purge-btn').addEventListener('click', function () {
       var prog = document.getElementById('rb-prog');
-      if (!confirm('清空全站 KV 缓存（首页/侧栏/sitemap/RSS/单页/站点信息）？')) return;
+      if (!confirm('清空全站 KV 缓存（首页/侧栏/RSS/单页/站点信息）？')) return;
       prog.textContent = '清理中…';
       api('/api/cache/purge', { method: 'POST', body: {} }).then(function (d) {
         prog.textContent = '已清空 ' + d.cleared + ' 组缓存';

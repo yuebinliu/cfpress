@@ -251,9 +251,8 @@ async function tplPreviewHtml(env, type, content, tplAll) {
 /** 发布后清缓存：按纯 TTL 配置决定清理范围（省 KV 写） */
 async function purgeLists(env, extraKeys) {
     const cfg = await getCacheConfig(env);
-    // seo（sitemap/robots）始终清：SEO 索引即时性由发布触发，精确删两个键（避免全库 list）
-    try { await deleteCache(env.KV_CACHE, 'seo:sitemap.xml'); } catch (e) {}
-    try { await deleteCache(env.KV_CACHE, 'seo:robots.txt'); } catch (e) {}
+    // 注：原先这里有 seo:sitemap.xml / seo:robots.txt 两次 delete。
+    // sitemap 已废弃（路由层 404，不再生成）、robots 已改为静态常量（不缓存）→ 无需再清。
     // 列表/侧边栏：仅在该类缓存启用（TTL>0）且 purge_on_publish=true 时清；否则靠 TTL 自然过期
     if (!cfg.purge_on_publish) return;
     if (cfg.ttl_sidebar > 0) {
