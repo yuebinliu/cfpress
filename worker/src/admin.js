@@ -301,6 +301,52 @@ async function runBatchChunk(items, concurrency, handler) {
     return { ok: ok, failed: failed };
 }
 
+/* ---------- permalink（URL 形态） → storagePattern ---------- */
+const PERMALINK_MAP = {
+    postname: 'slug', year: 'year', monthnum: 'month', day: 'day',
+    hour: 'hour', minute: 'minute', second: 'second', post_id: 'id', category: 'category',
+};
+const PATTERN_BACK = { slug: 'postname', year: 'year', month: 'monthnum', day: 'day', id: 'post_id', category: 'category' };
+
+/** '/%year%/%postname%/' → '{year}/{slug}/index.html'；同时返回不支持的记号 */
+function permalinkToPattern(structure) {
+    let out = String(structure == null ? '' : structure).trim();
+    out = out.replace(/^https?:\/\/[^/]+/i, '');   // 容错：整条 URL 粘进来
+    Object.keys(PERMALINK_MAP).forEach(function (k) {
+        out = out.split('%' + k + '%').join('{' + PERMALINK_MAP[k] + '}');
+    });
+    const unsupported = out.match(/%[A-Za-z_]+%/g) || [];
+    out = out.split('/').filter(Boolean).join('/');
+    if (out && !/index\.html$/.test(out)) out += '/index.html';
+    return { pattern: out, unsupported: unsupported };
+}
+
+/** storagePattern → WP 风格结构（仅用于后台回显） */
+function patternToPermalink(pattern) {
+    let p = String(pattern || '').replace(/\/?index\.html$/, '');
+    Object.keys(PATTERN_BACK).forEach(function (k) {
+        p = p.split('{' + k + '}').join('%' + PATTERN_BACK[k] + '%');
+    });
+    return '/' + p.split('/').filter(Boolean).join('/') + '/';
+}
+
+/** 从绝对 URL 取路径部分（预览用） */
+function urlPathOf(u) {
+    try { return new URL(String(u)).pathname; } catch (e) { return String(u || ''); }
+}
+
+/** 写站点 storagePattern（保留 site 行其它字段）+ 清 site:ctx */
+async function setStoragePattern(env, db, newPattern, siteCtx) {
+    const srow = await db.prepare("SELECT v FROM settings WHERE k = 'site'").first();
+    let sObj = {};
+    try { sObj = JSON.parse((srow && srow.v) || '{}'); } catch (e) {}
+    sObj.storagePattern = newPattern;
+    if (!sObj.name) sObj.name = (siteCtx && siteCtx.name) || '';
+    if (!sObj.url) sObj.url = (siteCtx && siteCtx.url) || '';
+    await db.prepare("INSERT INTO settings (k, v) VALUES ('site', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(JSON.stringify(sObj)).run();
+    try { await deleteCache(env.KV_CACHE, 'site:ctx'); } catch (e) {}
+}
+
 /* ---------- 单页 A3：用单页壳模板把文章渲染为静态 HTML 存 R2 ---------- */
 function escHtml(s) {
     return String(s == null ? '' : s)
@@ -310,10 +356,20 @@ function escHtml(s) {
 /** 按站点 storagePattern（settings）解析文章 R2 存储路径 */
 function postStoragePath(row, pattern) {
     const d = String(row.date || '');
+    // {category}：取首个分类的 slug（posts.categories 是 JSON [{name,slug}]）
+    let catSlug = '';
+    try {
+        const cats = JSON.parse(row.categories || '[]');
+        if (Array.isArray(cats) && cats.length) {
+            const c0 = cats[0];
+            catSlug = String((c0 && (c0.slug || c0.name)) || '');
+        }
+    } catch (e) { /* 忽略解析失败 */ }
     const vals = {
         slug: String(row.slug || ''), id: String(row.wp_id || ''),
         year: d.slice(0, 4), month: d.slice(5, 7), day: d.slice(8, 10),
         hour: d.slice(11, 13), minute: d.slice(14, 16), second: d.slice(17, 19),
+        category: catSlug,
     };
     let p = pattern || '{slug}/index.html';
     Object.keys(vals).forEach(function (k) { p = p.split('{' + k + '}').join(vals[k]); });
@@ -888,6 +944,136 @@ export async function handleAdminRequest(request, env) {
                 cursor: prog.cursor, done: done, batch: batch, concurrency: concurrency,
             });
         }
+    }
+
+    // ---- permalink（URL 形态）：查询 / 预览 / 迁移 / 清理旧文件 ----
+    if (path === '/api/permalink' && method === 'GET') {
+        const siteP = await getSiteContext(env);
+        const pat = siteP.storagePattern || '{slug}/index.html';
+        return json({ ok: true, storagePattern: pat, structure: patternToPermalink(pat) });
+    }
+
+    if (path === '/api/permalink/preview' && method === 'POST') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const conv = permalinkToPattern(body.structure);
+        if (!conv.pattern) return json({ error: 'URL 结构不能为空' }, 400);
+        const siteP = await getSiteContext(env);
+        const oldPat = siteP.storagePattern || '{slug}/index.html';
+        const rows = await db.prepare("SELECT * FROM posts WHERE status = 'published' ORDER BY wp_id ASC LIMIT 3").all();
+        const samples = (rows.results || []).map(function (r) {
+            const siteNew = Object.assign({}, siteP, { storagePattern: conv.pattern });
+            return {
+                title: String(r.title || '').slice(0, 40),
+                oldUrl: urlPathOf(postPublicUrl(r, siteP)),
+                newUrl: urlPathOf(postPublicUrl(r, siteNew)),
+                oldKey: postStoragePath(r, oldPat),
+                newKey: postStoragePath(r, conv.pattern),
+            };
+        });
+        return json({ ok: true, pattern: conv.pattern, oldPattern: oldPat, unsupported: conv.unsupported, samples: samples });
+    }
+
+    // 迁移：把已发布单页的 R2 对象按新结构逐篇 copy（旧对象保留！）；全部完成后自动切 storagePattern。
+    //   设计成"先 copy 全量 → 再切 pattern"，所以中途任何一步失败都不会影响旧 URL。
+    if (path === '/api/permalink/migrate') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        const siteP = await getSiteContext(env);
+        const tcfg = (siteP && siteP.cache) || {};
+        const batch = Math.min(100, Math.max(1, parseInt(tcfg.task_batch, 10) || 20));
+        const concurrency = Math.min(16, Math.max(1, parseInt(tcfg.task_concurrency, 10) || 4));
+        const JOB = 'permalink';
+
+        if (method === 'GET') {
+            const progress = await getBatchProgress(env, JOB);
+            return json({ ok: true, progress: progress, batch: batch, concurrency: concurrency, currentPattern: siteP.storagePattern || '' });
+        }
+
+        if (method === 'POST') {
+            let body = {};
+            try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+            const conv = permalinkToPattern(body.structure);
+            if (!conv.pattern) return json({ error: 'URL 结构不能为空' }, 400);
+            if (url.searchParams.get('reset') === '1') {
+                try { await env.KV_CACHE.delete(batchProgressKey(JOB)); } catch (e) {}
+            }
+            const totalRows = await db.prepare("SELECT COUNT(*) AS c FROM posts WHERE status = 'published'").first();
+            const total = parseInt((totalRows && totalRows.c) || 0, 10);
+            let prog = await getBatchProgress(env, JOB);
+            if (!prog || parseInt(prog.total, 10) !== total || prog.pattern !== conv.pattern) {
+                prog = {
+                    cursor: 0, ok: 0, failed: 0, skipped: 0, total: total,
+                    pattern: conv.pattern, oldPattern: siteP.storagePattern || '',
+                    startedAt: new Date().toISOString(),
+                };
+            }
+            const cursor = Math.max(0, parseInt(prog.cursor, 10) || 0);
+            if (cursor >= total) {
+                await setStoragePattern(env, db, conv.pattern, siteP);
+                try { await env.KV_CACHE.delete(batchProgressKey(JOB)); } catch (e) {}
+                await purgeLists(env);
+                return json({ ok: true, copied: 0, failed: 0, skipped: 0, total: total, cursor: total, done: true, batch: batch, concurrency: concurrency });
+            }
+            const rows = await db.prepare("SELECT * FROM posts WHERE status = 'published' ORDER BY wp_id ASC LIMIT ? OFFSET ?").bind(batch, cursor).all();
+            const list = rows.results || [];
+            const oldKeys = [];
+            const oldPat = prog.oldPattern || siteP.storagePattern || '{slug}/index.html';
+            const res = await runBatchChunk(list, concurrency, async function (r) {
+                const oldKey = postStoragePath(r, oldPat);
+                const newKey = postStoragePath(r, conv.pattern);
+                if (oldKey === newKey) return true;
+                const obj = await env.R2_BUCKET.get(oldKey);
+                if (!obj) return false;                      // 旧对象不在（未导出过）→ 记为失败，稍后人工看
+                await env.R2_BUCKET.put(newKey, obj.body, { httpMetadata: obj.httpMetadata });
+                oldKeys.push(oldKey);
+                return true;
+            });
+            if (oldKeys.length) {
+                try { await env.KV_CACHE.put('task:permalink:oldkeys:' + cursor, JSON.stringify(oldKeys)); } catch (e) {}
+            }
+            prog.skipped = list.length - res.ok - res.failed;
+            prog.cursor = cursor + list.length;
+            prog.ok = (parseInt(prog.ok, 10) || 0) + res.ok;
+            prog.failed = (parseInt(prog.failed, 10) || 0) + res.failed;
+            prog.updatedAt = new Date().toISOString();
+            const done = prog.cursor >= total;
+            if (done) {
+                await setStoragePattern(env, db, conv.pattern, siteP);
+                try { await env.KV_CACHE.delete(batchProgressKey(JOB)); } catch (e) {}
+                await purgeLists(env);
+            } else {
+                try { await env.KV_CACHE.put(batchProgressKey(JOB), JSON.stringify(prog)); } catch (e) {}
+            }
+            return json({
+                ok: true, copied: res.ok, failed: res.failed, skipped: prog.skipped,
+                total: total, cursor: prog.cursor, done: done, batch: batch, concurrency: concurrency,
+                switchedTo: done ? conv.pattern : null,
+            });
+        }
+    }
+
+    // 清理旧文件：删掉迁移时记录下来的旧 key（分批键 task:permalink:oldkeys:<cursor>）
+    if (path === '/api/permalink/cleanup' && method === 'POST') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        let deleted = 0, batches = 0, remaining = 0;
+        let cursor = undefined;
+        do {
+            const page = await env.KV_CACHE.list({ prefix: 'task:permalink:oldkeys:', cursor: cursor });
+            for (const k of (page.keys || [])) {
+                const v = await env.KV_CACHE.get(k.name);
+                let arr = [];
+                try { arr = JSON.parse(v || '[]'); } catch (e) {}
+                for (const key of (Array.isArray(arr) ? arr : [])) {
+                    try { await env.R2_BUCKET.delete(key); deleted++; } catch (e) {}
+                }
+                try { await env.KV_CACHE.delete(k.name); } catch (e) {}
+                batches++;
+            }
+            cursor = page.truncated ? page.cursor : undefined;
+            if (cursor) remaining++;
+        } while (cursor);
+        return json({ ok: true, deleted: deleted, batches: batches });
     }
 
     // ---- 模板管理（单页壳 / 列表条目；KV 存储，多套切换） ----

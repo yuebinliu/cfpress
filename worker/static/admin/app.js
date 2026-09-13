@@ -1078,6 +1078,16 @@
       '<div class="row"><div><label>批量大小（1-100）</label><input type="number" id="c-task-batch" min="1" max="100"></div>' +
       '<div><label>并发数（1-16）</label><input type="number" id="c-task-conc" min="1" max="16"></div></div>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-task-save">保存批量任务设置</button> <span class="muted" id="c-task-note"></span></div></div>' +
+      '<div class="card"><h1 style="font-size:16px;">URL 结构（permalink）</h1>' +
+      '<p class="muted">决定文章单页的<b>地址形态</b>，同时也是它在 R2 里的<b>存储路径</b>（两者始终一致）。支持 <code>%postname%</code> <code>%year%</code> <code>%monthnum%</code> <code>%day%</code> <code>%post_id%</code> <code>%category%</code>（不支持 %author%）。<b>改结构后必须点「开始迁移」</b>，否则旧地址会 404（迁移会先把新结构复制一份、旧文件保留，全部完成才切换）。</p>' +
+      '<label>当前</label><input type="text" id="pm-current" readonly>' +
+      '<label>新结构（WP 风格，如 /%year%/%postname%/）</label><input type="text" id="pm-input" placeholder="/%postname%/">' +
+      '<div style="margin-top:10px;">' +
+      '<button class="btn" id="pm-preview">预览</button> ' +
+      '<button class="btn btn-primary" id="pm-migrate">开始迁移</button> ' +
+      '<button class="btn" id="pm-cleanup">清理旧文件</button> ' +
+      '<span class="muted" id="pm-note"></span></div>' +
+      '<pre id="pm-out" class="muted" style="margin-top:10px;white-space:pre-wrap;font-size:12px;"></pre></div>' +
       '<div class="card"><h1 style="font-size:16px;">修改密码</h1>' +
       '<label>原密码</label><input type="password" id="p-old" autocomplete="current-password">' +
       '<label>新密码（至少 8 位）</label><input type="password" id="p-new" autocomplete="new-password">' +
@@ -1168,6 +1178,60 @@
         var n = document.getElementById('c-task-note');
         if (n && r.cache) n.textContent = '批量 ' + r.cache.task_batch + ' 篇/批 · 并发 ' + r.cache.task_concurrency;
       }).catch(function (err) { flash('flash-main', err.message, 'err'); });
+    });
+
+    // ---- URL 结构（permalink）----
+    api('/api/permalink').then(function (d) {
+      var el = document.getElementById('pm-current');
+      if (el) el.value = d.structure + '   →   ' + d.storagePattern;
+      var inp = document.getElementById('pm-input');
+      if (inp && !inp.value) inp.value = d.structure;
+    }).catch(function () {});
+
+    document.getElementById('pm-preview').addEventListener('click', function () {
+      var out = document.getElementById('pm-out');
+      out.textContent = '预览中…';
+      api('/api/permalink/preview', { method: 'POST', body: { structure: document.getElementById('pm-input').value } }).then(function (d) {
+        var lines = ['解析结果: ' + d.pattern + '   （当前 ' + d.oldPattern + '）'];
+        if (d.unsupported && d.unsupported.length) lines.push('⚠️ 不支持的记号（会被原样保留）: ' + d.unsupported.join(' '));
+        lines.push('');
+        (d.samples || []).forEach(function (x) {
+          lines.push('· ' + x.title);
+          lines.push('    ' + x.oldUrl + '  →  ' + x.newUrl);
+          lines.push('    R2: ' + x.oldKey + '  →  ' + x.newKey);
+        });
+        out.textContent = lines.join('\n');
+      }).catch(function (e) { out.textContent = '预览失败: ' + e.message; });
+    });
+
+    document.getElementById('pm-migrate').addEventListener('click', function () {
+      var out = document.getElementById('pm-out');
+      var structure = document.getElementById('pm-input').value;
+      if (!structure) { flash('flash-main', '请先填新结构', 'err'); return; }
+      if (!confirm('将把全部已发布单页在 R2 里按新结构重新复制一份（旧文件保留），全部完成后自动切换到新结构。\n\n开始？')) return;
+      var first = true;
+      (function run() {
+        out.textContent = '迁移中…';
+        api('/api/permalink/migrate' + (first ? '?reset=1' : ''), { method: 'POST', body: { structure: structure } }).then(function (d) {
+          first = false;
+          out.textContent = '已复制 ' + d.cursor + ' / ' + d.total + '（批量 ' + d.batch + ' · 并发 ' + d.concurrency +
+            ' · 跳过 ' + (d.skipped || 0) + ' · 旧文件缺失 ' + (d.failed || 0) + '）';
+          if (!d.done) { run(); }
+          else {
+            out.textContent += '\n\n✅ 迁移完成，已切换到新结构：' + d.switchedTo +
+              '\n（旧文件仍保留在 R2，确认新地址正常后可点「清理旧文件」）';
+            flash('flash-main', '迁移完成，URL 结构已切换', 'ok');
+          }
+        }).catch(function (e) { out.textContent = '迁移中断: ' + e.message + '（可再点一次继续）'; });
+      })();
+    });
+
+    document.getElementById('pm-cleanup').addEventListener('click', function () {
+      if (!confirm('删除迁移时保留的旧单页文件？（旧地址会彻底 404）')) return;
+      api('/api/permalink/cleanup', { method: 'POST' }).then(function (d) {
+        document.getElementById('pm-out').textContent = '已删除旧文件 ' + d.deleted + ' 个（' + d.batches + ' 批）';
+        flash('flash-main', '已删除旧文件 ' + d.deleted + ' 个', 'ok');
+      }).catch(function (e) { flash('flash-main', e.message, 'err'); });
     });
 
     document.getElementById('s-save').addEventListener('click', function () {
