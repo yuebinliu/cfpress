@@ -79,7 +79,7 @@
 7. **单页重建**：模板改动只影响「新建 / 重建」的单页；需要时在 Worker 后台跑「重建全部单页」。
 8. **Worker 端批量重建缺并发与断点续做**：`POST /api/posts/rebuild-single?limit=15&offset=N` 由前端**串行**循环调用（`static/admin/app.js:1171` / `:1456`）—— 没有并发；`offset` 可手动指定算是**隐式**断点，但**进度不持久化**（刷新页面即丢）。WP 端已有并发（`export_posts_concurrent`，4 进程），Worker 端没有。
 9. ~~**两处 `R2.list` 没做分页**~~ → **用户决定忽略**（风格包数量远达不到 1000，`admin.js:1093` 与 `routes.js:93` 维持单次 list 即可）。备查：R2 单次最多返回 1000 个 key，超过会静默漏列。
-10. **砍掉 sitemap / 静态化 robots / 去掉发布时的 seo 清理**（用户已决定，**未实施**）：
+10. ✅ **已完成（2026-09-13）** —— commit `9c5f160`，deploy Version `e93ce481-4087-4bab-a480-df8968c37e7a`；线上实测：`/sitemap.xml` → **404**、`/robots.txt` → 200（内容为静态常量）、首页与真实单页 `/testfor-md/` → 200、`/feed/` → 200；KV 里遗留的 `seo:sitemap.xml` 已删除。原决策内容：
     - **`/sitemap.xml` → 路由层直接 404**（`routes.js:192` 那条分支）。**必须截在路由层**：现在是「按需生成 + KV 缓存 3600s」（`routes.js:209` 全表查 `posts`、`:223` 全表查分类标签、`:229` 拼单文件 XML），所以只要爬虫来访问就会触发全量生成 —— 1 万篇时单请求要在免费档 10ms CPU 内读完 1 万行并拼 ~1.5MB 字符串，**大概率直接超限失败**，不只是慢。
     - **`/robots.txt` → 改为纯静态常量**（不查库、不缓存、不再声明 sitemap），建议内容：`User-agent: *` + `Allow: /` + `Disallow: /admin/` + `Disallow: /api/`（这才是 robots 的真正价值：挡爬虫抓后台与 API）。
     - **`purgeLists()` 删掉那两次 `seo:*` delete**（`admin.js:255-256`）：sitemap 已砍、robots 是常量 → 不再需要清；默认配置（`purge_on_publish=false`）下，**发布链路的 KV 操作随之归零**。

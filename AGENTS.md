@@ -39,10 +39,10 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
    - 列表页走 `listCached()`（`routes.js`，ttl_list>0 才读写 KV）；侧边栏 `getSidebar()` 按 ttl_sidebar 判断；`site:ctx` 自身按 ttl_site 判断（0=每请求直查 D1）。
    - **RSS feed**：**仅全局 `/feed/`**（分类/标签 feed 已移除，访问返回 404）；KV `rss:feed` 按 `ttl_feed`（默认 4 小时）缓存，`feed_count`（1-100，默认 20）控制条数；**发布文章不主动清 feed**（低频发现通道，靠 TTL 自然更新，即时性由首页实时列表保证）；HTTP `Cache-Control` 同步用 ttl_feed（0=no-store）；**改配置（Worker PUT /api/settings、WP 同步）会清 `rss:feed`** 即时刷新。
    - **单页永远直读 R2，无 KV 缓存层**（历史 `post:{slug}` 缓存已移除）。
-   - `purgeLists()`（admin.js）：seo 精确删 `seo:sitemap.xml`/`seo:robots.txt` 两键（发布始终清）；列表/侧边栏仅在「对应 TTL>0 且 purge_on_publish=true」时清。
+   - `purgeLists()`（admin.js）：**默认配置下已无任何 KV 操作** —— 2026-09 起 sitemap 废弃、robots 改静态常量，原先那两次 `seo:*` 删除已移除；列表/侧边栏仅在「对应 TTL>0 且 purge_on_publish=true」时清。
    - 配置读取：`src/cacheconfig.js` 的 `getCacheConfig()` = `getSiteContext().cache`（无独立 KV 键；旧键 `cache:config` 仅作清理兼容）。
    - **控制台：Worker 后台「设置 → 缓存策略」为主控**（三档预设 + TTL/feed 微调，保存写 D1 + 清 `site:ctx` 即生效）；WP 设置页保留为初始化/兜底，**LWW（谁最后保存谁生效）**。
-3. **sitemap/robots**：KV `seo:*` 缓存 **3600s**（仅兜底自动重建频率；发布时始终精确清两键，SEO 时效不受影响）。
+3. **sitemap/robots（2026-09 变更）**：**`/sitemap.xml` 已废弃** —— 路由层不再拦它，直接落到 404（原实现是「按需全量生成 + KV 缓存 3600s」，文章量大时单个请求要全表查询 + 全量拼接，会撞免费档 CPU 上限）；**`/robots.txt` 改为静态常量**（不查库、不缓存），内容含 `Disallow: /admin/` 与 `Disallow: /api/`。KV 里不再有 `seo:*` 键，发布链路也不再清它们。
 4. **评论系统：明确跳过**（用户决定）。**不做"壳/正文分离"**；改名/换肤 = 全量重建单页（设置页有"重建全部单页"按钮，分批 15/请求）。
 5. **后台权限**：admin（全部）/ editor、author（内容管理）/ subscriber（仅个人资料）；写操作限速 90 次/分钟/用户（**内存滑窗，isolate 级，0 KV 成本**——历史版本曾用 KV 计数，键 `wrate:u:<uid>` 已废弃）；登录层另有 IP 限速（60s/10 次）+ 账号锁定（10 次/15 分钟），走 KV（登录低频，可接受）。
 6. **`rows.template.js` 是占位符源模板**（含 `{{ROUTE_PATTERN}}` `{{STORAGE_PATTERN}}` `{{SITE_URL}}` `{{CFSE_PER_PAGE}}`），由 WP "同步路由规则" 生成 `routes.js`。**改 `routes.js` 时必须同步改 `routes.template.js`**（可用脚本：以 routes.js 为基准反向还原 9 处占位符）。
