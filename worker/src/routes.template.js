@@ -21,6 +21,31 @@ import { mdToHtml } from './md';
 
 const CFSE_PER_PAGE = {{CFSE_PER_PAGE}};
 
+/* ---------- X-Auth-Key 写通道：共享限速 ----------
+ * /purge-cache /style-list /builtin-sync /d1-batch /upload /delete 这些接口不走登录，
+ * 只靠单一 X-Auth-Key。这里加一层「按来源 IP」的内存滑窗限速（isolate 级，0 KV 成本），
+ * 避免 key 泄漏后被无限刷。
+ * 额度 600 次/分钟：批量导出（默认 4 并发、每篇数个请求）峰值约 2~8 次/秒，留足余量。
+ * 注：校验仍分散在各接口处（此处只做限速，不改动它们的鉴权逻辑）。
+ */
+const XAUTH_RATE_LIMIT = 600;
+const xauthRateMap = new Map();
+
+function xauthRateAllowed(ip) {
+    const now = Date.now();
+    const k = String(ip || 'unknown');
+    let e = xauthRateMap.get(k);
+    if (!e || now >= e.resetAt) {
+        if (xauthRateMap.size > 256) {
+            xauthRateMap.forEach(function (v, kk) { if (now >= v.resetAt) xauthRateMap.delete(kk); });
+        }
+        e = { n: 0, resetAt: now + 60000 };
+        xauthRateMap.set(k, e);
+    }
+    e.n += 1;
+    return e.n <= XAUTH_RATE_LIMIT;
+}
+
 const CACHE_TTL = {
     STATIC: 31536000,
     HTML: 3600,
@@ -55,6 +80,17 @@ export async function handleRequest(request, env) {
             status: dbOk ? 200 : 503,
             headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
         });
+    }
+
+    // X-Auth-Key 写通道统一限速（在各接口各自鉴权之前；防 key 泄漏后被无限刷）
+    if (request.headers.get('X-Auth-Key')) {
+        const xauthIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'unknown';
+        if (!xauthRateAllowed(xauthIp)) {
+            return new Response(JSON.stringify({ error: 'too many requests' }), {
+                status: 429,
+                headers: { 'Content-Type': 'application/json', 'Retry-After': '60' },
+            });
+        }
     }
 
     // favicon：无站点图标，静默 204 避免 404 噪音
