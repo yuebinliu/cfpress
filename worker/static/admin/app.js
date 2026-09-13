@@ -1048,6 +1048,7 @@
   /* ---------- 设置（站点名 / 改密 / 内容维护） ---------- */
   function renderSettings() {
     var sec = document.getElementById('view-settings');
+    var curCache = null;   // 设置页加载回来的 cache 全量（保存「批量任务」时合并用）
     sec.innerHTML = '<h1>设置</h1>' +
       '<div class="card"><h1 style="font-size:16px;">账号资料</h1>' +
       '<p class="muted" id="who-line">加载中…</p>' +
@@ -1072,6 +1073,11 @@
       '<div><label>Feed 输出条数（1-100）</label><input type="number" id="c-feed-count" min="1" max="100"></div></div>' +
       '<label style="margin-top:8px;display:block;"><input type="checkbox" id="c-purge"> 发布文章时清列表第一页/侧边栏缓存（消耗 KV 写额度，建议保持关闭）</label>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-save">保存缓存策略</button> <span class="muted" id="c-note"></span></div></div>' +
+      '<div class="card"><h1 style="font-size:16px;">批量任务</h1>' +
+      '<p class="muted">「重建全部单页」「permalink 迁移」等批量任务共用。<b>批量大小</b> = 每次请求处理多少篇；<b>并发数</b> = 一批里同时处理几篇。</p>' +
+      '<div class="row"><div><label>批量大小（1-100）</label><input type="number" id="c-task-batch" min="1" max="100"></div>' +
+      '<div><label>并发数（1-16）</label><input type="number" id="c-task-conc" min="1" max="16"></div></div>' +
+      '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-task-save">保存批量任务设置</button> <span class="muted" id="c-task-note"></span></div></div>' +
       '<div class="card"><h1 style="font-size:16px;">修改密码</h1>' +
       '<label>原密码</label><input type="password" id="p-old" autocomplete="current-password">' +
       '<label>新密码（至少 8 位）</label><input type="password" id="p-new" autocomplete="new-password">' +
@@ -1112,6 +1118,9 @@
       document.getElementById('c-ttl-feed').value = (c.ttl_feed !== undefined ? c.ttl_feed : 14400);
       document.getElementById('c-feed-count').value = (c.feed_count !== undefined ? c.feed_count : 20);
       document.getElementById('c-purge').checked = !!c.purge_on_publish;
+      document.getElementById('c-task-batch').value = (c.task_batch !== undefined ? c.task_batch : 20);
+      document.getElementById('c-task-conc').value = (c.task_concurrency !== undefined ? c.task_concurrency : 4);
+      curCache = c;
     }).catch(function (err) { flash('flash-main', err.message, 'err'); });
 
     // 缓存策略：三档预设 + 保存
@@ -1141,6 +1150,26 @@
       }).catch(function (err) { flash('flash-main', err.message, 'err'); });
     });
 
+    document.getElementById('c-task-save').addEventListener('click', function () {
+      var base = curCache || {};
+      var body = { cache: {
+        ttl_list: parseInt(base.ttl_list, 10) || 0,
+        ttl_sidebar: parseInt(base.ttl_sidebar, 10) || 0,
+        ttl_site: (base.ttl_site !== undefined ? base.ttl_site : 604800),
+        ttl_feed: (base.ttl_feed !== undefined ? base.ttl_feed : 14400),
+        feed_count: (base.feed_count !== undefined ? base.feed_count : 20),
+        purge_on_publish: !!base.purge_on_publish,
+        task_batch: Math.min(100, Math.max(1, parseInt(document.getElementById('c-task-batch').value, 10) || 20)),
+        task_concurrency: Math.min(16, Math.max(1, parseInt(document.getElementById('c-task-conc').value, 10) || 4)),
+      } };
+      api('/api/settings', { method: 'PUT', body: body }).then(function (r) {
+        curCache = r.cache || curCache;
+        flash('flash-main', '批量任务设置已保存', 'ok');
+        var n = document.getElementById('c-task-note');
+        if (n && r.cache) n.textContent = '批量 ' + r.cache.task_batch + ' 篇/批 · 并发 ' + r.cache.task_concurrency;
+      }).catch(function (err) { flash('flash-main', err.message, 'err'); });
+    });
+
     document.getElementById('s-save').addEventListener('click', function () {
       var name = document.getElementById('s-name').value.trim();
       var desc = document.getElementById('s-desc').value.trim();
@@ -1166,19 +1195,32 @@
       var btn = document.getElementById('rb-btn');
       var prog = document.getElementById('rb-prog');
       btn.disabled = true;
-      prog.textContent = '开始…';
-      function run(offset, done) {
-        api('/api/posts/rebuild-single?limit=15&offset=' + offset, { method: 'POST' }).then(function (d) {
-          prog.textContent = '已重建 ' + d.rebuilt + ' / 共 ' + d.total + (d.nextOffset ? '…' : '');
-          if (d.nextOffset) { run(d.nextOffset, done); }
-          else { done(); }
-        }).catch(function (err) { done(); flash('flash-main', '重建中断：' + err.message, 'err'); });
-      }
-      run(0, function () {
-        btn.disabled = false;
-        prog.textContent = '完成';
-        flash('flash-main', '全部单页已重建', 'ok');
-      });
+      prog.textContent = '检查进度…';
+      api('/api/posts/rebuild-single', { method: 'GET' }).then(function (g) {
+        var p = (g && g.progress) || null;
+        var resume = !!(p && (parseInt(p.cursor, 10) || 0) < (parseInt(p.total, 10) || 0));
+        if (resume && !confirm('上次重建到 ' + p.cursor + '/' + p.total + ' 篇未完成。\n确定 = 从断点继续；取消 = 从头开始。')) resume = false;
+        prog.textContent = resume ? ('从 ' + p.cursor + '/' + p.total + ' 继续…') : '从头开始…';
+        var first = true;
+        function run() {
+          var qs = (first && !resume) ? '?reset=1' : '';
+          first = false;
+          api('/api/posts/rebuild-single' + qs, { method: 'POST' }).then(function (d) {
+            prog.textContent = '已重建 ' + d.cursor + ' / 共 ' + d.total + (d.done ? '' : '…') +
+              '（批量 ' + d.batch + ' · 并发 ' + d.concurrency + (d.failed ? ' · 失败 ' + d.failed : '') + '）';
+            if (!d.done) { run(); }
+            else {
+              btn.disabled = false;
+              prog.textContent = '全部完成：' + d.total + ' 篇';
+              flash('flash-main', '全部单页已重建', 'ok');
+            }
+          }).catch(function (err) {
+            btn.disabled = false;
+            flash('flash-main', '重建中断：' + err.message + '（可再次点击，从断点继续）', 'err');
+          });
+        }
+        run();
+      }).catch(function (err) { btn.disabled = false; prog.textContent = ''; flash('flash-main', err.message, 'err'); });
     });
 
     document.getElementById('purge-btn').addEventListener('click', function () {
@@ -1452,13 +1494,13 @@
       }).then(function () {
         if (document.getElementById('st-rebuild').checked) {
           prog.textContent = '开始重建单页…';
-          (function run(offset) {
-            api('/api/posts/rebuild-single?limit=15&offset=' + offset, { method: 'POST' }).then(function (d) {
-              prog.textContent = '重建单页 ' + d.rebuilt + ' / 共 ' + d.total + (d.nextOffset ? '…' : '');
-              if (d.nextOffset) run(d.nextOffset);
-              else { prog.textContent = '重建完成'; flash('flash-main', '风格已应用，单页已重建', 'ok'); }
-            }).catch(function (err) { prog.textContent = '重建中断：' + err.message; });
-          })(0);
+          (function run(first) {
+            api('/api/posts/rebuild-single' + (first ? '?reset=1' : ''), { method: 'POST' }).then(function (d) {
+              prog.textContent = '重建单页 ' + d.cursor + ' / 共 ' + d.total + (d.done ? '' : '…');
+              if (!d.done) { run(false); }
+              else { prog.textContent = '重建完成（共 ' + d.total + ' 篇）'; flash('flash-main', '风格已应用，单页已重建', 'ok'); }
+            }).catch(function (err) { prog.textContent = '重建中断：' + err.message + '（可在设置页点「重建全部单页」从断点继续）'; });
+          })(true);
         }
       }).catch(function (e) { flash('flash-main', e.message, 'err'); });
     });

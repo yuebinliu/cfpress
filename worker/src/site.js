@@ -21,6 +21,8 @@ const DEFAULT_CACHE = {
     ttl_feed: 14400,    // RSS feed KV TTL：默认 4 小时（低频发现通道；发布文章不主动清）
     feed_count: 20,     // RSS 输出条数（1-100）
     purge_on_publish: false,
+    task_batch: 20,       // 批量任务：每次请求处理条数（重建单页 / permalink 迁移共用）
+    task_concurrency: 4,  // 批量任务：一批内同时处理几条
 };
 
 /** 归一化缓存配置（纯 TTL；兼容旧版 {mode:'d1'|'kv'} 数据） */
@@ -40,6 +42,14 @@ export function normalizeCache(raw) {
             if (!isNaN(n) && n >= 1) out.feed_count = Math.min(n, 100);
         }
         if (raw.purge_on_publish !== undefined) out.purge_on_publish = !!raw.purge_on_publish;
+        if (raw.task_batch !== undefined) {
+            const n = parseInt(raw.task_batch, 10);
+            if (!isNaN(n) && n >= 1) out.task_batch = Math.min(n, 100);
+        }
+        if (raw.task_concurrency !== undefined) {
+            const n = parseInt(raw.task_concurrency, 10);
+            if (!isNaN(n) && n >= 1) out.task_concurrency = Math.min(n, 16);
+        }
     }
     return out;
 }

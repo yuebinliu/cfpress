@@ -265,6 +265,42 @@ async function purgeLists(env, extraKeys) {
     }
 }
 
+/* ---------- 通用批量任务执行器（重建单页 / permalink 迁移共用） ----------
+ * 设计：job 只负责"单条做什么"，"分批取数 + 批内并发 + 进度持久化"由这里统一处理。
+ * 进度存 KV `task:<job>:progress` → 刷新 / 中断后可从断点续做；跑完自动清除。
+ */
+function batchProgressKey(job) { return 'task:' + job + ':progress'; }
+
+async function getBatchProgress(env, job) {
+    try {
+        const v = await env.KV_CACHE.get(batchProgressKey(job));
+        if (!v) return null;
+        const o = JSON.parse(v);
+        return (o && typeof o === 'object') ? o : null;
+    } catch (e) { return null; }
+}
+
+/** 批内并发跑一遍：handler(item) 返回 truthy 记为成功（并发池，最多 concurrency 条同时在跑） */
+async function runBatchChunk(items, concurrency, handler) {
+    let idx = 0;
+    let ok = 0;
+    let failed = 0;
+    const workers =Math.max(1, Math.min(concurrency || 1, items.length || 1));
+    const pool = [];
+    for (let i = 0; i < workers; i++) {
+        pool.push((async function () {
+            while (idx < items.length) {
+                const my = items[idx++];
+                try {
+                    if (await handler(my)) ok++; else failed++;
+                } catch (e) { failed++; }
+            }
+        })());
+    }
+    await Promise.all(pool);
+    return { ok: ok, failed: failed };
+}
+
 /* ---------- 单页 A3：用单页壳模板把文章渲染为静态 HTML 存 R2 ---------- */
 function escHtml(s) {
     return String(s == null ? '' : s)
@@ -556,6 +592,19 @@ export async function handleAdminRequest(request, env) {
                 ttl_feed: ttlNum(c.ttl_feed, 14400),
                 feed_count: (function () { const n = parseInt(c.feed_count, 10); return (!isNaN(n) && n >= 1) ? Math.min(n, 100) : 20; })(),
                 purge_on_publish: !!c.purge_on_publish,
+                // 未传则保留原值（避免"只改缓存策略"的旧请求把批量任务配置重置）
+                task_batch: (function () {
+                    const n = parseInt(c.task_batch, 10);
+                    if (!isNaN(n) && n >= 1) return Math.min(n, 100);
+                    const pv = parseInt((site.cache || {}).task_batch, 10);
+                    return (!isNaN(pv) && pv >= 1) ? Math.min(pv, 100) : 20;
+                })(),
+                task_concurrency: (function () {
+                    const n = parseInt(c.task_concurrency, 10);
+                    if (!isNaN(n) && n >= 1) return Math.min(n, 16);
+                    const pv = parseInt((site.cache || {}).task_concurrency, 10);
+                    return (!isNaN(pv) && pv >= 1) ? Math.min(pv, 16) : 4;
+                })(),
             };
             await db.prepare("INSERT INTO settings (k, v) VALUES ('cache', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(JSON.stringify(cacheCfg)).run();
             result.cache = cacheCfg;
@@ -779,20 +828,66 @@ export async function handleAdminRequest(request, env) {
         return json({ ok: true, done: done });
     }
 
-    // POST /api/posts/rebuild-single（admin；分批重建全部已发布文章的静态单页）
-    if (path === '/api/posts/rebuild-single' && method === 'POST') {
+    // 批量重建静态单页（admin）
+    //   GET  → 查进度（用于"是否从断点继续"）；POST → 跑一批（批内并发；进度持久化，可中断续做）
+    //   POST 带 ?reset=1 → 丢弃旧进度、从头开始
+    //   批量大小 = settings.cache.task_batch；并发数 = settings.cache.task_concurrency
+    if (path === '/api/posts/rebuild-single') {
         if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
-        const limit = Math.min(40, Math.max(1, parseInt(url.searchParams.get('limit') || '15', 10) || 15));
-        const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0);
-        const rows = await db.prepare("SELECT * FROM posts WHERE status = 'published' ORDER BY wp_id ASC LIMIT ? OFFSET ?").bind(limit, offset).all();
-        let rebuilt = 0;
-        for (const r of (rows.results || [])) {
-            if (await writeSinglePage(env, r)) rebuilt++;
+        const siteCtx = await getSiteContext(env);
+        const tcfg = (siteCtx && siteCtx.cache) || {};
+        const batch = Math.min(100, Math.max(1, parseInt(tcfg.task_batch, 10) || 20));
+        const concurrency = Math.min(16, Math.max(1, parseInt(tcfg.task_concurrency, 10) || 4));
+        const JOB = 'rebuild';
+
+        if (method === 'GET') {
+            const progress = await getBatchProgress(env, JOB);
+            return json({ ok: true, progress: progress, batch: batch, concurrency: concurrency });
         }
-        const totalRows = await db.prepare("SELECT COUNT(*) AS c FROM posts WHERE status = 'published'").first();
-        const total = parseInt((totalRows && totalRows.c) || 0, 10);
-        const nextOffset = (offset + rebuilt) < total ? (offset + rebuilt) : null;
-        return json({ ok: true, rebuilt: rebuilt, total: total, nextOffset: nextOffset });
+
+        if (method === 'POST') {
+            if (url.searchParams.get('reset') === '1') {
+                try { await env.KV_CACHE.delete(batchProgressKey(JOB)); } catch (e) {}
+            }
+            const totalRows = await db.prepare("SELECT COUNT(*) AS c FROM posts WHERE status = 'published'").first();
+            const total = parseInt((totalRows && totalRows.c) || 0, 10);
+            let prog = await getBatchProgress(env, JOB);
+            // 进度缺失或总篇数变了 → 重新开始
+            if (!prog || parseInt(prog.total, 10) !== total) {
+                prog = { cursor: 0, ok: 0, failed: 0, total: total, startedAt: new Date().toISOString() };
+            }
+            const cursor = Math.max(0, parseInt(prog.cursor, 10) || 0);
+            if (cursor >= total) {
+                try { await env.KV_CACHE.delete(batchProgressKey(JOB)); } catch (e) {}
+                return json({ ok: true, rebuilt: 0, failed: 0, total: total, cursor: total, done: true, batch: batch, concurrency: concurrency });
+            }
+            const rows = await db.prepare("SELECT * FROM posts WHERE status = 'published' ORDER BY wp_id ASC LIMIT ? OFFSET ?").bind(batch, cursor).all();
+            const list = rows.results || [];
+            if (!list.length) {
+                try { await env.KV_CACHE.delete(batchProgressKey(JOB)); } catch (e) {}
+                return json({ ok: true, rebuilt: 0, failed: 0, total: total, cursor: total, done: true, batch: batch, concurrency: concurrency });
+            }
+            const res = await runBatchChunk(list, concurrency, async function (r) {
+                return await writeSinglePage(env, r);
+            });
+            prog.cursor = cursor + list.length;
+            prog.ok = (parseInt(prog.ok, 10) || 0) + res.ok;
+            prog.failed = (parseInt(prog.failed, 10) || 0) + res.failed;
+            prog.updatedAt = new Date().toISOString();
+            const done = prog.cursor >= total;
+            try {
+                if (done) {
+                    await env.KV_CACHE.delete(batchProgressKey(JOB));
+                    await purgeLists(env);
+                } else {
+                    await env.KV_CACHE.put(batchProgressKey(JOB), JSON.stringify(prog));
+                }
+            } catch (e) { /* 进度写入失败不影响本批结果 */ }
+            return json({
+                ok: true, rebuilt: res.ok, failed: res.failed, total: total,
+                cursor: prog.cursor, done: done, batch: batch, concurrency: concurrency,
+            });
+        }
     }
 
     // ---- 模板管理（单页壳 / 列表条目；KV 存储，多套切换） ----
