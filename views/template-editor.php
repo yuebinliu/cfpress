@@ -1755,6 +1755,12 @@ function cfse_create_style_package($display_name = '', $unique_suffix = true) {
             return array('ok' => false, 'slug' => '', 'dir' => '', 'files' => 0, 'tpl' => array(), 'logs' => $logs);
         }
     }
+    if (function_exists('cfse_skin_sanitize_template') && isset($tpl_payload['tpl']) && is_array($tpl_payload['tpl'])) {
+        foreach ($tpl_payload['tpl'] as $__cfse_k => $__cfse_v) {
+            $tpl_payload['tpl'][$__cfse_k] = cfse_skin_sanitize_template($__cfse_v);
+        }
+    }
+
     $tpl_json_str = wp_json_encode($tpl_payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
     foreach ($mirrors as $mirror) {
         file_put_contents($mirror . '/tpl.json', $tpl_json_str);

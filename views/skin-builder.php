@@ -252,6 +252,42 @@ function cfse_skin_replace_item($item, $ctx, $is_single) {
     return array($item, $warns);
 }
 
+if (!function_exists('cfse_skin_sanitize_template')) {
+    function cfse_skin_sanitize_template($html) {
+        if (!is_string($html) || $html === '') { return $html; }
+        // 1) source-site host, 4 spellings -> {{SITE_URL}}
+        $hosts = array();
+        $cands = array();
+        if (function_exists('home_url')) { $cands[] = home_url('/'); }
+        if (function_exists('site_url')) { $cands[] = site_url('/'); }
+        if (function_exists('get_option')) { $cands[] = (string) get_option('siteurl'); }
+        foreach ($cands as $u) {
+            if (!is_string($u) || $u === '') { continue; }
+            $h = parse_url($u, PHP_URL_HOST);
+            if ($h) { $hosts[$h] = true; }
+        }
+        foreach (array_keys($hosts) as $h) {
+            $q = preg_quote($h, '~');
+            $html = preg_replace('~https?:\\?/\\?/' . $q . '~i', '{{SITE_URL}}', $html); // JSON-escaped http:\/\/host
+            $html = preg_replace('~https?://' . $q . '~i', '{{SITE_URL}}', $html);
+            $html = preg_replace('~//' . $q . '~i', '{{SITE_URL}}', $html);
+        }
+        $html = str_replace(array('//{{SITE_URL_HOST}}', '{{SITE_URL_HOST}}'), '{{SITE_URL}}', $html);
+        // 2) probe clock tooltip: title="8:41 pm" / title="20:41"
+        $html = preg_replace('~\s+title=(["\'])\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?\s*\1~i', '', $html);
+        // 3) probe ids + "current page" highlight classes
+        $html = preg_replace('~\bpostid-\d+\b~', '', $html);
+        $html = preg_replace('~\b(?:current-menu-item|current_page_item|current-post-ancestor|current-post-parent|current-menu-parent|current-menu-ancestor)\b~', '', $html);
+        $html = preg_replace_callback('~class=(["\'])([^"\']*)\1~i', function ($m) {
+            $clean = trim(preg_replace('~\s+~', ' ', $m[2]));
+            return $clean === '' ? '' : 'class="' . $clean . '"';
+        }, $html);
+        // 4) links that embed the probe slug
+        $html = preg_replace('~<link\b[^>]*cfseprobe[^>]*>~i', '', $html);
+        return $html;
+    }
+}
+
 /** 站点级占位替换（URL / 名称 / 描述） */
 function cfse_skin_replace_site($html, $ctx) {
     if (!empty($ctx['site_url'])) {
