@@ -66,6 +66,8 @@
 
 **✅ 已实现（2026-09-13）** —— commit 见 git log，deploy `1ee77135-8c4a-4192-835d-a5cff52edb1c`：后端 `permalinkToPattern()/patternToPermalink()`（WP 风格 `%xxx%` ↔ `storagePattern {xxx}`，会报告不支持记号如 `%author%`）、`POST /api/permalink/preview`（转换 + 3 篇新旧 URL / R2 key 样例）、`POST /api/permalink/migrate`（**复用批量执行器**：逐篇把 R2 对象按新结构 copy，**旧对象保留**，全部完成后才切 `storagePattern` + 清缓存；进度键 `task:permalink:progress` 可续做）、`POST /api/permalink/cleanup`（删迁移时记录的旧 key）；`postStoragePath()`/`cfsePostUrl()` 均接通 `{category}`（取首个分类 slug）；后台设置页新增「URL 结构（permalink）」卡（当前/新结构 + 预览 + 迁移进度 + 清理旧文件）。**顺序设计成"先 copy 全量 → 再切 pattern"⇒ 中途失败不影响线上旧 URL，天然可回滚。**实测：预览转换正确（`%year%/%monthnum%` → `/2010/03/…`、`{category}` → `/hosting/…`）；小批量真实 copy 一批成功且 pattern 未切换。**待你定：是否迁移、迁到哪个结构**（迁移是写操作，跑之前建议先点预览确认样例）。
 
+⚠️ **迁移后必须"重建全部单页"**：单页 HTML 里**写死了自身的 URL**（`{{POST_URL}}` 在渲染时就填好了），迁移只搬 R2 对象、不改文件内容 ⇒ 不重建的话，单页内部的链接仍指向旧地址。列表页是动态渲染，会自动跟着新 pattern 走，无需处理。（规律：**单页 = 静态快照，列表 = 动态** —— 模板、站点名、permalink 任何一项改了，单页都要重建。）
+
 **执行顺序（用户 2026-09-13 决定）**：**先做 C 节第 8 条的「Worker 端批量重建的并发 + 断点」**，再实施 permalink 迁移 —— 因为两者的调度骨架**完全一样**（分批取文章 → 并发处理 → 进度可续做），差别只在"每篇做什么"（渲染 vs 按新结构 copy/delete）。建议抽成一个通用执行器（如 `POST /api/batch/run?job=rebuild|migrate&cursor=…&limit=…` → `{done, cursor, processed, errors}`），permalink 迁移直接复用。
 
 > 关于「并发」在 Worker 上的含义：免费档 CPU 限 10ms，但 `await` 网络等待**不计 CPU** → 可以单请求内 `Promise.all` 并行 N 篇，也可以**前端同时发 K 个请求**各跑一段。后者更稳、更适合断点续做。
