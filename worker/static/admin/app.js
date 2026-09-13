@@ -1084,8 +1084,10 @@
       '<label>新结构（WP 风格，如 /%year%/%postname%/）</label><input type="text" id="pm-input" placeholder="/%postname%/">' +
       '<div style="margin-top:10px;">' +
       '<button class="btn" id="pm-preview">预览</button> ' +
+      '<button class="btn" id="pm-switch">仅切换结构（不迁移）</button> ' +
       '<button class="btn btn-primary" id="pm-migrate">开始迁移</button> ' +
       '<button class="btn" id="pm-cleanup">清理旧文件</button> ' +
+      '<button class="btn" id="pm-orphans">清理孤儿文件</button> ' +
       '<span class="muted" id="pm-note"></span></div>' +
       '<pre id="pm-out" class="muted" style="margin-top:10px;white-space:pre-wrap;font-size:12px;"></pre></div>' +
       '<div class="card"><h1 style="font-size:16px;">修改密码</h1>' +
@@ -1232,6 +1234,41 @@
         document.getElementById('pm-out').textContent = '已删除旧文件 ' + d.deleted + ' 个（' + d.batches + ' 批）';
         flash('flash-main', '已删除旧文件 ' + d.deleted + ' 个', 'ok');
       }).catch(function (e) { flash('flash-main', e.message, 'err'); });
+    });
+
+    // 仅切换结构（不迁移）：走"改结构 → 重建全部单页 → 清理孤儿"的省事路线
+    document.getElementById('pm-switch').addEventListener('click', function () {
+      var structure = document.getElementById('pm-input').value;
+      if (!structure) { flash('flash-main', '请先填新结构', 'err'); return; }
+      if (!confirm('只切换 URL 结构、不搬文件？\n\n切换后：列表页立刻用新结构；但**所有单页会 404**，直到你点「重建全部单页」；旧文件会变成孤儿（之后可点「清理孤儿文件」）。\n\n继续？')) return;
+      api('/api/permalink/switch', { method: 'POST', body: { structure: structure } }).then(function (d) {
+        document.getElementById('pm-out').textContent = d.changed
+          ? ('已切换到 ' + d.pattern + '（原 ' + d.oldPattern + '）\n\n👉 下一步：去「内容维护」点「重建全部单页」，完成后再回来点「清理孤儿文件」。')
+          : ('结构未变化（' + d.pattern + '）');
+        flash('flash-main', d.changed ? '已切换 URL 结构，请紧接着重建全部单页' : '结构未变化', 'ok');
+        api('/api/permalink').then(function (x) {
+          var el = document.getElementById('pm-current');
+          if (el) el.value = x.structure + '   →   ' + x.storagePattern;
+        }).catch(function () {});
+      }).catch(function (e) { flash('flash-main', e.message, 'err'); });
+    });
+
+    // 清理孤儿文件：扫描 R2 里不属于当前结构的单页对象，确认后删除
+    document.getElementById('pm-orphans').addEventListener('click', function () {
+      var out = document.getElementById('pm-out');
+      out.textContent = '扫描 R2 中…（对象多时需要几秒）';
+      api('/api/permalink/orphans', { method: 'POST', body: {} }).then(function (d) {
+        var lines = ['当前结构: ' + d.pattern, '应有的单页: ' + d.expected + ' 个', '发现孤儿: ' + d.orphanCount + ' 个'];
+        (d.orphans || []).forEach(function (o) { lines.push('  · ' + o.key + '  (' + o.size + ' B)'); });
+        if (d.truncated) lines.push('  …（仅显示前 50 个）');
+        out.textContent = lines.join('\n');
+        if (!d.orphanCount) { flash('flash-main', '没有孤儿文件', 'ok'); return; }
+        if (!confirm('发现 ' + d.orphanCount + ' 个孤儿文件（见列表）。\n\n确认删除？删除后旧地址彻底 404，不可恢复。')) return;
+        api('/api/permalink/orphans', { method: 'POST', body: { delete: true } }).then(function (dd) {
+          out.textContent += '\n\n✅ 已删除 ' + dd.deleted + ' 个孤儿文件';
+          flash('flash-main', '已清理孤儿 ' + dd.deleted + ' 个', 'ok');
+        }).catch(function (e) { flash('flash-main', '删除失败: ' + e.message, 'err'); });
+      }).catch(function (e) { out.textContent = '扫描失败: ' + e.message; });
     });
 
     document.getElementById('s-save').addEventListener('click', function () {

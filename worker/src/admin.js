@@ -1076,6 +1076,66 @@ export async function handleAdminRequest(request, env) {
         return json({ ok: true, deleted: deleted, batches: batches });
     }
 
+    // 仅切换 URL 结构（不搬文件）：适合"改结构 → 重建全部单页"的省事路线。
+    // ⚠️ 切换后到重建完成之前，所有单页地址都会 404（列表页不受影响）。
+    if (path === '/api/permalink/switch' && method === 'POST') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const conv = permalinkToPattern(body.structure);
+        if (!conv.pattern) return json({ error: 'URL 结构不能为空' }, 400);
+        if (conv.unsupported.length) return json({ error: '含不支持的记号: ' + conv.unsupported.join(' ') }, 400);
+        const siteP = await getSiteContext(env);
+        const oldPat = siteP.storagePattern || '{slug}/index.html';
+        if (oldPat === conv.pattern) return json({ ok: true, pattern: conv.pattern, oldPattern: oldPat, changed: false });
+        await setStoragePattern(env, db, conv.pattern, siteP);
+        await purgeLists(env);
+        return json({ ok: true, pattern: conv.pattern, oldPattern: oldPat, changed: true });
+    }
+
+    // 孤儿单页文件：R2 里形如 <path>/index.html、但不属于「当前结构下任何文章」的对象。
+    //   body {delete:false}（默认）→ 只扫描并返回列表；{delete:true} → 删除全部孤儿。
+    if (path === '/api/permalink/orphans' && method === 'POST') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        let body = {};
+        try { body = await request.json(); } catch (e) { body = {}; }
+        const siteP = await getSiteContext(env);
+        const pat = siteP.storagePattern || '{slug}/index.html';
+        // 1) 当前结构下的「应有」key 集合
+        const rows = await db.prepare("SELECT * FROM posts WHERE status = 'published'").all();
+        const want = {};
+        (rows.results || []).forEach(function (r) { want[postStoragePath(r, pat)] = true; });
+        // 2) 扫描 R2 全部对象（分页），挑出「单页形状」且不在应有集合里的
+        const found = [];
+        let cursor = undefined;
+        do {
+            const page = await env.R2_BUCKET.list({ limit: 1000, cursor: cursor });
+            (page.objects || []).forEach(function (o) {
+                const k = String(o.key || '');
+                if (!/\/index\.html$/.test(k) && k !== 'index.html') return;   // 非单页形状
+                if (/^wp-content\//.test(k) || /^style\//.test(k) || /^hl\//.test(k)) return; // 资源线排除
+                if (!want[k]) found.push({ key: k, size: o.size || 0 });
+            });
+            cursor = page.truncated ? page.cursor : undefined;
+        } while (cursor);
+        // 3) 可选删除
+        const doDelete = !!body.delete;
+        let deleted = 0;
+        if (doDelete) {
+            for (const o of found) {
+                try { await env.R2_BUCKET.delete(o.key); deleted++; } catch (e) { /* 单个失败继续 */ }
+            }
+        }
+        return json({
+            ok: true, pattern: pat,
+            expected: Object.keys(want).length,
+            orphanCount: found.length,
+            orphans: doDelete ? [] : found.slice(0, 50),
+            truncated: (!doDelete && found.length > 50),
+            deleted: deleted,
+        });
+    }
+
     // ---- 模板管理（单页壳 / 列表条目；KV 存储，多套切换） ----
     if (path === '/api/templates' && method === 'GET') {
         const active = (await getActiveTpl(env)) || {};
