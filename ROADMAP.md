@@ -82,7 +82,7 @@
 5. **模板细节**：站点名在模板里是硬编码文本（未用 `{{SITE_NAME}}`）；含 `<svg>` 的容器不会被整体包进 `{{#IF_*}}` 块（不影响正确性）。
 6. **媒体库大批量删除偏慢**（R2 单删约 1s，分批 20 即可）。
 7. **单页重建**：模板改动只影响「新建 / 重建」的单页；需要时在 Worker 后台跑「重建全部单页」。
-8. **Worker 端批量重建缺并发与断点续做**（**这是 permalink 迁移的前置**，见 B 节执行顺序）：`POST /api/posts/rebuild-single?limit=15&offset=N` 由前端**串行**循环调用（`static/admin/app.js:1171` / `:1456`）—— 没有并发；`offset` 可手动指定算是**隐式**断点，但**进度不持久化**（刷新页面即丢）。WP 端已有并发（`export_posts_concurrent`，4 进程），Worker 端没有。
+8. ✅ **已完成（2026-09-13）** —— commit `ae161b3`，deploy Version `a7ba7ac4-8f7b-4b93-b745-8c57ce5f8624`。实现：`cache` 配置加 `task_batch`(1-100, 默认 20) / `task_concurrency`(1-16, 默认 4)；`admin.js` 抽出**通用批量执行器**（`runBatchChunk()` 并发池 + KV 进度键 `task:<job>:progress`，跑完自动清），`rebuild-single` 改为 `GET` 查进度 / `POST` 跑一批（`?reset=1` 从头）；后台设置页加「批量任务」卡，重建按钮支持**从断点继续**。实测：配 3/2 验证配置与 cursor 递增（3→6→9）；恢复 20/4 后 **15 批跑完 292 篇、failed=0**、完成后进度自动清除。**permalink 迁移可直接复用同款执行器（换 job 即可）。** 原描述：`POST /api/posts/rebuild-single?limit=15&offset=N` 由前端**串行**循环调用（`static/admin/app.js:1171` / `:1456`）—— 没有并发；`offset` 可手动指定算是**隐式**断点，但**进度不持久化**（刷新页面即丢）。WP 端已有并发（`export_posts_concurrent`，4 进程），Worker 端没有。
 9. ~~**两处 `R2.list` 没做分页**~~ → **用户决定忽略**（风格包数量远达不到 1000，`admin.js:1093` 与 `routes.js:93` 维持单次 list 即可）。备查：R2 单次最多返回 1000 个 key，超过会静默漏列。
 10. ✅ **已完成（2026-09-13）** —— commit `9c5f160`，deploy Version `e93ce481-4087-4bab-a480-df8968c37e7a`；线上实测：`/sitemap.xml` → **404**、`/robots.txt` → 200（内容为静态常量）、首页与真实单页 `/testfor-md/` → 200、`/feed/` → 200；KV 里遗留的 `seo:sitemap.xml` 已删除。原决策内容：
     - **`/sitemap.xml` → 路由层直接 404**（`routes.js:192` 那条分支）。**必须截在路由层**：现在是「按需生成 + KV 缓存 3600s」（`routes.js:209` 全表查 `posts`、`:223` 全表查分类标签、`:229` 拼单文件 XML），所以只要爬虫来访问就会触发全量生成 —— 1 万篇时单请求要在免费档 10ms CPU 内读完 1 万行并拼 ~1.5MB 字符串，**大概率直接超限失败**，不只是慢。

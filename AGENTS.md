@@ -28,13 +28,13 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
 - **语法检查**：JS 用 `node --input-type=module --check < file`（node 在服务器宿主机，不在 web-php 容器内）；PHP 用 `docker exec web-php php -l <file>`。
 - **Cloudflare 资源**：D1 id `a8ebe26e-4ee6-43ba-8027-57c5138b3173`（库名 wordpress）；KV `f4e7fdd895e247d7bec4250328a2d2ec`；R2 bucket `wordpress`。
 - **测试账号**：`cfse_admin / TestPass123!`（Worker 后台登录；D1 users 表）。
-- **数据基线**：posts=284（283 真实 + 用户手动建的 `testt`，勿删）。
+- **数据基线**：已发布 posts = **292**（2026-09-13 由 Worker 批量重建接口实测 `COUNT(*) ... status='published'`；旧记录「284 / 289」均已过时）。
 
 ## 三、关键架构决策（勿轻易推翻）
 
 1. **内容存储：单原文 + `content_format` 列**（`'html'` 默认 / `'md'`）。md 原稿原样存 `posts.content`，渲染出口（单页生成 / RSS / 摘要）用 Worker 端 `marked`（`src/md.js`）转换。不做双写、不存渲染后 HTML。前台单页静态由 `writeSinglePage()` 渲染入 R2。
 2. **缓存策略 = 纯 TTL 语义**（settings 表 `k='cache'`，与 `k='site'` 一起打包进同一个 KV 值 `site:ctx`）：
-   `{ttl_list, ttl_sidebar, ttl_site, ttl_feed, feed_count, purge_on_publish}`，**TTL 0 = 直查 D1 不缓存**（默认 `ttl_list=0/ttl_sidebar=0/ttl_site=604800/ttl_feed=14400/feed_count=20/purge_on_publish=false`）。
+   `{ttl_list, ttl_sidebar, ttl_site, ttl_feed, feed_count, purge_on_publish}`，**TTL 0 = 直查 D1 不缓存**（默认 `ttl_list=0/ttl_sidebar=0/ttl_site=604800/ttl_feed=14400/feed_count=20/purge_on_publish=false`）。同一个 `cache` 行还带**批量任务配置**：`task_batch`（每批条数，1-100，默认 20）与 `task_concurrency`（批内并发，1-16，默认 4）——供「重建全部单页」（以及将来的 permalink 迁移）使用；调度是通用执行器（`worker/src/admin.js` 的 `runBatchChunk()` 并发池 + 进度键 `task:<job>:progress`），进度存 KV → **刷新/中断后可续做**，跑完自动清除。后台设置页有「批量任务」卡可直接调。
    - 常用三档（UI 提供一键预设）：全 D1 = `0/0/604800`；混合 = `0/86400/604800`（列表实时、侧边栏 KV）；全 KV = `3600/86400/604800`（仅高流量，注意 KV 写 1000/天）。
    - 列表页走 `listCached()`（`routes.js`，ttl_list>0 才读写 KV）；侧边栏 `getSidebar()` 按 ttl_sidebar 判断；`site:ctx` 自身按 ttl_site 判断（0=每请求直查 D1）。
    - **RSS feed**：**仅全局 `/feed/`**（分类/标签 feed 已移除，访问返回 404）；KV `rss:feed` 按 `ttl_feed`（默认 4 小时）缓存，`feed_count`（1-100，默认 20）控制条数；**发布文章不主动清 feed**（低频发现通道，靠 TTL 自然更新，即时性由首页实时列表保证）；HTTP `Cache-Control` 同步用 ttl_feed（0=no-store）；**改配置（Worker PUT /api/settings、WP 同步）会清 `rss:feed`** 即时刷新。
@@ -73,7 +73,7 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
 
 - 已完成并验证：模板/风格包、后台双后台、单页管线、md 支持（marked+content_format）、安全加固（权限/限速/sanitize）、BB 批（取首图/全屏/代码高亮 hljs）、CC 批（md 原稿编辑闭环）、DD 批（缓存开关化初版）。
 - **EE 批（缓存策略"纯 TTL + 双端 LWW"重构）已完成并部署验证通过**：见第三节第 2 条。改动文件：
-  `site.js`（site:ctx 一次读两行打包 cache；ttl_site=0 不缓存）、`cacheconfig.js`（薄封装，删独立 KV 键）、`routes.js`（listCached/getSidebar 纯 TTL）、`routes.template.js`（已同步两处函数，与 routes.js 差异仅 9 处占位符）、`admin.js`（purgeLists 按 TTL + seo 精确删两键；PUT /api/settings 支持 cache 配置）、`static/admin/app.js`（设置页「缓存策略」卡：三档预设+TTL 微调+发布清理勾选）、`cf-static-export-pro.php`（去 mode、TTL 允许 0、sync 新格式无 mode、purge 按 TTL、文案指向 Worker 后台）。
+  `site.js`（site:ctx 一次读两行打包 cache；ttl_site=0 不缓存）、`cacheconfig.js`（薄封装，删独立 KV 键）、`routes.js`（listCached/getSidebar 纯 TTL）、`routes.template.js`（已同步两处函数，与 routes.js 差异仅 9 处占位符）、`admin.js`（purgeLists 按 TTL + seo 精确删两键；PUT /api/settings 支持 cache 配置）、`static/admin/app.js`（设置页「缓存策略」卡：三档预设+TTL 微调+发布清理勾选、「批量任务」卡：批量大小/并发数）、`cf-static-export-pro.php`（去 mode、TTL 允许 0、sync 新格式无 mode、purge 按 TTL、文案指向 Worker 后台）。
   - 已执行完毕：node --check ×5 + php -l 全过、服务器同步（7 文件）、D1 `cache` 行已重写为新格式 `{"ttl_list":0,"ttl_sidebar":0,"ttl_site":604800,"purge_on_publish":false}`、用户本地 `wrangler deploy` 部署完成且确认可用。
 - **FF 批（bug 修复 + feed 策略 + UI 优化，2026-09）**：中文 slug 改 WP `%xx` 风格、无分类自动归 Uncategorized、单页模板探针残留修复（PHP 生成端 + Worker 渲染端 + `templates.js` 就地修正）、`/tag/`、`/category/` 路由冲突修复、批量按钮修复（checkbox `value` + action 映射）、UI（工具栏单排 / 去多余 h1 / flash 自动消失 / 多图上传）、feed 改 `ttl_feed`（默认 4h）+ `feed_count`（默认 20）。**已部署并回归验证通过**（中文 slug / 默认分类 / 单页残留 / feed 头 / 路由全过）。
 - **GG 批（KV 成本优化，2026-09）**：① 写操作限速从 KV 计数改**内存滑窗**（`wrate:u:*` 键废弃，0 KV 成本）；② **移除分类/标签 feed**（仅保留全局 `/feed/`，旧地址天然 404）；③ sitemap/robots 兜底 TTL 600s → **3600s**（发布仍即时清）；④ WP 配置同步时顺带清 `rss:feed`。**已部署并验证通过**（分类/标签 feed 404、`/feed/` `max-age=14400`、sitemap/robots `max-age=3600` 全过）。
