@@ -214,28 +214,42 @@ function cfse_skin_replace_item($item, $ctx, $is_single) {
         $item = preg_replace('~\{\{POST_TAGS\}\}(?:\s*[,、/&]?\s*(?:and|和)?\s*\{\{POST_TAGS\}\})+~u', '{{POST_TAGS}}', $item);
     }
     // 5b) 分类/标签区 → 条件块（{{#IF_CATEGORIES}} / {{#IF_TAGS}}）
-    // 直接在占位符层面处理（不依赖主题类名/文案）：把“紧邻的说明文字 + 占位符序列”一起包进 IF，
-    // 这样没有分类/标签的文章不会留下 “and tagged .” 这类残句。
-    // 分类/标签区 → 条件块：在占位符序列前后插入 {{#IF_*}}…{{/IF_*}}，并把**紧邻的接头语**
-    // 一起包进去（如 “This entry was posted in” / “ and tagged”）。这样没有分类/标签的文章
-    // 整段消失，不会留下 “and tagged .” 这类残句。用纯字符串位置操作，不做正则捕获（更可预测）。
+    // 在占位符层面处理（不依赖主题类名/文案）：把「紧邻的说明文字 / 分隔符 + 占位符序列」一起包进 IF，
+    // 这样没有分类/标签的文章不会留下 “and tagged .” / 孤零零的 “Tagged” / 孤立的 “|” 这类残句。
     foreach (array('{{POST_CATEGORIES}}' => '{{#IF_CATEGORIES}}', '{{POST_TAGS}}' => '{{#IF_TAGS}}') as $ph => $open_tag) {
         $p1 = strpos($item, $ph);
         if ($p1 === false) continue;
         $p2 = strrpos($item, $ph) + strlen($ph);
         $close_tag = str_replace('#IF_', '/IF_', $open_tag);
+
+        // 向前扩展条件块起点：
+        //   ① 紧邻的完整 span（接头语 “Tagged” / 分隔符 “|”）→ 纳入；
+        //   ② 紧邻的容器开标签（未闭合的 <span …>）→ 跨过它并记账，稍后吃掉对应的 </span>，
+        //      保证条件块自身 HTML 平衡；
+        //   ③ 其他情况停止（例如遇到别的容器的闭合 </span>）。
+        // 于是 twentyten 的「分类 | 标签 | 评论」结构里，标签前那个 | 会被纳入（无标签即消失），
+        // 而评论前那个无条件的 | 不会被吞。
         $back = $p1;
-        $lim = max(0, $p1 - 60);
-        while ($back > $lim) {
-            $ch = substr($item, $back - 1, 1);
-            if ($ch === '{' || $ch === '}' || $ch === '<' || $ch === '>') break;
-            $back--;
+        $spans = 0;
+        for ($guard = 0; $guard < 8; $guard++) {
+            $pre = substr($item, 0, $back);
+            if (preg_match('~<span\b[^>]*>[^<>]{0,60}</span>\s*$~i', $pre, $m, PREG_OFFSET_CAPTURE)) {
+                $back = $m[0][1];
+                continue;
+            }
+            if (preg_match('~<span\b[^>]*>\s*$~i', $pre, $m2, PREG_OFFSET_CAPTURE)) {
+                $back = $m2[0][1];
+                $spans++;
+                continue;
+            }
+            break;
         }
-        // 主题的说明文字常常包在 span 里（如 <span class="…prep-tag-links">Tagged</span>）：
-        // 若它紧邻占位符，一并纳入条件块，否则没有标签时仍会留下孤零零的 “Tagged”。
-        $pre = substr($item, 0, $back);
-        if (preg_match('~<span\b[^>]*>[^<>]{0,40}</span>\s*$~i', $pre, $mm, PREG_OFFSET_CAPTURE)) {
-            $back = $mm[0][1];
+        // 向后补齐：每个被跨过的开标签吃掉一个对应的 </span>
+        if ($spans > 0) {
+            $rest = substr($item, $p2);
+            if (preg_match('~^(?:\s*</span>\s*){' . (int) $spans . '}~i', $rest, $mr)) {
+                $p2 += strlen($mr[0]);
+            }
         }
         $item = substr($item, 0, $back) . $open_tag . substr($item, $back, $p2 - $back) . $close_tag . substr($item, $p2);
     }
