@@ -30,6 +30,8 @@ define('CFSE_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('CFSE_LOG_FILE', WP_CONTENT_DIR . '/cf-static-export.log');
 define('CFSE_DEBUG_DIR', WP_CONTENT_DIR . '/cf-debug');
 define('CFSE_WORKER_DIR', CFSE_PLUGIN_DIR . 'worker/src/');
+// 本地静态导出目录（「生成到本地」的落盘点；结构与 R2 key 同构）
+define('CFSE_LOCAL_DIR', WP_CONTENT_DIR . '/cfse-static');
 
 // ============================================
 // PHP版本检测
@@ -121,6 +123,8 @@ class CF_Static_Export_Pro {
 		add_action('post_submitbox_misc_actions', array($this, 'add_manual_export_button'));
 		add_action('admin_post_cf_manual_export', array($this, 'handle_manual_export'));
 		add_action('admin_post_cf_bulk_export', array($this, 'handle_bulk_export'));
+		add_action('admin_post_cf_generate_local', array($this, 'handle_generate_local'));
+		add_action('admin_post_cf_publish_remote', array($this, 'handle_publish_remote'));
 		add_action('admin_post_cf_clear_cache', array($this, 'handle_clear_cache'));
 		add_action('admin_post_cf_sync_routes', array($this, 'handle_sync_routes'));
 		add_action('admin_post_cf_sync_templates', array($this, 'handle_sync_templates'));
@@ -368,6 +372,29 @@ public function get_config() {
                         </form>
                     </div>
 
+                    <div class="cfse-card" style="margin-top:16px;background:#fff;border:1px solid #dcdcde;border-radius:4px;padding:12px;">
+                        <h3 style="margin-top:0;">📦 内容发布（生成 / 上传 分离）</h3>
+                        <p class="description">
+                            两步走：先「生成到本地」（只渲染并落盘，不联网、不写 D1），检查无误后再「上传到远端」（上传 R2 + 写 D1 + 清缓存）。<br/>
+                            本地目录：<code><?php echo esc_html(CFSE_LOCAL_DIR); ?></code>（结构与 R2 key 同构）。纯静态托管（无 D1/无运行时渲染）只用到第一步：把该目录整体搬到任意对象存储即可。
+                        </p>
+                        <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_generate_local')); ?>" style="display:inline;">
+                                <?php wp_nonce_field('cf_generate_local'); ?>
+                                <button type="submit" class="button" onclick="return confirm('将全部已发布文章生成到本地目录（不上传、不写 D1），确认继续？')">📥 生成到本地</button>
+                            </form>
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_publish_remote')); ?>" style="display:inline;">
+                                <?php wp_nonce_field('cf_publish_remote'); ?>
+                                <button type="submit" class="button button-primary" onclick="return confirm('读取本地已生成的 HTML 并上传到远端（上传 R2 + 写 D1 + 清缓存），确认继续？')">🚀 上传到远端</button>
+                            </form>
+                        </div>
+                        <?php if (isset($_GET['local_generated'])): ?>
+                            <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>✅ 生成到本地完成：成功 <?php echo intval($_GET['local_generated']); ?> / <?php echo isset($_GET['total']) ? intval($_GET['total']) : 0; ?> 篇。</p></div>
+                        <?php elseif (isset($_GET['published'])): ?>
+                            <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>🚀 上传到远端完成：成功 <?php echo intval($_GET['published']); ?> / <?php echo isset($_GET['total']) ? intval($_GET['total']) : 0; ?> 篇（本地无产物的篇会被跳过，见日志）。</p></div>
+                        <?php endif; ?>
+                    </div>
+
         <div style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
             <h3>👤 Worker 后台账号</h3>
             <p class="description">
@@ -578,7 +605,10 @@ private function get_post_storage_path($post) {
         }
     }
 
-    private function do_export_post($post) {
+    /**
+     * 阶段 1：组装文章元数据（分类/标签 + D1 行数据），不生成 HTML、不联网。
+     */
+    private function build_post_meta($post) {
         // 分类/标签取结构化数据：name + slug（供条目模板渲染分类/标签行）
         $categories = $this->get_post_terms($post->ID, 'category');
         $tags = $this->get_post_terms($post->ID, 'post_tag');
@@ -597,9 +627,57 @@ private function get_post_storage_path($post) {
             'status' => 'published'
         );
 
+        return array(
+            'post' => $post,
+            'post_data' => $post_data,
+            'categories' => $categories,
+            'tags' => $tags,
+        );
+    }
+
+    /**
+     * 阶段 1 + 生成：元数据 + 渲染 HTML + 存储路径（不联网）。
+     */
+    private function build_post_artifact($post) {
+        $artifact = $this->build_post_meta($post);
         $html = $this->generate_post_html($post);
         if (!$html) throw new Exception('HTML生成失败');
         $this->log("HTML 生成成功，大小: " . strlen($html) . " 字节", 'DEBUG');
+        $artifact['html'] = $html;
+        // get_post_storage_path() 已返回含 index.html 的完整文件路径（如 made/index.html）
+        $artifact['path'] = $this->get_post_storage_path($post);
+        return $artifact;
+    }
+
+    /**
+     * 阶段 1b：把产物写到本地导出目录（纯静态托管/离线检查用；不上传、不写 D1）。
+     * 目录结构与 R2 key 同构：WP_CONTENT_DIR/cfse-static/<storagePath>
+     */
+    private function write_artifact_local($artifact) {
+        $target = CFSE_LOCAL_DIR . '/' . ltrim($artifact['path'], '/');
+        $dir = dirname($target);
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+            throw new Exception('本地目录创建失败: ' . $dir);
+        }
+        $guard = CFSE_LOCAL_DIR . '/index.php';
+        if (!file_exists($guard)) @file_put_contents($guard, "<?php // Silence is golden.\n");
+        if (@file_put_contents($target, $artifact['html']) === false) {
+            throw new Exception('本地写入失败: ' . $target);
+        }
+        $this->log("本地生成: {$target} (" . strlen($artifact['html']) . " 字节)", 'INFO');
+        return $target;
+    }
+
+    /**
+     * 阶段 2：发布到远端（上传 R2 + 同步媒体 + 写 D1 + 清缓存）。
+     *
+     * @param array       $artifact    build_post_artifact()/build_post_meta() 的返回值（后者须自带 path）
+     * @param string|null $html_source 非 null 时用它作为正文（「上传到远端」= 用本地已生成的 HTML）
+     */
+    private function publish_artifact($artifact, $html_source = null) {
+        $post = $artifact['post'];
+        $html = $html_source === null ? (isset($artifact['html']) ? $artifact['html'] : '') : $html_source;
+        if ($html === '') throw new Exception('正文为空，无法发布');
 
         $content_type = 'text/html; charset=utf-8';
         $content_encoding = null;
@@ -607,9 +685,7 @@ private function get_post_storage_path($post) {
             $html = gzencode($html, 6);
             $content_encoding = 'gzip';
         }
-
-        // get_post_storage_path() 已返回含 index.html 的完整文件路径（如 made/index.html）
-        $r2_path = $this->get_post_storage_path($post);
+        $r2_path = $artifact['path'];
 
         $uploaded = false;
         for ($i = 0; $i < $this->config['max_retries']; $i++) {
@@ -626,7 +702,7 @@ private function get_post_storage_path($post) {
 
         $written = false;
         for ($i = 0; $i < $this->config['max_retries']; $i++) {
-            if ($this->write_to_d1($post_data, $categories, $tags)) {
+            if ($this->write_to_d1($artifact['post_data'], $artifact['categories'], $artifact['tags'])) {
                 $written = true;
                 break;
             }
@@ -635,10 +711,78 @@ private function get_post_storage_path($post) {
         }
         if (!$written) throw new Exception('D1写入失败');
 
-        // 导出成功即按设置页开关清除相关缓存（sidebar 默认清；列表页第一页默认关，靠缓存自然过期）
+        // 发布成功即按设置页开关清除相关缓存（sidebar 默认清；列表页第一页默认关，靠缓存自然过期）
         $this->purge_page_caches();
 
         return true;
+    }
+
+    /**
+     * 默认链路（save_post 自动导出 / 全量导出）：生成 + 发布，行为与拆分前完全一致。
+     */
+    private function do_export_post($post) {
+        return $this->publish_artifact($this->build_post_artifact($post));
+    }
+
+    /**
+     * 「生成到本地」：只生成并落盘，不联网（纯静态托管的前半步）。
+     * public —— 供 tools/bulk-export-worker.php 子进程调用。
+     */
+    public function generate_post_local($post_id) {
+        $post = get_post($post_id);
+        if (!$post || $post->post_status !== 'publish' || $post->post_type !== 'post') {
+            $this->log("文章 {$post_id} 跳过本地生成（非已发布文章）", 'DEBUG');
+            return false;
+        }
+        try {
+            $this->write_artifact_local($this->build_post_artifact($post));
+            return true;
+        } catch (Throwable $e) {
+            $this->log("文章 {$post_id} 本地生成失败: " . $e->getMessage(), 'ERROR');
+            return false;
+        }
+    }
+
+    /**
+     * 「上传到远端」：读取本地已生成的 HTML 并发布（上传 R2 + 写 D1 + 清缓存）。
+     * 本地无该篇产物时跳过并返回 false —— 提示「请先生成到本地」。
+     * public —— 供 tools/bulk-export-worker.php 子进程调用。
+     */
+    public function publish_post_local($post_id) {
+        $post = get_post($post_id);
+        if (!$post || $post->post_status !== 'publish' || $post->post_type !== 'post') {
+            $this->log("文章 {$post_id} 跳过上传（非已发布文章）", 'DEBUG');
+            return false;
+        }
+        $path = $this->get_post_storage_path($post);
+        $local = CFSE_LOCAL_DIR . '/' . ltrim($path, '/');
+        if (!is_readable($local)) {
+            $this->log("文章 {$post_id} 本地产物不存在，跳过上传（请先「生成到本地」）: {$local}", 'WARNING');
+            return false;
+        }
+        $html = (string) @file_get_contents($local);
+        if ($html === '') {
+            $this->log("文章 {$post_id} 本地产物为空，跳过上传: {$local}", 'ERROR');
+            return false;
+        }
+        try {
+            // 元数据（D1 行）以 WP 当前状态为准，正文用本地已生成的 HTML
+            $artifact = $this->build_post_meta($post);
+            $artifact['path'] = $path;
+            return $this->publish_artifact($artifact, $html);
+        } catch (Throwable $e) {
+            $this->log("文章 {$post_id} 上传失败: " . $e->getMessage(), 'ERROR');
+            return false;
+        }
+    }
+
+    /**
+     * 按模式执行单篇导出动作：auto=生成+上传（默认）、generate=仅生成到本地、publish=上传本地产物。
+     */
+    private function run_export_mode($post_id, $mode) {
+        if ($mode === 'generate') return $this->generate_post_local($post_id);
+        if ($mode === 'publish') return $this->publish_post_local($post_id);
+        return (bool) $this->export_post($post_id);
     }
 
     /**
@@ -1786,6 +1930,50 @@ public function handle_deploy_worker() {
         echo '<div class="misc-pub-section"><a href="' . esc_url(wp_nonce_url(admin_url('admin-post.php?action=cf_manual_export&post_id=' . $post->ID), 'cf_manual_export')) . '" class="button button-secondary">☁️ 重新导出到Cloudflare</a></div>';
     }
 
+
+    /** 收集全部已发布文章的 ID（分批 200，避免大站一次性载入） */
+    private function collect_published_ids() {
+        $all = array();
+        $offset = 0;
+        $chunk = 200;
+        do {
+            $ids = get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'posts_per_page' => $chunk, 'offset' => $offset, 'fields' => 'ids'));
+            if (empty($ids)) break;
+            $all = array_merge($all, $ids);
+            $offset += $chunk;
+        } while (count($ids) === $chunk);
+        return $all;
+    }
+
+    /** 设置页「📥 生成到本地」：只渲染落盘，不联网 */
+    public function handle_generate_local() {
+        if (!current_user_can('manage_options')) wp_die('权限不足');
+        check_admin_referer('cf_generate_local');
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+        $all = $this->collect_published_ids();
+        $this->log('本地生成开始，共 ' . count($all) . ' 篇，并发 ' . $this->config['export_concurrency'], 'INFO');
+        list($success, $total) = $this->export_posts_concurrent($all, $this->config['export_concurrency'], 'generate');
+        $this->log("本地生成完成：成功 {$success} / {$total}（目录 " . CFSE_LOCAL_DIR . "）", 'INFO');
+        wp_redirect(admin_url('options-general.php?page=cf-static-export-pro&local_generated=' . $success . '&total=' . $total));
+        exit;
+    }
+
+    /** 设置页「🚀 上传到远端」：读本地产物 → 上传 R2 + 写 D1 + 清缓存 */
+    public function handle_publish_remote() {
+        if (!current_user_can('manage_options')) wp_die('权限不足');
+        check_admin_referer('cf_publish_remote');
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+        $this->ensure_d1_schema();
+        $all = $this->collect_published_ids();
+        $this->log('上传到远端开始，共 ' . count($all) . ' 篇，并发 ' . $this->config['export_concurrency'], 'INFO');
+        list($success, $total) = $this->export_posts_concurrent($all, $this->config['export_concurrency'], 'publish');
+        $this->log("上传到远端完成：成功 {$success} / {$total}", 'INFO');
+        wp_redirect(admin_url('options-general.php?page=cf-static-export-pro&published=' . $success . '&total=' . $total));
+        exit;
+    }
+
     public function handle_manual_export() {
         if (!current_user_can('manage_options')) wp_die('权限不足');
         check_admin_referer('cf_manual_export');
@@ -1802,18 +1990,10 @@ public function handle_deploy_worker() {
         @ignore_user_abort(true);
         // 先确保 D1 表结构为 v2（旧结构自动重建），随后全量重导会重写结构化 categories/tags
         $this->ensure_d1_schema();
-        $all = array();
-        $offset = 0;
-        $chunk = 200;
-        do {
-            $ids = get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'posts_per_page' => $chunk, 'offset' => $offset, 'fields' => 'ids'));
-            if (empty($ids)) break;
-            $all = array_merge($all, $ids);
-            $offset += $chunk;
-        } while (count($ids) === $chunk);
+        $all = $this->collect_published_ids();
 
-        $this->log('全量导出开始，共 ' . count($all) . ' 篇，并发 ' . $this->config['export_concurrency'], 'INFO');
-        list($success, $total) = $this->export_posts_concurrent($all, $this->config['export_concurrency']);
+        $this->log('全量导出开始，共 ' . count($all) . ' 篇，并发 ' . $this->config['export_concurrency'] . '，模式 auto', 'INFO');
+        list($success, $total) = $this->export_posts_concurrent($all, $this->config['export_concurrency'], 'auto');
         $this->log("全量导出完成：成功 {$success} / {$total}", 'INFO');
         update_option('cf_exported_count', $success);
         wp_redirect(admin_url('options-general.php?page=cf-static-export-pro&exported=' . $success . '&total=' . $total));
@@ -1828,7 +2008,7 @@ public function handle_deploy_worker() {
      * @param int   $workers  并发进程数（1~8）
      * @return array [成功数, 总数]
      */
-    private function export_posts_concurrent($post_ids, $workers = 4) {
+    private function export_posts_concurrent($post_ids, $workers = 4, $mode = 'auto') {
         $post_ids = array_values(array_unique(array_map('intval', (array) $post_ids)));
         $post_ids = array_values(array_filter($post_ids, function ($id) { return $id > 0; }));
         $total = count($post_ids);
@@ -1838,7 +2018,7 @@ public function handle_deploy_worker() {
         $script = CFSE_PLUGIN_DIR . 'tools/bulk-export-worker.php';
         if (!function_exists('exec') || $total <= 1 || !file_exists($script)) {
             $ok = 0;
-            foreach ($post_ids as $id) { if ($this->export_post($id)) $ok++; }
+            foreach ($post_ids as $id) { if ($this->run_export_mode($id, $mode)) $ok++; }
             return array($ok, $total);
         }
 
@@ -1882,6 +2062,7 @@ if (!function_exists('cfse_cli_php')) {
             $cmd = escapeshellarg(cfse_cli_php())
                 . ' ' . escapeshellarg($script)
                 . ' ' . escapeshellarg('--site=' . $worker_site)
+                . ' ' . escapeshellarg('--mode=' . $mode)
                 . ' ' . implode(',', $ids_chunk)
                 . ' > ' . escapeshellarg($out_files[$i]) . ' 2>&1; echo done > ' . escapeshellarg($done_files[$i]);
             @exec($cmd . ' > /dev/null 2>&1 &');
@@ -1918,7 +2099,7 @@ if (!function_exists('cfse_cli_php')) {
             // 子进程异常/超时：回退串行兜底，保证导出不丢
             $this->log("并发导出未完整完成（完成 {$finished}/" . count($chunks) . " 片，成功 {$ok}），回退串行补全", 'WARNING');
             foreach ($post_ids as $id) {
-                if ($this->export_post($id)) $ok++;
+                if ($this->run_export_mode($id, $mode)) $ok++;
             }
             $this->log('并发回退串行完成', 'INFO');
         } else {

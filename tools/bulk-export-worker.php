@@ -2,9 +2,14 @@
 /**
  * CF Static Export Pro - 并发批量导出子进程 worker
  *
- * 由主进程（handle_bulk_export）以多进程方式并行启动：
- *   php bulk-export-worker.php 123,124,125 456,789
+ * 由主进程（handle_bulk_export / handle_generate_local / handle_publish_remote）以多进程方式并行启动：
+ *   php bulk-export-worker.php --mode=auto 123,124,125 456,789
  * （所有非 flag 参数按逗号拆分，只接受正整数文章 ID）
+ *
+ * --mode 三态（默认 auto）：
+ *   auto      生成 HTML + 上传 R2 + 写 D1（默认链路，与拆分前一致）
+ *   generate  只渲染并落盘到 WP_CONTENT_DIR/cfse-static/（不联网，纯静态托管用）
+ *   publish   读取本地已生成的 HTML → 上传 R2 + 写 D1（不上传前必须先生成）
  *
  * 每个 worker 独立加载 WordPress 并串行导出自己分到的文章；
  * R2 上传（不同路径）、D1 upsert（幂等）均支持多进程并发安全。
@@ -35,10 +40,16 @@ if ($wp_load === '') {
 // home_url()/get_permalink() 会退化成 http://localhost/ —— 前台抓取必然连接失败，
 // 输出 HTML 里的 URL 替换（home_url() -> 静态站）也会失效。主进程用 --site=<原站URL> 传入。
 $cfse_site_arg = '';
+$cfse_mode = 'auto';
 foreach (array_slice($argv, 1) as $cfse_arg) {
     if (strpos($cfse_arg, '--site=') === 0) {
         $cfse_site_arg = substr($cfse_arg, 7);
+    } elseif (strpos($cfse_arg, '--mode=') === 0) {
+        $cfse_mode = substr($cfse_arg, 7);
     }
+}
+if (!in_array($cfse_mode, array('auto', 'generate', 'publish'), true)) {
+    $cfse_mode = 'auto';
 }
 if ($cfse_site_arg !== '') {
     $cfse_parts = @parse_url($cfse_site_arg);
@@ -87,16 +98,24 @@ $plugin = CF_Static_Export_Pro::get_instance();
 $ok = 0;
 $fail = array();
 foreach ($ids as $id) {
+    $cfse_ok = false;
     try {
-        if ($plugin->export_post($id)) {
-            $ok++;
+        if ($cfse_mode === 'generate') {
+            $cfse_ok = $plugin->generate_post_local($id);
+        } elseif ($cfse_mode === 'publish') {
+            $cfse_ok = $plugin->publish_post_local($id);
         } else {
-            $fail[] = $id;
+            $cfse_ok = $plugin->export_post($id);
         }
     } catch (Throwable $e) {
+        $cfse_ok = false;
+    }
+    if ($cfse_ok) {
+        $ok++;
+    } else {
         $fail[] = $id;
     }
 }
 
-echo 'OK:' . $ok . ' FAIL:' . implode(',', $fail) . "\n";
+echo 'OK:' . $ok . ' FAIL:' . implode(',', $fail) . ' MODE:' . $cfse_mode . "\n";
 exit(empty($fail) ? 0 : 2);
