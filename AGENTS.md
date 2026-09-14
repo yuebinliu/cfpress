@@ -193,6 +193,16 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **联调清单**（README 内亦有）：纯文发布 → Worker 后台看到 md 原稿 + 单页 200（可能带 `X-CFSE-Render: on-demand`）+ frontmatter 回写 `wp_id`；再发一次同一篇 → 应走 PUT 更新而非新增；带图发布 → 图片地址是否可访问（若 404 说明文件还没放上去，据此决定第四步要不要做 `/media`）。
   - **未做（等第三步结果）**：`POST /wp/v2/media`（贴图上传通道）。另注：`[[笔记双链]]` 不会被渲染（Worker 只渲染标准 md）。
 
+- **批AD（第四步：媒体上传通道 `/wp/v2/media` + 插件自动上传图片，2026-09-14，已部署验证）**：用户真机联调反馈「纯文发布、再次发布走更新都正常，只有拖入的图片 404」。
+  - **诊断（用数据）**：D1 里那篇 `slug=test-with-image`（md）的引用**转换完全正确** —— `![[6正方形 1.jpg]]` → `https://doc.yuebin.uk/wp-content/uploads/6%E6%AD%A3%E6%96%B9%E5%BD%A2%201.jpg`（编码也对）；但两个 URL 都 404，**且响应体是 Worker 的 404** ⇒ 结论：**文件从未上传**（插件此前只改引用），不是 URL 拼错。
+  - **Worker 侧（已部署）**：新增 `POST /wp-json/wp/v2/media`，支持两种形状 ——
+    ① 标准 WP：`multipart/form-data` + 字段 `file`（`title` 可选）；
+    ② 简化：**原始二进制 body** + `Content-Type: image/*`，文件名走 `X-Filename` 头或 `?name=`（Obsidian 的 `requestUrl` 不支持 FormData，插件走这条）。
+    存储沿用 `/api/media` 规则（`wp-content/uploads/YYYY/MM/<base36 时间戳>-<名字>.<ext>`），魔数校验（只收 jpg/png/gif/webp，**不收 svg** 以免 XSS），10MB 上限；返回 WP 媒体形状（`id`/`source_url`/`media_type`/`mime_type`/`media_details.file`）。
+  - **插件侧（`tools/obsidian-md-publisher/`，版本 1.2.0）**：新增 `resolveWikiImages()` / `uploadAttachment()` —— 扫描 `![[…]]`，用 `metadataCache.getFirstLinkpathDest()` 找本地附件 → `vault.readBinary()` → POST `/wp/v2/media`（raw body）→ 用返回的 `source_url` 替换；上传失败或关闭时退回「图片前缀 + 文件名」。设置页新增「自动上传图片」开关（默认开）。
+  - **实测**：multipart → 201 且 `source_url` 访问 **200**；raw body → 201 且 200；非图片 → 400；无认证 → 401；无 `file` 字段 → 400；`/delete` 清理后 → 404。插件改后 esbuild 打包（10.8kb）+ `node --check` 通过。
+  - **注意**：`GET /api/media` 是 **JWT** 入口（用应用密码调会 401）—— 与 `/wp-json/…` 的 Basic 是两套，别混。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

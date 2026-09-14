@@ -2197,6 +2197,67 @@ export async function handleWpV2(request, env) {
         return wpErr('rest_no_route', '方法不支持', 405);
     }
 
+    // 媒体上传：POST /wp/v2/media
+    //   ① 标准 WP 形状：multipart/form-data（字段 file；title 可选）
+    //   ② 简化形状：原始二进制 body（Content-Type: image/*；文件名走 X-Filename 头或 ?name=）
+    // 存储沿用 /api/media 的规则（wp-content/uploads/YYYY/MM/…），只接受 jpg/png/gif/webp。
+    if (route === '/media' && method === 'POST') {
+        const ctype = (request.headers.get('Content-Type') || '').toLowerCase();
+        let buf = null;
+        let origName = '';
+        let declared = '';
+        if (ctype.indexOf('multipart/form-data') === 0) {
+            let form;
+            try { form = await request.formData(); } catch (e) { return wpErr('rest_invalid_param', '无效的 multipart 表单', 400); }
+            const file = form.get('file');
+            if (!file || typeof file === 'string') return wpErr('rest_invalid_param', '缺少 file 字段', 400);
+            declared = String(file.type || '');
+            origName = String(form.get('title') || file.name || 'upload');
+            buf = await file.arrayBuffer();
+        } else {
+            declared = ctype;
+            let nm = request.headers.get('X-Filename') || url.searchParams.get('name') || '';
+            try { nm = decodeURIComponent(nm); } catch (e) { /* 原样 */ }
+            origName = nm || 'upload';
+            try { buf = await request.arrayBuffer(); } catch (e) { return wpErr('rest_invalid_param', '读取请求体失败', 400); }
+        }
+        if (!buf || buf.byteLength === 0) return wpErr('rest_invalid_param', '文件为空', 400);
+        if (buf.byteLength > 10 * 1024 * 1024) return wpErr('rest_upload_file_too_big', '文件不能超过 10MB', 413);
+        const head = new Uint8Array(buf.slice(0, 12));
+        const sig = (function () { let t = ''; for (let i = 0; i < head.length; i++) t += String.fromCharCode(head[i]); return t; })();
+        const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4E && head[3] === 0x47;
+        const isJpeg = head[0] === 0xFF && head[1] === 0xD8 && head[2] === 0xFF;
+        const isGif = sig.slice(0, 4) === 'GIF8';
+        const isWebp = sig.slice(0, 4) === 'RIFF' && sig.slice(8, 12) === 'WEBP';
+        if (!isPng && !isJpeg && !isGif && !isWebp) return wpErr('rest_invalid_media', '只接受 jpg / png / gif / webp 图片', 400);
+        const ext = isPng ? 'png' : (isGif ? 'gif' : (isWebp ? 'webp' : 'jpg'));
+        const mediaType = isPng ? 'image/png' : (isGif ? 'image/gif' : (isWebp ? 'image/webp' : 'image/jpeg'));
+        const base = String(origName).replace(/\.[^.]*$/, '').replace(/[^\w\u4e00-\u9fa5.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'image';
+        const now = new Date();
+        const y = now.getUTCFullYear(), mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+        const key = 'wp-content/uploads/' + y + '/' + mm + '/' + Date.now().toString(36) + '-' + base + '.' + ext;
+        try {
+            await env.R2_BUCKET.put(key, buf, { httpMetadata: { contentType: mediaType } });
+        } catch (e) {
+            console.error('wpv2 media put failed:', e);
+            return wpErr('rest_upload_error', '上传失败', 500);
+        }
+        const mediaUrl = (site.url || '') + '/' + key;
+        console.log('[wpv2] media uploaded ' + key + ' (' + buf.byteLength + 'B) by ' + user.username);
+        return wpJson({
+            id: Date.now(),
+            date: new Date().toISOString().replace('Z', ''),
+            slug: base,
+            type: 'attachment',
+            link: mediaUrl,
+            title: { rendered: origName },
+            media_type: 'image',
+            mime_type: mediaType,
+            source_url: mediaUrl,
+            media_details: { file: key, width: 0, height: 0 },
+        }, 201);
+    }
+
     // 文章集合
     if (route === '/posts') {
         if (method === 'GET') {

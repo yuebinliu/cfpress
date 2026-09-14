@@ -98,6 +98,9 @@
 
 **未决（需拍板）**：① 落点（Worker / 内网 WP / 两端）；② 首批范围；③ 应用密码是否只给管理员角色。
 
+- **已完成（批 AD，2026-09-14）**：媒体上传通道 `POST /wp-json/wp/v2/media`（multipart 与 raw 两种形状，jpg/png/gif/webp，10MB）；Obsidian 插件改为**自动上传本地附件并替换引用**（失败退回图片前缀），版本 1.2.0。
+
+
 - **进行中（批 AC，2026-09-14）**：第三方 md 编辑器联调 —— Worker 已宽容接受 `POST /wp-json/wp/v2/posts/<id>` 作为更新；改好的 Obsidian 插件源码入库 `tools/obsidian-md-publisher/`；下一步按 README 的联调清单真机跑一遍，再决定要不要补 `POST /wp/v2/media`。
 
 

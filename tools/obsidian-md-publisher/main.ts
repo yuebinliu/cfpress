@@ -4,13 +4,15 @@ interface MDPublisherSettings {
   endpoint: string;      // 例如 https://doc.yuebin.uk/wp-json/wp/v2/posts
   username: string;
   appPassword: string;   // 应用密码：Worker 后台「用户 → 🔑 应用密码」生成
-  imagePrefix: string;   // ![[a.jpg]] 转成图片链接时要拼的前缀，例如 https://doc.yuebin.uk/wp-content/uploads
+  uploadImages: boolean; // 是否自动把本地附件上传到 Worker（POST /wp/v2/media）
+  imagePrefix: string;   // 未上传成功时的退回前缀，例如 https://<站点>/wp-content/uploads
 }
 
 const DEFAULT_SETTINGS: MDPublisherSettings = {
   endpoint: '',
   username: '',
   appPassword: '',
+  uploadImages: true,
   imagePrefix: '',
 };
 
@@ -43,10 +45,12 @@ export default class MDPublisher extends Plugin {
     // 1. 读 Markdown 原文（不渲染）
     const raw = await this.app.vault.read(file);
 
-    // 2. frontmatter + 正文（正文里 Obsidian 的 ![[图]] 先转成标准 Markdown 图片）
+    // 2. frontmatter + 正文
+    //    正文里 Obsidian 的 ![[图]] 会：先尝试上传到 Worker 的 /wp-json/wp/v2/media，
+    //    用返回的 source_url 替换；上传失败/找不到附件时退回「图片前缀 + 文件名」。
     const cache = this.app.metadataCache.getFileCache(file);
     const fm: any = cache?.frontmatter ?? {};
-    const body = this.convertWikiImages(this.stripFrontmatter(raw));
+    const body = await this.resolveWikiImages(this.stripFrontmatter(raw), file.path);
 
     // 3. 请求体：Worker 端按 content_format 决定存储/渲染路径
     const payload: Record<string, any> = {
@@ -101,24 +105,80 @@ export default class MDPublisher extends Plugin {
     return raw;
   }
 
+  /** 端点根：把 …/wp-json/wp/v2/posts 归一成 …/wp-json/wp/v2 */
+  apiBase(): string {
+    return this.settings.endpoint.trim().replace(/\/+$/, '').replace(/\/posts$/, '');
+  }
+
   /**
-   * Obsidian 附件语法 → 标准 Markdown 图片：
+   * 处理正文里的 Obsidian 附件语法：
    *   ![[a.jpg]] / ![[folder/a.jpg]] / ![[a.jpg|说明]] / ![[a.jpg#锚点]]
-   * 需要 imagePrefix（图片实际可访问的地址前缀）；未配置则原样保留。
-   * ⚠️ 只处理图片/附件，不处理 [[笔记]] 双链（Worker 端按标准 md 渲染，不认 wiki 语法）。
+   * 优先上传到 Worker 的 /wp/v2/media 并用返回的 source_url 替换；
+   * 上传失败或找不到附件时退回「图片前缀 + 文件名」（前缀未配置则保持原样）。
+   * ⚠️ 只处理附件，不处理 [[笔记]] 双链（Worker 端按标准 md 渲染，不认 wiki 语法）。
    */
-  convertWikiImages(body: string): string {
+  async resolveWikiImages(body: string, sourcePath: string): Promise<string> {
+    const re = /!\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g;
+    const hits: { full: string; target: string; alt?: string }[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(body)) !== null) {
+      hits.push({ full: m[0], target: String(m[1]).trim(), alt: m[2] });
+    }
+    if (!hits.length) return body;
+
     const prefix = (this.settings.imagePrefix || '').trim().replace(/\/+$/, '');
-    if (!prefix) return body;
-    return body.replace(
-      /!\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g,
-      (_m: string, target: string, alt?: string) => {
-        const raw = String(target).trim();
-        const name = raw.split('/').pop() || raw;      // 取文件名（图片平铺在 prefix 目录下）
-        const text = String(alt ?? name).replace(/[\[\]]/g, '');
-        return `![${text}](${prefix}/${encodeURI(name)})`;
+    let out = body;
+    for (const it of hits) {
+      const name = it.target.split('/').pop() || it.target;
+      let url = '';
+      if (this.settings.uploadImages) url = await this.uploadAttachment(it.target, sourcePath);
+      if (!url && prefix) url = `${prefix}/${encodeURI(name)}`;
+      if (!url) continue;                       // 既没上传也没前缀 ⇒ 原样保留
+      const alt = String(it.alt ?? name).replace(/[\[\]]/g, '');
+      out = out.split(it.full).join(`![${alt}](${url})`);
+    }
+    return out;
+  }
+
+  /** 上传单个附件到 /wp/v2/media（简化形状：原始二进制 + X-Filename）；失败返回空串 */
+  async uploadAttachment(linkpath: string, sourcePath: string): Promise<string> {
+    if (!this.apiBase() || !this.settings.username || !this.settings.appPassword) return '';
+    const f = this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath);
+    if (!f) {
+      new Notice(`找不到附件：${linkpath}`);
+      return '';
+    }
+    try {
+      const buf = await this.app.vault.readBinary(f);
+      const res = await requestUrl({
+        url: `${this.apiBase()}/media?name=${encodeURIComponent(f.name)}`,
+        method: 'POST',
+        headers: {
+          'Content-Type': this.mimeOf(f.extension),
+          'X-Filename': encodeURIComponent(f.name),
+          Authorization: 'Basic ' + btoa(`${this.settings.username}:${this.settings.appPassword}`),
+        },
+        body: buf,                              // ArrayBuffer 直传，无需自己拼 multipart
+        throw: false,
+      });
+      if (res.status >= 200 && res.status < 300) {
+        const data = res.json;
+        if (data && data.source_url) return String(data.source_url);
       }
-    );
+      new Notice(`图片上传失败 (${res.status})：${f.name}`);
+    } catch (e) {
+      new Notice(`图片上传异常：${String(e).slice(0, 80)}`);
+    }
+    return '';
+  }
+
+  mimeOf(ext: string): string {
+    const e = String(ext || '').toLowerCase();
+    if (e === 'png') return 'image/png';
+    if (e === 'gif') return 'image/gif';
+    if (e === 'webp') return 'image/webp';
+    if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
+    return 'application/octet-stream';
   }
 
   /** 原子写 frontmatter 字段（避免触发多次事件 / 并发丢内容） */
@@ -191,8 +251,18 @@ class MDPublisherSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName('图片前缀')
-      .setDesc('笔记里的 ![[a.jpg]] 会转成 ![a.jpg](前缀/a.jpg)。留空则不转换（原样发送，图片不会显示）。')
+      .setName('自动上传图片')
+      .setDesc('开启后，笔记里的 ![[图.jpg]] 会先上传到站点（POST /wp-json/wp/v2/media），并用返回的地址替换。')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.uploadImages).onChange(async (v) => {
+          this.plugin.settings.uploadImages = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('图片前缀（兜底）')
+      .setDesc('上传失败或关闭自动上传时，![[a.jpg]] 会转成 ![a.jpg](前缀/a.jpg)。留空则原样保留。')
       .addText((t) =>
         t.setValue(this.plugin.settings.imagePrefix).onChange(async (v) => {
           this.plugin.settings.imagePrefix = v.trim();
