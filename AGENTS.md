@@ -97,6 +97,7 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **侧边栏“归档/标签云没了”不是 bug**：实测 WP 原站首页 HTML 无 `widget_archive`/`wp-tag-cloud`/`archives-2` → 站点侧边栏本来没配这两个小工具（日志里的 `未找到侧边栏…容器` 即此事）。需要就 WP 外观→小工具加，再重抓。
   - **体检脚本（temp，可复用）**：`%TEMP%/cfse-audit-tpl.mjs <tpl.json>`（输出每类模板的 IF 块数、**IF 块外的裸文案**、`{{SIDEBAR_*}}` 有无）；`%TEMP%/cfse-apply-rebuild-all.mjs`（登录 → fetch tpl.json → `style/apply` → 循环 `rebuild-single` 全量重建 → 复验无 tag 单页）。
   - **抓取触发（本轮用过）**：把 PHP 探针放到 `/mnt/optane/webstack/www/cfse-fpm-run.php`，`curl -s --max-time 150 http://192.168.2.2/cfse-fpm-run.php`（fpm 上下文调 `cfse_fetch_skin_from_wordpress()`，约 8s），跑完删掉探针。
+- **批1：生成/上传拆开（2026-09-14，已同步服务器并真实验证）**：`do_export_post()` 拆成 `build_post_meta()`/`build_post_artifact()`（只生成、不联网）与 `publish_artifact()`（上传 R2 + 同步媒体 + 写 D1 + 清缓存），`do_export_post()` = 两者串联 ⇒ **自动导出链路（save_post / 全量导出）行为不变**；新增 public `generate_post_local()`（渲染落盘到 `WP_CONTENT_DIR/cfse-static/`，结构与 R2 key 同构，目录自带 `index.php` 保护）与 `publish_post_local()`（读本地产物 → 发布；本地缺产物则跳过并记 WARNING）；`export_posts_concurrent($ids,$workers,$mode)` 新增 `auto|generate|publish` 三态，`tools/bulk-export-worker.php` 支持 `--mode=`；设置页新增「📦 内容发布（生成 / 上传 分离）」卡（📥 生成到本地 / 🚀 上传到远端）。实测：`--mode=generate 12` → 落盘 30838B；`--mode=publish 12` → R2 覆盖 + D1 写入 + 线上 200/30928B；`--mode=publish 19`（未生成）→ `OK:0` 跳过；Reflection 探针验证并发调度 mode 传参 → `[2,2]`。**下一步**：多托管目标配置（F.2 缺口 3）、md 标识透传（G 节）、列表页静态生成（F.2 缺口 1/8）。
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）
