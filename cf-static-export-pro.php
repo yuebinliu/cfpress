@@ -734,7 +734,9 @@ public function get_config() {
             </div>
         </div>
         <style>
-        .cfse-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-top: 20px; }
+        .cfse-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 20px; margin-top: 20px; align-items: start; }
+        .cfse-grid > .cfse-card { min-width: 0; }
+        .cfse-grid .cfse-card code, .cfse-grid .stat-value { overflow-wrap: anywhere; word-break: break-word; }
         .cfse-card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
         .cfse-card h2 { margin-top: 0; border-bottom: 2px solid #f0f0f0; padding-bottom: 10px; }
         .cfse-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

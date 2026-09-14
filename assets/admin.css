@@ -6,9 +6,21 @@
 /* 设置页面网格布局 */
 .cfse-grid {
     display: grid;
-    grid-template-columns: 2fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
     gap: 20px;
     margin-top: 20px;
+    align-items: start;
+}
+
+/* grid item 隐含 min-width:auto，会被长内容（路径/时间戳/nowrap 按钮）撑破列比例 ⇒ 显式归零 */
+.cfse-grid > .cfse-card {
+    min-width: 0;
+}
+
+.cfse-grid .cfse-card code,
+.cfse-grid .stat-value {
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .cfse-card {
