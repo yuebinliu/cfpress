@@ -179,6 +179,8 @@ class CF_Static_Export_Pro {
             'feed_count' => min(100, max(1, (int) get_option('cf_feed_count', 20))),
             'auth_key' => get_option('cf_auth_key', ''),
             'posts_per_page' => max(1, (int) get_option('cf_posts_per_page', 10)),
+            // 编辑页是否自动比对 Worker 版本（默认关；打开后打开编辑页即查询，关则用面板里的「🔍 检查」按钮）
+            'worker_auto_check' => (bool) get_option('cf_worker_auto_check', false),
         );
     }
 public function get_config() {
@@ -237,6 +239,7 @@ public function get_config() {
             'cf_auth_key' => array('sanitize' => 'sanitize_text_field', 'default' => ''),
             // 列表每页文章数（默认取 WP「设置→阅读」的 posts_per_page，即 10）
             'cf_posts_per_page' => array('sanitize' => 'intval', 'default' => 10),
+            'cf_worker_auto_check' => array('sanitize' => 'boolval', 'default' => false),
         );
         foreach ($fields as $key => $args) {
             register_setting('cf_static_export_pro', $key, $args);
@@ -341,7 +344,8 @@ public function get_config() {
                                     <label><input type="checkbox" name="cf_enable_compression" value="1" <?php checked($this->config['enable_compression']); ?> /> 启用Gzip压缩</label><br/>
                                     <label><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式</label><br/>
                                     <label><input type="checkbox" name="cf_purge_sidebar" value="1" <?php checked($this->config['purge_sidebar']); ?> /> 发布后即时刷新侧边栏（成本极小，建议开启）</label><br/>
-                                    <label><input type="checkbox" name="cf_purge_lists" value="1" <?php checked($this->config['purge_lists']); ?> /> 发布后即时刷新列表页第一页缓存（首页/分类/标签/归档；高更新大站建议关闭，靠缓存自然过期）</label>
+                                    <label><input type="checkbox" name="cf_purge_lists" value="1" <?php checked($this->config['purge_lists']); ?> /> 发布后即时刷新列表页第一页缓存（首页/分类/标签/归档；高更新大站建议关闭，靠缓存自然过期）</label><br/>
+                                    <label><input type="checkbox" name="cf_worker_auto_check" value="1" <?php checked($this->config['worker_auto_check']); ?> /> 编辑页自动比对 Worker 版本（默认关，省一次查询；关闭时可用「☁️ Worker 同步」面板里的「🔍 检查」按钮手动比对）</label>
                                 </td></tr>
                             <tr><th>缓存策略</th>
                                 <td>
@@ -409,7 +413,7 @@ public function get_config() {
                         <h3 style="margin-top:0;">☁️ 与 Worker 同步（拉取）</h3>
                         <p class="description">
                             把「Worker 端诞生」的文章（<code>wp_id</code> 为时间戳形态 —— 即 Worker 后台 / 第三方编辑器新建的）拉回 WP 编辑。<br/>
-                            按 <code>wp_id</code> 幂等：WP 里已存在同 ID 的篇会<b>跳过</b>，不会重复建文、也不会覆盖 WP 现有内容。
+                            按<b>远端 ID 记录</b>（meta <code>_cfse_remote_wp_id</code>）幂等：已拉过的篇会<b>跳过</b>，不会重复建文、也不会覆盖 WP 现有内容。
                             拉回后该篇即由 <b>WP 托管</b>（此后 Worker 侧的改动会被下次导出覆盖）。分类/标签按 slug 复用或新建。
                         </p>
                         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_pull_worker')); ?>" style="margin-top:8px;">
@@ -655,7 +659,8 @@ private function get_post_storage_path($post) {
             : $this->extract_excerpt($content_format === 'md' ? $this->md_to_plain($post->post_content) : $post->post_content, 200);
 
         $post_data = array(
-            'wp_id' => $post->ID,
+            // D1 的主键 wp_id：Worker 端诞生的篇用它原来的远端 ID（记在 meta），否则用 WP 自身 ID
+            'wp_id' => ($this->get_remote_wp_id($post->ID) ?: $post->ID),
             'slug' => $post->post_name,
             'title' => $post->post_title,
             'content' => $post->post_content,
@@ -827,7 +832,8 @@ private function get_post_storage_path($post) {
     public function add_doc_format_metabox($post_type = '', $post = null) {
         add_meta_box('cfse_doc_format', '📝 文档格式', array($this, 'render_doc_format_metabox'), 'post', 'side', 'high');
         // 「Worker 端诞生」的篇（wp_id 为时间戳形态，见 ROADMAP I.1）额外给一个同步面板
-        if ($post && isset($post->ID) && (int) $post->ID >= CFSE_WORKER_ID_MIN) {
+        $remote_id = ($post && isset($post->ID)) ? $this->get_remote_wp_id($post->ID) : 0;
+        if ($remote_id || ($post && isset($post->ID) && (int) $post->ID >= CFSE_WORKER_ID_MIN)) {
             add_meta_box('cfse_worker_sync', '☁️ Worker 同步', array($this, 'render_worker_sync_metabox'), 'post', 'side', 'default');
         }
     }
@@ -1655,10 +1661,13 @@ private function get_post_storage_path($post) {
 
         // 确保表结构存在后清理（防止表缺失时删除逻辑报错）
         $this->ensure_d1_schema();
+        // D1 里存的是「远端 wp_id」（Worker 端诞生的篇在 WP 侧是自增 ID，映射记在 meta）
+        $d1_wp_id = $this->get_remote_wp_id($post_id);
+        if (!$d1_wp_id) $d1_wp_id = $post_id;
         // D1：三条清理语句一次批量提交
         $this->d1_batch(array(
-            array('sql' => 'DELETE FROM post_taxonomy WHERE post_id = ?', 'params' => array($post_id)),
-            array('sql' => 'DELETE FROM posts WHERE wp_id = ?', 'params' => array($post_id)),
+            array('sql' => 'DELETE FROM post_taxonomy WHERE post_id = ?', 'params' => array($d1_wp_id)),
+            array('sql' => 'DELETE FROM posts WHERE wp_id = ?', 'params' => array($d1_wp_id)),
             array('sql' => 'DELETE FROM taxonomies WHERE slug NOT IN (SELECT DISTINCT taxonomy_slug FROM post_taxonomy)', 'params' => array()),
         ));
 
@@ -2157,6 +2166,7 @@ public function handle_deploy_worker() {
             return false;
         }
         update_post_meta($post_id, 'content_format', $fmt);
+        if (!empty($remote['wp_id'])) update_post_meta($post_id, '_cfse_remote_wp_id', (int) $remote['wp_id']);
         $this->apply_worker_terms($post_id, isset($remote['categories']) ? $remote['categories'] : '', 'category');
         $this->apply_worker_terms($post_id, isset($remote['tags']) ? $remote['tags'] : '', 'post_tag');
         if ($prev_skip === null) unset($GLOBALS['cfse_skip_export']); else $GLOBALS['cfse_skip_export'] = $prev_skip;
@@ -2168,7 +2178,8 @@ public function handle_deploy_worker() {
         $post_id = isset($_POST['post_id']) ? (int) $_POST['post_id'] : 0;
         if (!$post_id || !current_user_can('edit_post', $post_id)) wp_die('权限不足');
         check_admin_referer('cfse_align_worker_' . $post_id);
-        $remote = $this->fetch_worker_post($post_id);
+        $remote_id = $this->get_remote_wp_id($post_id);
+        $remote = $remote_id ? $this->fetch_worker_post($remote_id) : null;
         $ok = false;
         if ($remote) {
             $ok = $this->overwrite_post_from_remote($post_id, $remote);
@@ -2187,12 +2198,14 @@ public function handle_deploy_worker() {
         if (!$post_id || !current_user_can('edit_post', $post_id)) wp_send_json(array('ok' => false));
         $post = get_post($post_id);
         if (!$post) wp_send_json(array('ok' => false));
-        $remote = $this->fetch_worker_post($post_id);
+        $remote_id = $this->get_remote_wp_id($post_id);
+        $remote = $remote_id ? $this->fetch_worker_post($remote_id) : null;
         if (!$remote) wp_send_json(array('ok' => false));
         $worker_mod = isset($remote['modified']) ? (string) $remote['modified'] : '';
         $local_mod = (string) $post->post_modified;
         $need = ($worker_mod !== '' && strtotime($worker_mod) > strtotime($local_mod));
-        wp_send_json(array('ok' => true, 'worker_modified' => $worker_mod, 'local_modified' => $local_mod, 'need_sync' => $need));
+        $local_newer = ($worker_mod !== '' && strtotime($local_mod) > strtotime($worker_mod));
+        wp_send_json(array('ok' => true, 'remote_wp_id' => $remote_id, 'worker_modified' => $worker_mod, 'local_modified' => $local_mod, 'need_sync' => $need, 'local_newer' => $local_newer));
     }
 
     // ============================================
@@ -2234,14 +2247,16 @@ public function handle_deploy_worker() {
         foreach ($items as $p) {
             $wid = isset($p['wp_id']) ? (int) $p['wp_id'] : 0;
             if ($wid <= 0) { $errors++; continue; }
-            if (get_post($wid)) {
+            $existing_id = $this->find_post_by_remote_id($wid);
+            if ($existing_id) {
                 if (!$overwrite) { $skipped++; continue; }
-                if ($this->overwrite_post_from_remote($wid, $p)) { $updated++; } else { $errors++; }
+                if ($this->overwrite_post_from_remote($existing_id, $p)) { $updated++; } else { $errors++; }
                 continue;
             }
             $fmt = (isset($p['content_format']) && $p['content_format'] === 'md') ? 'md' : 'html';
+            // 刻意不用 import_id：那会把 wp_posts 的 AUTO_INCREMENT 顶到时间戳量级（见 AGENTS.md 批L）。
+            // 远端 ID 记在 meta `_cfse_remote_wp_id`，导出/删除 D1 时用它 —— 两端数据依然对得上。
             $args = array(
-                'import_id' => $wid,               // 关键：保持两端 wp_id 一致，后续导出 upsert 才能对上
                 'post_title' => isset($p['title']) ? (string) $p['title'] : '',
                 'post_content' => isset($p['content']) ? (string) $p['content'] : '',
                 'post_status' => (isset($p['status']) && $p['status'] === 'published') ? 'publish' : 'draft',
@@ -2257,12 +2272,33 @@ public function handle_deploy_worker() {
                 $this->log("拉取入库失败 wp_id={$wid}: " . $new_id->get_error_message(), 'ERROR');
                 continue;
             }
+            update_post_meta($new_id, '_cfse_remote_wp_id', $wid); // 记录远端 wp_id（D1 主键）
             $this->apply_worker_terms($new_id, isset($p['categories']) ? $p['categories'] : '', 'category');
             $this->apply_worker_terms($new_id, isset($p['tags']) ? $p['tags'] : '', 'post_tag');
             $imported++;
         }
         if ($prev_skip === null) unset($GLOBALS['cfse_skip_export']); else $GLOBALS['cfse_skip_export'] = $prev_skip;
         return array($imported, $updated, $skipped, $errors, $total);
+    }
+
+    /**
+     * 该篇在 Worker 端（D1）的 wp_id：有 meta `_cfse_remote_wp_id` 时返回它，否则 0（= WP 本地诞生）。
+     * 为什么不拿「WP 文章 ID」当远端 ID：拉取时若用 import_id 对齐 ID，会把 wp_posts 的 AUTO_INCREMENT
+     * 顶到时间戳量级，之后 WP 新建的文章 ID 也变成那样（会误判成「Worker 端诞生」，见 AGENTS.md 批L）。
+     */
+    private function get_remote_wp_id($post_id) {
+        $v = (int) get_post_meta((int) $post_id, '_cfse_remote_wp_id', true);
+        return $v > 0 ? $v : 0;
+    }
+
+    /** 按远端 wp_id 找 WP 侧文章 ID（0 = 未找到）—— 拉取幂等判断用 */
+    private function find_post_by_remote_id($remote_wp_id) {
+        global $wpdb;
+        $found = $wpdb->get_var($wpdb->prepare(
+            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_cfse_remote_wp_id' AND meta_value = %d LIMIT 1",
+            (int) $remote_wp_id
+        ));
+        return $found ? (int) $found : 0;
     }
 
     /** 把 Worker 的 JSON 分类/标签（[{name,slug}] 或字符串数组）映射到 WP：按 slug/name 找，缺则创建 */
