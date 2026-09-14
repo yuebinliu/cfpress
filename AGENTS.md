@@ -31,7 +31,7 @@
 > **方法论 / 工具链坑（都实际踩过）**
 > - **验证要从「用户入口」进**：批 AL 用反射直接改内存 `config`（绕过 option、也绕过 `get_hosting_targets()`）⇒ **假通过**。改真实 `update_option` 才暴露 local 被丢弃的 bug。
 > - **改 PHP 必须走 lint 门禁**：批 AK 第一版少收一个 `}`，而当时的应用脚本没校验 lint 就同步 ⇒ 把坏文件推上服务器（已回滚）。现在应用脚本一律「lint 不通过就 exit、绝不同步」。
-> - **python 转义坑**：非 r-string 里写 `'/\'` 会生成 PHP 的 `'/\'`（转义引号）⇒ 语法错误；要写 `'/\\'` 或用 r-string。构造 PHP 代码片段优先 r-string。
+> - **python 转义坑**：用**普通字符串**写 PHP 的 `'/\\'`（反斜杠+引号）会退化成 `'/\'`（PHP 视为转义引号）⇒ 语法错误。**写 PHP 片段一律用 r-string**，或写成 `'/\\\\'`。（本文件这条注释第一版就是被自己转义吃坏的。）
 > - **host 的验证口径**：`bash xxx.sh` 这类**不透明命令不算闭环验证**（要用具体命令，如 `node --check`、curl 断言；或如实标 `manual`/`files`）；内联解释器（`node -e`/`python -c`）**后面接 `&&` 段会被拦**，脚本源码放文件里跑。
 > - **`/tmp` 不是同一个地方**：native node/python 看不到 git-bash 的 `/tmp`；node 的 `require("tmp/x.json")` 会被当包名解析 ⇒ 写 `./tmp/x.json`。
 >
