@@ -174,6 +174,16 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **实测（逐组合，每篇独立文章）**：都不勾 → 跳过（export=NULL）；仅 ① → `D1=有(published)`、本地 NO、R2 无对象；仅 ② → `D1=无`、本地 YES；仅 ③ → `D1=无`、本地 **YES**（隐含 ② ✓）、R2 **有对象(200)**；①③ → D1 有 + 本地 YES + R2 有；草稿+① → `D1=有(draft)`；草稿+不勾 → 跳过。
   - **顺带修 bug**：上一批为「跳过 auto-draft / 无固定链接文章」写的防护把**草稿**也挡了 ⇒ 草稿删除后 D1 行残留（验证时抓到 `c=1`）。改为：`auto-draft` 整段跳过；草稿（路径 `?p=<ID>`）**只跳过 R2 路径、D1 照常清理** ✓（实测删除草稿后 D1 已清）。
 
+- **批AB（修正「已导出」标记语义 + 列显示三态，2026-09-14，已同步验证）**：用户反馈「WP 后台列表显示『已导出』，但我没勾『生成静态文件』」。
+  - **根因**：`export_post()` 收尾只要 `$result` 为真就 `update_post_meta($post_id,'_cf_exported',time())`，而「仅同步到 D1」也返回 true ⇒ 被误标为已导出（列表列 `add_export_column`/`render_export_column` 显示「✅ 已导出」）。
+  - **修正**：新增 `$produced_single = ($gen_static || $pub_remote)`（草稿恒 false）——
+    - 有单页 ⇒ 日志「导出成功」+ `_cf_exported` + 计数 + **删除** `_cfse_synced_d1`；
+    - 仅同步 ⇒ 日志「已同步到 D1（未生成静态单页）」+ 写 `_cfse_synced_d1`。
+  - **列显示改三态**：`✅ 已导出`（有静态单页）／`☁️ 已同步 D1`（仅入库，单页由 Worker 按需渲染）／`⏳ 待导出`（各带 `title` 说明）；列名 `☁️ 已导出` → `☁️ 导出状态`。
+  - **自动导出（cron）**：不再自己写 `_cf_exported`（交给 `export_post()`），且 `meta_query` 同时排除已同步 D1 的，避免反复处理同一篇。
+  - **实测**：test-2（1841）误标记已清（`exported=YES → no`）；仅 ① → `exported=no / synced_d1=YES`；② → `exported=YES`；③ → `exported=YES`；草稿+① → `exported=no / synced_d1=YES`。
+  - **注意**：该列反映的是「**WP 侧的导出动作**」，不是「R2 里有没有对象」—— R2 对象也可能由 Worker 的**按需渲染**产生（例如 test-2 被访问后已回填 R2）。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

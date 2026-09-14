@@ -656,17 +656,27 @@ private function get_post_storage_path($post) {
         try {
             $this->log("开始导出文章 {$post_id}: {$post->post_title}");
             $start_time = microtime(true);
+            $produced_single = false;
             if ($post->post_status === 'draft') {
                 $result = $this->sync_draft_to_d1($post);
             } else {
                 $result = $this->export_post_by_switches($post, $sync_d1, $gen_static, $pub_remote);
+                // 「已导出」= 真的产出了静态单页（② 生成静态文件 或 ③ 上传到远端）；只勾 ① 不算
+                $produced_single = ($gen_static || $pub_remote);
             }
             $duration = round(microtime(true) - $start_time, 2);
             if ($result) {
-                $this->log("文章 {$post_id} 导出成功，耗时 {$duration}s", 'INFO');
                 update_option('cf_last_export_time', current_time('mysql'));
-                $this->increment_exported_count();
-                update_post_meta($post_id, '_cf_exported', time());
+                if ($produced_single) {
+                    $this->log("文章 {$post_id} 导出成功，耗时 {$duration}s", 'INFO');
+                    $this->increment_exported_count();
+                    update_post_meta($post_id, '_cf_exported', time());
+                    delete_post_meta($post_id, '_cfse_synced_d1');
+                } else {
+                    // 仅同步到 D1（文章/草稿入库，但没产出静态单页）
+                    $this->log("文章 {$post_id} 已同步到 D1（未生成静态单页），耗时 {$duration}s", 'INFO');
+                    update_post_meta($post_id, '_cfse_synced_d1', time());
+                }
             } else {
                 $this->log("文章 {$post_id} 导出失败", 'ERROR');
             }
@@ -2294,17 +2304,27 @@ public function handle_deploy_worker() {
     public function handle_auto_export() {
         @set_time_limit(0);
         @ignore_user_abort(true);
-        $posts = get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'meta_query' => array(array('key' => '_cf_exported', 'compare' => 'NOT EXISTS')), 'posts_per_page' => $this->config['batch_size']));
+        $posts = get_posts(array('post_type' => 'post', 'post_status' => 'publish', 'meta_query' => array(
+            'relation' => 'AND',
+            array('key' => '_cf_exported', 'compare' => 'NOT EXISTS'),
+            array('key' => '_cfse_synced_d1', 'compare' => 'NOT EXISTS'),
+        ), 'posts_per_page' => $this->config['batch_size']));
         foreach ($posts as $post) {
-            if ($this->export_post($post->ID)) update_post_meta($post->ID, '_cf_exported', time());
+            $this->export_post($post->ID);   // 标记由 export_post() 按开关决定（已导出 / 已同步 D1）
         }
         $this->log("自动导出完成，处理了 " . count($posts) . " 篇文章", 'INFO');
     }
 
-    public function add_export_column($columns) { $columns['cf_exported'] = '☁️ 已导出'; return $columns; }
+    public function add_export_column($columns) { $columns['cf_exported'] = '☁️ 导出状态'; return $columns; }
     public function render_export_column($column, $post_id) {
         if ($column !== 'cf_exported') return;
-        echo get_post_meta($post_id, '_cf_exported', true) ? '✅ 已导出' : '⏳ 待导出';
+        if (get_post_meta($post_id, '_cf_exported', true)) {
+            echo '<span title="已生成静态单页（本地或 R2）">✅ 已导出</span>';
+        } elseif (get_post_meta($post_id, '_cfse_synced_d1', true)) {
+            echo '<span title="只把数据同步进了 D1（未生成静态单页）；单页由 Worker 按需渲染">☁️ 已同步 D1</span>';
+        } else {
+            echo '<span title="还没有同步/导出">⏳ 待导出</span>';
+        }
     }
 
     public function add_manual_export_button() {
