@@ -111,6 +111,17 @@
 >      `routes.js` 每次请求都调用（`:502` 等）⇒ **不可删**。
 >   ⇒ 若将来想彻底不依赖 `templates.js`，那是**重构渲染器**（搬走/换实现），不是"删一个弃用文件"。
 >
+> **托管配置上下文（P1：把 provider 配置集中到模板卡片）设计基线**：`docs/hosting-config-context.md`
+> - **三层归属**：① provider 配置（Account ID / API Token / R2 Bucket / D1 Database ID / 站点 URL / Auth Key）**进模板**；
+>   ② 能力绑定行为（发布行为：同步 D1 / 生成静态 / 上传远端）**进模板区、按能力出现**；③ 插件运行参数（导出模式 / 批量大小 / 缓存 TTL / feed 条数 / 日志开关）**留全局**。
+> - ① 内再分 **账号级**（Account ID、API Token，理论上可跨目标复用）与 **站点级**（站点 URL、Auth Key、Bucket、D1 ID）。
+> - **P1 = 纯 UI 重排**：6 个 `cf_*` option 的**名字/类型/格式一律不变**，零数据迁移；硬约束沿用阶段一（`site_url`/`auth_key` 派生链不得切断、导出链与 10 处 `d1_batch` 调用点零改动）。
+> - **明确不做多租户、不引入 `site_id`**：`posts.wp_id INTEGER PRIMARY KEY` 是单列主键（`schema.sql` 无 `site_id`）。隔离放在「**部署单元层**」——
+>   每站一套 Worker + D1 + KV + R2 ⇒ 库内 `wp_id` 天然唯一。多租户 SaaS 属**独立产品线**，须单独立项。
+> - **`wp_id` 唯一残留风险**：跨站复制笔记（frontmatter 带着 A 站的 `wp_id` 拷到 B 站，若 B 站有同 ID 文章会在 pull 时错认）。两个轻量解法见文档 §7：
+>   ① frontmatter 加站点标识（`site:`）；② **pull 时冲突检测**（ID 已存在且内容不同 ⇒ 报冲突让人决定，不静默覆盖）。均不改 schema。
+> - P2（发布行为下沉到 target）/ P3（账号级复用）**未排期**，与 `hosting-templates.md` 的阶段二同节奏。
+>
 > **下一步（压缩后）**
 > 1. 排查上面的设置页布局问题；
 > 2. 等用户填**有效 R2 S3 凭证**跑真机 s3 上传/删除（测试连通性 → 保存一篇 → 看日志的公开地址 → 访问确认）；
