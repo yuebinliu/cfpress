@@ -445,6 +445,62 @@ async function writeSinglePage(env, row) {
     return true;
 }
 
+
+/**
+ * 按需渲染单页（R2 未命中时由路由调用）：
+ *   D1 取该篇（status='published'）→ 用当前风格模板渲染（md 走 marked）→ 写回 R2 → 返回 HTML。
+ * 用途：让「WP 只同步 D1、不上传 R2」的站点也能自愈（不需要每次改模板就全量重建单页才能访问）。
+ * 返回 { html, path } 或 null（该 slug 不存在 / 非已发布 / 渲染失败）。
+ */
+export async function renderSinglePageOnDemand(env, slug) {
+    const key = String(slug || '').toLowerCase();
+    if (!key) return null;
+    const db = env.D1_DATABASE;
+    let row = await db.prepare("SELECT * FROM posts WHERE slug = ? AND status = 'published' LIMIT 1").bind(key).first();
+    if (!row) {
+        // 兜底：大小写不敏感匹配（历史数据里可能有带大写的 slug）
+        row = await db.prepare("SELECT * FROM posts WHERE lower(slug) = ? AND status = 'published' LIMIT 1").bind(key).first();
+    }
+    const diag = { slug: key, step: 'lookup', found: 0 };
+    if (!row) {
+        // 再查一次不带 status 条件，看看是不是状态不符
+        const any = await db.prepare("SELECT slug, status FROM posts WHERE lower(slug) = ? LIMIT 3").bind(key).all();
+        diag.step = 'not-found';
+        diag.candidates = JSON.stringify((any && any.results) || []);
+        console.error('[ondemand] miss: ' + JSON.stringify(diag));
+        return { html: null, path: null, diag: diag };
+    }
+    diag.found = 1;
+    diag.status = row.status;
+    diag.fmt = row.content_format || 'html';
+    const site = await getSiteContext(env);
+    let html = '';
+    try {
+        html = renderSingleHtml(row, site, await getActiveTplContent(env, 'single'));
+    } catch (e) {
+        diag.step = 'render-error';
+        diag.err = String((e && e.message) || e);
+        console.error('[ondemand] render failed: ' + JSON.stringify(diag));
+        return { html: null, path: null, diag: diag };
+    }
+    diag.htmlLen = html ? html.length : 0;
+    if (!html) {
+        diag.step = 'empty-html';
+        console.error('[ondemand] empty: ' + JSON.stringify(diag));
+        return { html: null, path: null, diag: diag };
+    }
+    const path = postStoragePath(row, site.storagePattern);
+    diag.path = path;
+    try {
+        await env.R2_BUCKET.put(path, html, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
+    } catch (e) {
+        console.error('renderSinglePageOnDemand put failed:', e);   // 写回失败也照常返回给用户
+    }
+    diag.step = 'ok';
+    console.log('[ondemand] rendered ' + path + ' (slug=' + row.slug + ', fmt=' + (row.content_format || 'html') + ')');
+    return { html: html, path: path, diag: diag };
+}
+
 /** 删除文章静态单页（R2） */
 async function deleteSinglePage(env, row) {
     if (!row) return;

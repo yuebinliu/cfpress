@@ -787,16 +787,25 @@ private function get_post_storage_path($post) {
         }
         $r2_path = $artifact['path'];
 
-        $uploaded = false;
-        for ($i = 0; $i < $this->config['max_retries']; $i++) {
-            if ($this->upload_to_r2_via_worker($r2_path, $html, $content_type, $content_encoding)) {
-                $uploaded = true;
-                break;
+        // md 文章：只写 D1，不上传 R2 单页 —— 单页由 Worker 端渲染（发布/重建时写，或路由未命中时按需渲染）。
+        // 这样「WP 只当 CMS 后台」也能工作：数据进 D1，单页交给 Worker，两边不会互相覆盖。
+        $art_fmt = isset($artifact['post_data']['content_format'])
+            ? $artifact['post_data']['content_format']
+            : $this->get_content_format($post->ID);
+        if ($art_fmt === 'md') {
+            $this->log("文章 {$post->ID} 为 md：跳过 R2 上传（单页由 Worker 渲染/按需渲染）", 'INFO');
+        } else {
+            $uploaded = false;
+            for ($i = 0; $i < $this->config['max_retries']; $i++) {
+                if ($this->upload_to_r2_via_worker($r2_path, $html, $content_type, $content_encoding)) {
+                    $uploaded = true;
+                    break;
+                }
+                $this->log("R2上传重试 " . ($i + 1) . "/{$this->config['max_retries']}", 'WARNING');
+                usleep(500000);
             }
-            $this->log("R2上传重试 " . ($i + 1) . "/{$this->config['max_retries']}", 'WARNING');
-            usleep(500000);
+            if (!$uploaded) throw new Exception('R2上传失败');
         }
-        if (!$uploaded) throw new Exception('R2上传失败');
 
         $this->sync_media_files($post->post_content);
 

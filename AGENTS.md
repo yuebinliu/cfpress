@@ -158,6 +158,13 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
     - auto-draft / 无固定链接（`?p=<ID>`）的文章跳过远端清理（它们本就没有单页）。
   - **实测**（probe，逐场景）：开关默认值 false×3；全关 + publish → 跳过（D1 无行）；草稿 + `sync_drafts` → D1 `status=draft` 且无单页；两开关全开 → D1 `published` + R2 单页 200；只开生成 + 改标题 → 本地更新、D1 不变；只开上传 + 改标题 → D1 更新；删除 → 本地产物消失、Worker 单页 404（带随机 query 也 404 ⇒ 非 CDN 缓存）、D1 行消失；日志显示「批量删除远端清理完成：R2 2 个路径、D1 2 篇」（整批 2 次请求）。
   - **注意**：三项默认全关后，**WP 侧发布文章不再自动同步** —— 若希望保持“WP 发布即上线”，请勾上「自动上传到远端」（需要本地单页再勾「自动生成单页」）。
+- **批ZZ（单页按需渲染 + md 文章跳过 R2 上传，2026-09-14，已部署验证）**：让「WP 只当 CMS 后台」与「WP 当静态插件」两种用法同时成立。
+  - **单页按需渲染**（`worker/src/admin.js` 新增 `export renderSinglePageOnDemand(env, slug)`；`routes.js` 与 `routes.template.js` 在单页分支的 R2 未命中处调用）：miss → 从 D1 取该篇（`slug` 精确匹配，兜底 `lower(slug)`；仅 `status='published'`）→ `renderSingleHtml`（md 走 `marked`）+ **当前风格模板** → **写回 R2** → 返回 HTML（响应头 `X-CFSE-Render: on-demand`、`Cache-Control: max-age=300`）；此后命中 R2 走原路径（无该头、`max-age=3600`）。插在「回源 `WORDPRESS_URL`」之前。**注意**：READ 时渲染此前不存在（miss 只会回源或 404），这是新增能力；但它是**兜底自愈**，不等于“改模板自动生效”——已进 R2 的旧单页仍需重建（「重建全部单页」保留）。
+  - **md 文章跳过 R2 上传**（`cf-static-export-pro.php` 的 `publish_artifact()`）：`content_format='md'` 的文章**只写 D1**，日志记「为 md：跳过 R2 上传（单页由 Worker 渲染/按需渲染）」；html 文章行为不变。**与本地生成无关** —— `generate_post_local()` 照旧渲染落盘到 `cfse-static/`，所以「纯静态档」不受影响。
+  - **实测**（新建 md 测试文 → 勾「自动上传到远端」）：D1 出现 `{wp_id:1822, slug:cfse-zz-ondemand, status:published, content_format:md}`、**R2 无对象**；首次访问 → **200 + `X-CFSE-Render: on-demand`**、26350 字节、`<h2>`/`<strong>` 齐全（marked 渲染 ✓）；二次访问 → 200 无该头（`max-age=3600`，R2 已回填 ✓）；不存在的 slug → 404 ✓；清理后 404 ✓。
+  - **两种用法**：① **WP 当 CMS 后台**：只勾「自动上传到远端」⇒ md 文章只进 D1、单页由 Worker 按需渲染（自愈）；② **WP 当静态插件**：勾「自动生成单页」⇒ 本地 `cfse-static/` 出 HTML（可整体搬到任意对象存储），html 文章可另勾上传直接进 R2。
+  - **排查经验**：`wrangler tail` 在本机连不上（`ETIMEDOUT` 到 Cloudflare:443），线上诊断改用「临时把 `renderSinglePageOnDemand` 的 `diag` 塞进响应头」再撤掉（已撤）；`X-Response-Time` 变大可判断是否多跑了 D1 查询。另：**被删到回收站的文章**（`__trashed`）其 D1 行与 R2 单页都会随 `trash_post` 清掉，此时访问 404 属正常 —— 挑验证样本时别选它（本次就因此误判一次）。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

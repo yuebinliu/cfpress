@@ -14,7 +14,7 @@ import { getPostsByTaxonomy, getTaxonomyInfo, getRecentPosts, getPostsByArchive,
 import { renderCategoryPage, renderTagPage, renderHomepage, renderArchivePage } from './templates';
 import { getCache, setCache, deleteCache, purgeCache } from './cache';
 import { getActiveTplContent } from './tplstore';
-import { handleAdminRequest, handleWpV2 } from './admin';
+import { handleAdminRequest, handleWpV2, renderSinglePageOnDemand } from './admin';
 import { getSiteContext } from './site';
 import { getCacheConfig } from './cacheconfig';
 import { mdToHtml } from './md';
@@ -551,6 +551,19 @@ export async function handleRequest(request, env) {
             return buildBinaryResponse(payload, 'MISS');
         }
 
+        // R2 未命中 → 按需渲染（D1 → 当前风格模板 → 写回 R2）。
+        // 场景：WP 侧文章「只同步 D1 不上传 R2」时，单页由 Worker 现场渲染并回填 R2，站点自愈。
+        const onDemand = await renderSinglePageOnDemand(env, slug);
+        if (onDemand && onDemand.html) {
+            return new Response(onDemand.html, {
+                status: 200,
+                headers: {
+                    'Content-Type': 'text/html; charset=utf-8',
+                    'Cache-Control': 'public, max-age=300',
+                    'X-CFSE-Render': 'on-demand',
+                },
+            });
+        }
         if (env.WORDPRESS_URL) {
             const response = await fetch(`${env.WORDPRESS_URL}${path}`);
             if (response.ok) return response;
