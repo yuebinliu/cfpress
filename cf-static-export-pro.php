@@ -614,9 +614,9 @@ private function get_post_storage_path($post) {
         $categories = $this->get_post_terms($post->ID, 'category');
         $tags = $this->get_post_terms($post->ID, 'post_tag');
 
-        // 内容格式：由写入端留下的 meta 决定（tool/index.php 的「MD」模式会写 _cfse_content_format=md）；
-        // 缺失即 html —— 零误判，且历史文章行为不变。
-        $content_format = (get_post_meta($post->ID, '_cfse_content_format', true) === 'md') ? 'md' : 'html';
+        // 内容格式：由文章 meta 决定（WP 后台「自定义字段」手填，或 tool/index.php 的「MD」模式写入
+        // content_format=md）；字段名与 D1 posts.content_format 同名。缺失即 html —— 零误判，历史文章行为不变。
+        $content_format = $this->get_content_format($post->ID);
 
         // 摘要：md 原稿先渲染成 HTML 再取纯文本，避免摘要里出现 ## 之类的标记
         $excerpt = $post->post_excerpt
@@ -791,6 +791,19 @@ private function get_post_storage_path($post) {
     // Markdown 渲染（md 文章；与 Worker 端 marked 对齐）
     // ============================================
     /**
+     * 读取文章内容格式，返回值只有 'md' / 'html'。
+     * 优先可见字段 content_format（与 D1 posts.content_format 同名；WP 后台编辑页的「自定义字段」
+     * 面板里可手动添加/修改），兼容批2 初版写过的隐藏字段 _cfse_content_format。
+     */
+    private function get_content_format($post_id) {
+        $value = get_post_meta($post_id, 'content_format', true);
+        if ($value === '' || $value === null || $value === false) {
+            $value = get_post_meta($post_id, '_cfse_content_format', true); // 兼容旧标记
+        }
+        return (strtolower(trim((string) $value)) === 'md') ? 'md' : 'html';
+    }
+
+    /**
      * 用 vendored Parsedown 渲染 markdown（safe mode 防 XSS）。
      * 类名冲突保护：站点其它插件/主题若已加载 Parsedown，则复用其实现（API 相同）。
      */
@@ -828,7 +841,7 @@ private function get_post_storage_path($post) {
      */
     public function render_md_content($content) {
         $id = get_the_ID();
-        if (!$id || get_post_meta($id, '_cfse_content_format', true) !== 'md') return $content;
+        if (!$id || $this->get_content_format($id) !== 'md') return $content;
         return $this->render_markdown($content);
     }
 
