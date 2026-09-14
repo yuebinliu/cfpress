@@ -1672,7 +1672,16 @@ private function get_post_storage_path($post) {
                 continue;
             }
             if (!isset($t['capabilities']) || !is_array($t['capabilities'])) {
-                $t['capabilities'] = array('r2' => true, 'd1' => true, 'cache' => true);
+                // 缺省能力按类型推导：只有 Worker 目标能写 D1 / 清缓存；
+                // local / s3 只是「文件落点」，凭空给它们 d1 能力会让写库请求发到对象存储端点（必然失败）。
+                $t['capabilities'] = ($type === 'cfse-worker')
+                    ? array('r2' => true, 'd1' => true, 'cache' => true)
+                    : array('r2' => true, 'd1' => false, 'cache' => false);
+            }
+            // 非 Worker 类型强制关掉 d1 / cache（即使表单里被勾选）——s3/local 无从执行这两个动作。
+            if ($type !== 'cfse-worker') {
+                $t['capabilities']['d1'] = false;
+                $t['capabilities']['cache'] = false;
             }
             if (!isset($t['path_prefix'])) $t['path_prefix'] = '';
             $out[] = $t;
