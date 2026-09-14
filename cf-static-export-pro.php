@@ -1691,6 +1691,141 @@ private function get_post_storage_path($post) {
         );
     }
 
+    /** 意图 → 必需能力（docs/hosting-templates.md §5） */
+    private function intent_requires($intent) {
+        switch ($intent) {
+            case 'md':          return array('d1', 'render');
+            case 'static-list': return array('d1');
+            case 'static-only': return array('r2');
+            case 'backup':      return array('r2');
+            default:            return array();
+        }
+    }
+
+    /**
+     * 【冷路径】托管目标校验（§6 三层 / §12）—— 只在设置页渲染与保存时调用，热路径不调用。
+     * 返回 array(
+     *   'warnings'    => array(array('id','key','message','fix')),   // fix: null | array('template','type')
+     *   'adjustments' => array(array('id','field','from','to')),     // 仅 $is_save=true 时收集（§12.4 回显）
+     * )
+     * 日志按 (key, 目标 id) 限流：同一键一次调用只记一条（§12.2）。
+     */
+    private function validate_hosting_targets($is_save = false) {
+        $templates = $this->get_hosting_templates();
+        $saved = get_option('cf_hosting_targets', '');
+        $list = is_string($saved) ? json_decode($saved, true) : array();
+        if (!is_array($list) || empty($list)) {
+            return array('warnings' => array(), 'adjustments' => array());
+        }
+        $warnings = array(); $adjustments = array(); $logged = array();
+        $logOnce = function ($key, $msg) use (&$logged) {
+            if (isset($logged[$key])) return;
+            $logged[$key] = true;
+            $this->log($msg, 'WARNING');
+        };
+        $union = array('r2' => false, 'd1' => false, 'render' => false, 'cache' => false);
+        $wantD1 = false; // 是否有目标「声明了需要 d1 的意图」（§6：纯静态不声明 ⇒ 不警告）
+        $wantR2 = false; // 是否有目标「声明了需要 r2 的意图」
+
+        foreach ($list as $t) {
+            if (!is_array($t)) continue;
+            if (isset($t['enabled']) && !$t['enabled']) continue;
+            $tid = isset($t['id']) ? $t['id'] : '?';
+
+            // 1) 模板解析（与热路径同规则）：template 优先；仅旧 type 时按 legacy_type 反查
+            $tplId = isset($t['template']) ? (string) $t['template'] : '';
+            $legacy = isset($t['type']) ? (string) $t['type'] : '';
+            if ($tplId === '' && $legacy !== '') {
+                foreach ($templates as $cand => $tp) {
+                    if (isset($tp['legacy_type']) && $tp['legacy_type'] === $legacy) { $tplId = $cand; break; }
+                }
+            }
+            if ($tplId === '' || !isset($templates[$tplId])) {
+                $warnings[] = array('id' => $tid, 'key' => 'unknown_template',
+                    'message' => '模板「' . ($tplId !== '' ? $tplId : '未指定') . '」不存在，该目标会被跳过。', 'fix' => null);
+                $logOnce('unknown_template:' . $tid, '托管目标 ' . $tid . ' 的模板 ' . ($tplId !== '' ? $tplId : '(未指定)') . ' 不存在');
+                continue;
+            }
+            $tpl = $templates[$tplId];
+
+            // 2) 一致性（C3/C6）：type 与 template 必须匹配
+            if ($legacy !== '' && $legacy !== $tpl['legacy_type']) {
+                $warnings[] = array('id' => $tid, 'key' => 'mismatch',
+                    'message' => 'type=' . $legacy . ' 与 template=' . $tplId . ' 不匹配（预期 type=' . $tpl['legacy_type'] . '）；若刚从旧版本回滚，请确认哪个才是当前意图。',
+                    'fix' => array('template', 'type'));
+                $logOnce('mismatch:' . $tid, '托管目标 ' . $tid . ' 的 type(' . $legacy . ') 与 template(' . $tplId . ') 不匹配');
+            }
+            // 3) 保存时重算 type（§12.4）：仅当用户「显式填了不同值」才计入 adjustments
+            //    （新结构只写 template、不写 type 属正常 ⇒ 空值静默补全，不提示"已修正"）
+            if ($is_save && $legacy !== '' && $legacy !== $tpl['legacy_type']) {
+                $adjustments[] = array('id' => $tid, 'field' => 'type', 'from' => $legacy, 'to' => $tpl['legacy_type']);
+            }
+
+            // 4) 能力归一（§12.7）+ 超限可见（B6 / B7④）
+            $caps = (isset($t['capabilities']) && is_array($t['capabilities'])) ? $t['capabilities'] : array();
+            $defCaps = isset($tpl['defaults']['capabilities']) ? $tpl['defaults']['capabilities'] : array();
+            $effCaps = array();
+            foreach ($tpl['capabilities'] as $k => $limit) {
+                if (!$limit) {
+                    $effCaps[$k] = false;
+                    if (!empty($caps[$k])) {
+                        $warnings[] = array('id' => $tid, 'key' => 'over_limit',
+                            'message' => '模板「' . $tplId . '」不支持能力「' . $k . '」，保存后将被关闭。', 'fix' => null);
+                        $logOnce('over_limit:' . $tid . ':' . $k, '托管目标 ' . $tid . ' 声明了模板不支持的 ' . $k . '，已裁剪');
+                        if ($is_save) $adjustments[] = array('id' => $tid, 'field' => 'capabilities.' . $k, 'from' => true, 'to' => false);
+                    }
+                    continue;
+                }
+                $effCaps[$k] = array_key_exists($k, $caps) ? !empty($caps[$k]) : !empty($defCaps[$k]);
+            }
+
+            // 5) 意图自洽（§6 第二层）
+            $intent = (isset($t['intent']) && is_array($t['intent'])) ? $t['intent'] : (isset($tpl['defaults']['intent']) ? $tpl['defaults']['intent'] : array());
+            foreach ($intent as $it) {
+                // 集合级检查的"需求"由意图决定（纯静态不需要 d1 ⇒ 不该警告 —— §6）
+                if ($it === 'md' || $it === 'static-list') $wantD1 = true;
+                if ($it === 'static-only' || $it === 'backup') $wantR2 = true;
+                foreach ($this->intent_requires($it) as $need) {
+                    if (empty($effCaps[$need])) {
+                        $msg = '已选意图「' . $it . '」但未启用能力「' . $need . '」' . ($need === 'render' ? '：md 文章不会有静态产出' : '') . '。';
+                        $warnings[] = array('id' => $tid, 'key' => 'intent_' . $it . '_' . $need, 'message' => $msg, 'fix' => null);
+                        $logOnce('intent:' . $tid . ':' . $it . ':' . $need, '托管目标 ' . $tid . '：' . $msg);
+                    }
+                }
+            }
+            foreach ($effCaps as $k => $v) if ($v) $union[$k] = true;
+        }
+
+        // 6) 集合级：只能按「意图声明的需求」检查 —— 不能一刀切
+        //    （§6：纯静态用户只勾 r2、不勾 d1 是正常状态，不警告）
+        if ($wantD1 && !$union['d1']) {
+            $warnings[] = array('id' => '(全部目标)', 'key' => 'union_d1',
+                'message' => '有目标声明了需要 D1 的意图（服务 md / 动态列表），但没有任何目标具备「文章数据(d1)」能力：'
+                           . '文章不会进 D1，Worker 后台与列表页看不到。若本站就是纯静态，请把意图改为「服务静态 HTML」。', 'fix' => null);
+            $logOnce('union:d1', '有 d1 意图但无目标具备 d1 能力：文章不会进 D1');
+        }
+        if ($wantR2 && !$union['r2']) {
+            $warnings[] = array('id' => '(全部目标)', 'key' => 'union_r2',
+                'message' => '有目标声明了需要文件落点的意图（服务静态 HTML / 备份），但没有任何目标具备「静态文件(r2)」能力：'
+                           . '什么都写不出去。', 'fix' => null);
+            $logOnce('union:r2', '有 r2 意图但无目标具备 r2 能力：写不出去');
+        }
+
+        return array('warnings' => $warnings, 'adjustments' => $adjustments);
+    }
+
+    /** 【冷路径】把自动修正回显给用户（§12.4：自动修正必须可见）。无变化返回空串。 */
+    private function render_adjustments_notice($adjustments) {
+        if (empty($adjustments)) return '';
+        $parts = array();
+        foreach ($adjustments as $a) {
+            $from = is_bool($a['from']) ? ($a['from'] ? '开' : '关') : $a['from'];
+            $to = is_bool($a['to']) ? ($a['to'] ? '开' : '关') : $a['to'];
+            $parts[] = $a['id'] . ' 的 ' . $a['field'] . '：' . $from . ' → ' . $to;
+        }
+        return '已自动修正 ' . count($adjustments) . ' 处 —— ' . implode('；', $parts) . '。';
+    }
+
     /**
      * 内置兜底目标：目标列表为空时使用（A3：显式默认 > 列表 > 兜底）。
      * 能力取 cloudflare 模板的默认值（全开，含 render），保持与改造前一致。
