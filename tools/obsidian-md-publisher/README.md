@@ -19,6 +19,22 @@ npx esbuild main.ts --bundle --external:obsidian --format=cjs --target=es2018 --
 
 > 注意：目标平台用默认（browser）。Obsidian 插件跑在浏览器/Electron 环境，**不要**用 `--platform=node`。
 
+## ⚠️ 更新插件时必做（最容易忘的一步）
+
+改完 `main.ts` 后**两步缺一不可**，否则库里跑的还是旧代码（症状：改了逻辑但行为没变，比如图片地址仍是「前缀 + 文件名」）：
+
+1. **在插件目录重新构建**：
+   ```bash
+   npx esbuild main.ts --bundle --external:obsidian --format=cjs --target=es2018 --outfile=main.js
+   ```
+2. **把整个目录重新复制**到 `<你的库>/.obsidian/plugins/obsidian-md-publisher/`（或直接在库里那份上重建），然后在 Obsidian 里**重新加载插件**。
+
+自查库里那份是不是新版（输出 ≥ 1 才是含「图片自动上传」的版本）：
+
+```bash
+grep -c uploadAttachment <你的库>/.obsidian/plugins/obsidian-md-publisher/main.js
+```
+
 ## 配置（设置 → MD Publisher）
 
 | 字段 | 说明 |
