@@ -165,6 +165,15 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **两种用法**：① **WP 当 CMS 后台**：只勾「自动上传到远端」⇒ md 文章只进 D1、单页由 Worker 按需渲染（自愈）；② **WP 当静态插件**：勾「自动生成单页」⇒ 本地 `cfse-static/` 出 HTML（可整体搬到任意对象存储），html 文章可另勾上传直接进 R2。
   - **排查经验**：`wrangler tail` 在本机连不上（`ETIMEDOUT` 到 Cloudflare:443），线上诊断改用「临时把 `renderSinglePageOnDemand` 的 `diag` 塞进响应头」再撤掉（已撤）；`X-Response-Time` 变大可判断是否多跑了 D1 查询。另：**被删到回收站的文章**（`__trashed`）其 D1 行与 R2 单页都会随 `trash_post` 清掉，此时访问 404 属正常 —— 挑验证样本时别选它（本次就因此误判一次）。
 
+- **批AA（发布行为改为三个独立选项 + 草稿删除清 D1，2026-09-14，已同步验证）**：用户反馈「发布文章同步不到 D1、草稿却可以」—— 查证为**开关粒度问题**（库内当时 `cf_sync_drafts=1` 而另两项未勾；「同步到 D1」被绑在「上传到远端」里，没有独立开关 ⇒ 发布分支因 `!gen && !pub` 直接跳过），**不是代码 bug**。按用户设计重构为三项独立开关（**默认全不勾**）：
+  - ① `cf_sync_d1` **同步到 D1**（**文章和草稿**都入库；草稿写 `status=draft`，无 slug 时用占位 `draft-<ID>`）
+  - ② `cf_gen_static` **生成静态文件**（渲染落盘到 `cfse-static/`）
+  - ③ `cf_publish_remote` **上传到远端**（R2 + 清缓存）——**勾 ③ 隐含 ②**（UI `onchange` 自动勾上 ②，运行时再以 `$gen_static = $gen_static || $pub_remote` 兜底）
+  - 旧键 `cf_sync_drafts` / `cf_auto_generate_single` / `cf_auto_publish_remote` 作为新键的默认值，平滑迁移。
+  - 实现：`export_post()` 按状态+开关分派（draft 只看 ①；publish 三项任一即处理）；`export_post_by_switches($post,$sync_d1,$gen_static,$pub_remote)` **只渲染一次 HTML**（只有需要时才 `build_post_artifact`），只勾 ① 时走 `build_post_meta` + `write_to_d1`（**不渲染**，更快）；`publish_artifact($artifact, $html_source, $write_d1 = true)` 新增第三参：③ 勾了但 ① 没勾 ⇒ 只上传 R2、不写 D1。
+  - **实测（逐组合，每篇独立文章）**：都不勾 → 跳过（export=NULL）；仅 ① → `D1=有(published)`、本地 NO、R2 无对象；仅 ② → `D1=无`、本地 YES；仅 ③ → `D1=无`、本地 **YES**（隐含 ② ✓）、R2 **有对象(200)**；①③ → D1 有 + 本地 YES + R2 有；草稿+① → `D1=有(draft)`；草稿+不勾 → 跳过。
+  - **顺带修 bug**：上一批为「跳过 auto-draft / 无固定链接文章」写的防护把**草稿**也挡了 ⇒ 草稿删除后 D1 行残留（验证时抓到 `c=1`）。改为：`auto-draft` 整段跳过；草稿（路径 `?p=<ID>`）**只跳过 R2 路径、D1 照常清理** ✓（实测删除草稿后 D1 已清）。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

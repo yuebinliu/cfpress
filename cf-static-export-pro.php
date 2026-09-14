@@ -181,11 +181,12 @@ class CF_Static_Export_Pro {
             'posts_per_page' => max(1, (int) get_option('cf_posts_per_page', 10)),
             // 编辑页是否自动比对 Worker 版本（默认关；打开后打开编辑页即查询，关则用面板里的「🔍 检查」按钮）
             'worker_auto_check' => (bool) get_option('cf_worker_auto_check', true),
-            // 发布行为开关（默认全关：WP 侧保存文章不动远端，内容交给 Worker/第三方编辑器管理；
-            // 需要「WP 全自动静态化」的站点再勾选）
-            'auto_generate_single' => (bool) get_option('cf_auto_generate_single', false),
-            'auto_publish_remote' => (bool) get_option('cf_auto_publish_remote', false),
-            'sync_drafts' => (bool) get_option('cf_sync_drafts', false),
+            // 发布行为（三项独立、默认全不勾；③ 勾选时隐含 ②）：
+            //   ① 同步到 D1（文章 + 草稿都写云端库）② 生成静态文件（本地 cfse-static/）③ 上传到远端（R2 + 清缓存）
+            // 旧键（YY 批的 cf_sync_drafts / cf_auto_generate_single / cf_auto_publish_remote）作为默认值兼容迁移
+            'sync_d1' => (bool) get_option('cf_sync_d1', get_option('cf_sync_drafts', false)),
+            'gen_static' => (bool) get_option('cf_gen_static', get_option('cf_auto_generate_single', false)),
+            'publish_remote' => (bool) get_option('cf_publish_remote', get_option('cf_auto_publish_remote', false)),
         );
     }
 public function get_config() {
@@ -245,9 +246,9 @@ public function get_config() {
             // 列表每页文章数（默认取 WP「设置→阅读」的 posts_per_page，即 10）
             'cf_posts_per_page' => array('sanitize' => 'intval', 'default' => 10),
             'cf_worker_auto_check' => array('sanitize' => 'boolval', 'default' => true),
-            'cf_auto_generate_single' => array('sanitize' => 'boolval', 'default' => 0),
-            'cf_auto_publish_remote' => array('sanitize' => 'boolval', 'default' => 0),
-            'cf_sync_drafts' => array('sanitize' => 'boolval', 'default' => 0),
+            'cf_sync_d1' => array('sanitize' => 'boolval', 'default' => 0),
+            'cf_gen_static' => array('sanitize' => 'boolval', 'default' => 0),
+            'cf_publish_remote' => array('sanitize' => 'boolval', 'default' => 0),
         );
         foreach ($fields as $key => $args) {
             register_setting('cf_static_export_pro', $key, $args);
@@ -347,10 +348,11 @@ public function get_config() {
                                     <p class="description">「🔄 全量导出」时并行进程数（1~8，默认 4）。并发越高全量越快，同时占用更多服务器资源；设为 1 即逐篇串行。R2/D1 写入为幂等覆盖，并发安全。</p></td></tr>
                             <tr><th>发布行为</th>
                                 <td>
-                                    <p class="description">控制「在 WP 侧保存 / 发布文章」时自动做什么。<b>三项默认都不勾</b> —— 此时 WP 侧保存文章<b>不会</b>动远端（内容由 Worker 后台或第三方编辑器如 Obsidian 管理），需要同步时用下方「📦 内容发布」卡手动生成/发布。要「WP 全自动静态化」的站点再勾选。</p>
-                                    <label><input type="checkbox" name="cf_auto_generate_single" value="1" <?php checked($this->config['auto_generate_single']); ?> /> 发布文章时自动<b>生成单页到本地</b>（写入 <code>cfse-static/</code>，只渲染落盘、不联网、不写 D1）</label><br/>
-                                    <label><input type="checkbox" name="cf_auto_publish_remote" value="1" <?php checked($this->config['auto_publish_remote']); ?> /> 发布文章时自动<b>上传到远端</b>（R2 单页 + D1 数据 + 清缓存）</label><br/>
-                                    <label><input type="checkbox" name="cf_sync_drafts" value="1" <?php checked($this->config['sync_drafts']); ?> /> <b>草稿也同步</b>到远端（只写 D1 的 <code>status=draft</code>，不生成单页、不上传 R2；便于在 Worker 后台看到草稿）</label>
+                                    <p class="description">控制「在 WP 侧保存 / 发布文章」时自动做什么。<b>三项独立、默认全不勾</b> —— 都不勾时 WP 侧保存文章不动远端（内容由 Worker 后台或第三方编辑器如 Obsidian 管理）。</p>
+                                    <label><input type="checkbox" name="cf_sync_d1" value="1" <?php checked($this->config['sync_d1']); ?> /> ① <b>同步到 D1</b>（<b>文章和草稿</b>都写入云端数据库；列表页实时渲染与 Worker 后台读它。草稿只写 <code>status=draft</code>，不产单页）</label><br/>
+                                    <label><input type="checkbox" name="cf_gen_static" value="1" id="cf-gen-static" <?php checked($this->config['gen_static']); ?> /> ② <b>生成静态文件</b>（渲染落盘到 <code>cfse-static/</code>，结构与 R2 同构；「纯静态托管」用它 —— 整目录搬到任意对象存储即成站）</label><br/>
+                                    <label><input type="checkbox" name="cf_publish_remote" value="1" id="cf-pub-remote" <?php checked($this->config['publish_remote']); ?> onchange="if(this.checked){var g=document.getElementById('cf-gen-static'); if(g) g.checked=true;}" /> ③ <b>上传到远端</b>（R2 单页 + 清缓存；<b>勾选它等于同时启用 ②</b>）</label>
+                                    <p class="description" style="margin-top:4px;">说明：<b>md 文章只写 D1、不上传 R2 单页</b> —— 单页由 Worker 渲染（R2 未命中时按需渲染并回填）。只勾 ③ 而没勾 ① 时，Worker 端列表/后台看不到该篇（列表读 D1）。
                                 </td></tr>
                             <tr><th>高级选项</th>
                                 <td>
@@ -621,21 +623,21 @@ private function get_post_storage_path($post) {
             $GLOBALS['cfse_in_export'] = false;
             return;
         }
-        // 发布行为开关（设置页「发布行为」）：默认全关 ⇒ WP 侧保存文章不动远端
-        $auto_gen = !empty($this->config['auto_generate_single']);
-        $auto_pub = !empty($this->config['auto_publish_remote']);
-        $sync_drafts = !empty($this->config['sync_drafts']);
+        // 发布行为三开关（设置页「发布行为」）：① 同步到 D1 ② 生成静态文件 ③ 上传到远端（③ 隐含 ②）
+        $sync_d1 = !empty($this->config['sync_d1']);
+        $pub_remote = !empty($this->config['publish_remote']);
+        $gen_static = !empty($this->config['gen_static']) || $pub_remote;
         if ($post->post_status === 'draft') {
-            if (!$sync_drafts && !$auto_pub) {
-                $this->log("文章 {$post_id} 为草稿，未开启「草稿也同步」，跳过", 'DEBUG');
+            if (!$sync_d1) {
+                $this->log("文章 {$post_id} 为草稿，未勾选「同步到 D1」，跳过", 'DEBUG');
                 $GLOBALS['cfse_in_export'] = false;
                 return;
             }
         } elseif ($post->post_status !== 'publish') {
             $GLOBALS['cfse_in_export'] = false;
             return;
-        } elseif (!$auto_gen && !$auto_pub) {
-            $this->log("文章 {$post_id} 未开启「自动生成单页 / 自动上传到远端」，跳过（可在设置页勾选，或用后台『📦 内容发布』手动导出）", 'DEBUG');
+        } elseif (!$sync_d1 && !$gen_static && !$pub_remote) {
+            $this->log("文章 {$post_id} 未勾选任何发布行为（同步到 D1 / 生成静态文件 / 上传到远端），跳过", 'DEBUG');
             $GLOBALS['cfse_in_export'] = false;
             return;
         }
@@ -657,7 +659,7 @@ private function get_post_storage_path($post) {
             if ($post->post_status === 'draft') {
                 $result = $this->sync_draft_to_d1($post);
             } else {
-                $result = $this->export_post_by_switches($post, $auto_gen, $auto_pub);
+                $result = $this->export_post_by_switches($post, $sync_d1, $gen_static, $pub_remote);
             }
             $duration = round(microtime(true) - $start_time, 2);
             if ($result) {
@@ -767,7 +769,7 @@ private function get_post_storage_path($post) {
      * @param array       $artifact    build_post_artifact()/build_post_meta() 的返回值（后者须自带 path）
      * @param string|null $html_source 非 null 时用它作为正文（「上传到远端」= 用本地已生成的 HTML）
      */
-    private function publish_artifact($artifact, $html_source = null) {
+    private function publish_artifact($artifact, $html_source = null, $write_d1 = true) {
         $post = $artifact['post'];
         $html = $html_source === null ? (isset($artifact['html']) ? $artifact['html'] : '') : $html_source;
         if ($html === '') throw new Exception('正文为空，无法发布');
@@ -809,16 +811,20 @@ private function get_post_storage_path($post) {
 
         $this->sync_media_files($post->post_content);
 
-        $written = false;
-        for ($i = 0; $i < $this->config['max_retries']; $i++) {
-            if ($this->write_to_d1($artifact['post_data'], $artifact['categories'], $artifact['tags'])) {
-                $written = true;
-                break;
+        if ($write_d1) {
+            $written = false;
+            for ($i = 0; $i < $this->config['max_retries']; $i++) {
+                if ($this->write_to_d1($artifact['post_data'], $artifact['categories'], $artifact['tags'])) {
+                    $written = true;
+                    break;
+                }
+                $this->log("D1写入重试 " . ($i + 1) . "/{$this->config['max_retries']}", 'WARNING');
+                usleep(500000);
             }
-            $this->log("D1写入重试 " . ($i + 1) . "/{$this->config['max_retries']}", 'WARNING');
-            usleep(500000);
+            if (!$written) throw new Exception('D1写入失败');
+        } else {
+            $this->log("文章 {$post->ID} 未勾选「同步到 D1」，跳过写库（仅上传 R2）", 'INFO');
         }
-        if (!$written) throw new Exception('D1写入失败');
 
         // 发布成功即按设置页开关清除相关缓存（sidebar 默认清；列表页第一页默认关，靠缓存自然过期）
         $this->purge_page_caches();
@@ -827,12 +833,26 @@ private function get_post_storage_path($post) {
     }
 
     /**
-     * 按设置页开关执行：生成到本地（可选）+ 上传到远端（可选）。只渲染一次 HTML。
+     * 按设置页三项开关执行（只渲染一次 HTML）：
+     *   ① $sync_d1     写 D1（数据入库；列表页/Worker 后台读它）
+     *   ② $gen_static  渲染落盘到 CFSE_LOCAL_DIR
+     *   ③ $pub_remote  上传 R2（md 文章在 publish_artifact 内部跳过 R2）+ 清缓存；写不写 D1 由 ① 决定
      */
-    private function export_post_by_switches($post, $do_generate, $do_publish) {
-        $artifact = $this->build_post_artifact($post);
-        if ($do_generate) $this->write_artifact_local($artifact);
-        if ($do_publish) return $this->publish_artifact($artifact);
+    private function export_post_by_switches($post, $sync_d1, $gen_static, $pub_remote) {
+        $artifact = null;
+        if ($gen_static || $pub_remote) {
+            $artifact = $this->build_post_artifact($post);
+            if ($gen_static) $this->write_artifact_local($artifact);
+        }
+        if ($pub_remote) {
+            return $this->publish_artifact($artifact, null, $sync_d1);
+        }
+        if ($sync_d1) {
+            $meta = $this->build_post_meta($post);
+            $ok = $this->write_to_d1($meta['post_data'], $meta['categories'], $meta['tags']);
+            $this->log("文章 {$post->ID} 仅同步到 D1：" . ($ok ? '成功' : '失败'), $ok ? 'INFO' : 'ERROR');
+            return $ok;
+        }
         return true;
     }
 
@@ -1768,11 +1788,15 @@ private function get_post_storage_path($post) {
         // get_post_storage_path() 已返回含 index.html 的完整文件路径
         $r2_path = $this->get_post_storage_path($post);
 
-        // auto-draft / 草稿等尚无固定链接的文章不会产出单页（路径会退化成 ?p=<ID>），
-        // 跳过远端清理，避免批量删除时发无谓请求
-        if ($post->post_status === 'auto-draft' || strpos($r2_path, '?') !== false) {
-            $this->log("文章 {$post_id}（{$post->post_status}）无固定链接/无单页，跳过远端清理", 'DEBUG');
+        // auto-draft 连 D1 都没有 ⇒ 整段跳过
+        if ($post->post_status === 'auto-draft') {
+            $this->log("文章 {$post_id} 为 auto-draft，跳过远端清理", 'DEBUG');
             return;
+        }
+        // 草稿等尚无固定链接的文章路径会退化成 ?p=<ID> ⇒ 没有 R2 单页，但 D1 行是真实存在的（草稿也会入库）
+        $has_single = (strpos($r2_path, '?') === false);
+        if (!$has_single) {
+            $this->log("文章 {$post_id}（{$post->post_status}）无固定链接/无单页，仅清理 D1", 'DEBUG');
         }
 
         // ① 本地产物：立即删除（无网络，快）—— 之前漏了这一步，导致 cfse-static/ 里残留
@@ -1780,8 +1804,10 @@ private function get_post_storage_path($post) {
 
         // ② 远端清理（R2 + D1）：攒到请求结束一次性批量执行。
         //    批量删除 20 篇时，逐篇同步会变成 40 次公网请求（这就是后台删除卡顿的原因）；聚合后只需 2 次。
-        self::$pending_delete_paths[] = $r2_path;
-        self::$pending_delete_paths[] = $r2_path . '.gz';
+        if ($has_single) {
+            self::$pending_delete_paths[] = $r2_path;
+            self::$pending_delete_paths[] = $r2_path . '.gz';
+        }
         // D1 里存的是「远端 wp_id」（Worker 端诞生的篇在 WP 侧是自增 ID，映射记在 meta）
         $d1_wp_id = $this->get_remote_wp_id($post_id);
         if (!$d1_wp_id) $d1_wp_id = $post_id;
