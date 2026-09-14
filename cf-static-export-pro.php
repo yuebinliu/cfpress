@@ -805,7 +805,8 @@ private function get_post_storage_path($post) {
             ? $artifact['post_data']['content_format']
             : $this->get_content_format($post->ID);
         if ($art_fmt === 'md') {
-            $this->log("文章 {$post->ID} 为 md：跳过 R2 上传（单页由 Worker 渲染/按需渲染）", 'INFO');
+            // md 文章：不上传 R2，并清除已存在的旧单页（交给 Worker 按需渲染最新内容）
+            $this->invalidate_md_single_page($post);
         } else {
             $uploaded = false;
             for ($i = 0; $i < $this->config['max_retries']; $i++) {
@@ -843,6 +844,18 @@ private function get_post_storage_path($post) {
     }
 
     /**
+     * md 文章的单页由 Worker 渲染：数据一变，就必须**清除已存在的 R2 单页**，
+     * 否则访问到的是上一次渲染的旧内容（D1 已更新、页面却没变）。
+     * 清掉后由 Worker 的「单页按需渲染」用最新 D1 内容现场渲染并回填。
+     */
+    private function invalidate_md_single_page($post) {
+        if ($this->get_content_format($post->ID) !== 'md') return;
+        $path = $this->get_post_storage_path($post);
+        $this->delete_from_r2(array($path, $path . '.gz'));
+        $this->log("文章 {$post->ID} 为 md：已清除旧单页（下次访问由 Worker 按需渲染最新内容）", 'INFO');
+    }
+
+    /**
      * 按设置页三项开关执行（只渲染一次 HTML）：
      *   ① $sync_d1     写 D1（数据入库；列表页/Worker 后台读它）
      *   ② $gen_static  渲染落盘到 CFSE_LOCAL_DIR
@@ -861,6 +874,7 @@ private function get_post_storage_path($post) {
             $meta = $this->build_post_meta($post);
             $ok = $this->write_to_d1($meta['post_data'], $meta['categories'], $meta['tags']);
             $this->log("文章 {$post->ID} 仅同步到 D1：" . ($ok ? '成功' : '失败'), $ok ? 'INFO' : 'ERROR');
+            if ($ok) $this->invalidate_md_single_page($post);   // md：清了旧单页，访问时才能看到新内容
             return $ok;
         }
         return true;

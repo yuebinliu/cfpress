@@ -105,9 +105,9 @@ export default class MDPublisher extends Plugin {
     return raw;
   }
 
-  /** 端点根：把 …/wp-json/wp/v2/posts 归一成 …/wp-json/wp/v2 */
+  /** 端点根：把各种写法（…/wp-json/wp/v2/posts、…/wp-json/wp/v2、带尾斜杠）归一成 …/wp-json/wp/v2 */
   apiBase(): string {
-    return this.settings.endpoint.trim().replace(/\/+$/, '').replace(/\/posts$/, '');
+    return this.settings.endpoint.trim().replace(/\/+$/, '').replace(/\/posts$/, '').replace(/\/+$/, '');
   }
 
   /**
@@ -128,14 +128,24 @@ export default class MDPublisher extends Plugin {
 
     const prefix = (this.settings.imagePrefix || '').trim().replace(/\/+$/, '');
     let out = body;
+    let uploaded = 0, fellBack = 0, skipped = 0;
     for (const it of hits) {
       const name = it.target.split('/').pop() || it.target;
       let url = '';
-      if (this.settings.uploadImages) url = await this.uploadAttachment(it.target, sourcePath);
-      if (!url && prefix) url = `${prefix}/${encodeURI(name)}`;
-      if (!url) continue;                       // 既没上传也没前缀 ⇒ 原样保留
+      if (this.settings.uploadImages) {
+        url = await this.uploadAttachment(it.target, sourcePath);
+        if (url) uploaded++;
+      }
+      if (!url && prefix) { url = `${prefix}/${encodeURI(name)}`; fellBack++; }
+      if (!url) { skipped++; continue; }        // 既没上传也没前缀 ⇒ 原样保留
       const alt = String(it.alt ?? name).replace(/[\[\]]/g, '');
       out = out.split(it.full).join(`![${alt}](${url})`);
+    }
+    if (hits.length) {
+      const msg = `图片：上传 ${uploaded} 张`
+        + (fellBack ? `，退回前缀 ${fellBack} 张` : '')
+        + (skipped ? `，未处理 ${skipped} 张` : '');
+      new Notice(msg);
     }
     return out;
   }
