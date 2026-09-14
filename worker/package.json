@@ -7,7 +7,8 @@
     "dev": "wrangler dev",
     "deploy": "node scripts/sync-themes-index.mjs && wrangler deploy",
     "logs": "wrangler tail",
-    "themes-index": "node scripts/sync-themes-index.mjs"
+    "themes-index": "node scripts/sync-themes-index.mjs",
+    "setup": "node scripts/setup.mjs"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"
