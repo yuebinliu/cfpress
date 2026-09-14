@@ -180,7 +180,7 @@ class CF_Static_Export_Pro {
             'auth_key' => get_option('cf_auth_key', ''),
             'posts_per_page' => max(1, (int) get_option('cf_posts_per_page', 10)),
             // 编辑页是否自动比对 Worker 版本（默认关；打开后打开编辑页即查询，关则用面板里的「🔍 检查」按钮）
-            'worker_auto_check' => (bool) get_option('cf_worker_auto_check', false),
+            'worker_auto_check' => (bool) get_option('cf_worker_auto_check', true),
         );
     }
 public function get_config() {
@@ -239,7 +239,7 @@ public function get_config() {
             'cf_auth_key' => array('sanitize' => 'sanitize_text_field', 'default' => ''),
             // 列表每页文章数（默认取 WP「设置→阅读」的 posts_per_page，即 10）
             'cf_posts_per_page' => array('sanitize' => 'intval', 'default' => 10),
-            'cf_worker_auto_check' => array('sanitize' => 'boolval', 'default' => false),
+            'cf_worker_auto_check' => array('sanitize' => 'boolval', 'default' => true),
         );
         foreach ($fields as $key => $args) {
             register_setting('cf_static_export_pro', $key, $args);
@@ -345,7 +345,7 @@ public function get_config() {
                                     <label><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式</label><br/>
                                     <label><input type="checkbox" name="cf_purge_sidebar" value="1" <?php checked($this->config['purge_sidebar']); ?> /> 发布后即时刷新侧边栏（成本极小，建议开启）</label><br/>
                                     <label><input type="checkbox" name="cf_purge_lists" value="1" <?php checked($this->config['purge_lists']); ?> /> 发布后即时刷新列表页第一页缓存（首页/分类/标签/归档；高更新大站建议关闭，靠缓存自然过期）</label><br/>
-                                    <label><input type="checkbox" name="cf_worker_auto_check" value="1" <?php checked($this->config['worker_auto_check']); ?> /> 编辑页自动比对 Worker 版本（默认关，省一次查询；关闭时可用「☁️ Worker 同步」面板里的「🔍 检查」按钮手动比对）</label>
+                                    <label><input type="checkbox" name="cf_worker_auto_check" value="1" <?php checked($this->config['worker_auto_check']); ?> /> 编辑页自动比对 Worker 版本（默认开：打开编辑页即只读查询两端版本时间，是否需要覆盖由你在面板里决定）</label>
                                 </td></tr>
                             <tr><th>缓存策略</th>
                                 <td>
@@ -857,8 +857,11 @@ private function get_post_storage_path($post) {
      */
     public function render_worker_sync_metabox($post) {
         $pid = (int) $post->ID;
-        echo '<p class="description">本篇由 <b>Worker 端诞生</b>。可把 Worker 的最新版本对齐过来。</p>';
-        echo '<div id="cfse-worker-status" style="margin:8px 0;padding:8px;background:#f6f7f7;border-radius:3px;font-size:12px;line-height:1.7;">正在查询 Worker…</div>';
+        $auto = !empty($this->config['worker_auto_check']);
+        echo '<p class="description">本篇由 <b>Worker 端诞生</b>，可把 Worker 的最新版本对齐过来。</p>';
+        echo '<p style="margin:8px 0;"><button type="button" class="button" id="cfse-check-btn">🔍 检查 Worker 端版本</button></p>';
+        echo '<div id="cfse-worker-status" style="margin:8px 0;padding:8px;background:#f6f7f7;border-radius:3px;font-size:12px;line-height:1.7;color:#646970;">'
+            . ($auto ? '正在查询…' : '点上面的按钮查询两端版本时间。') . '</div>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         echo '<input type="hidden" name="action" value="cfse_align_worker" />';
         echo '<input type="hidden" name="post_id" value="' . $pid . '" />';
@@ -871,11 +874,21 @@ private function get_post_storage_path($post) {
                 : '<p style="margin:8px 0 0;color:#b32d2e;"><b>❌ 对齐失败</b>（未能从 Worker 取到该篇，见日志）</p>';
         }
         $ajax_nonce = wp_create_nonce('cfse_worker_status');
-        echo '<script>jQuery(function($){$.post(ajaxurl,{action:"cfse_worker_status",post_id:' . $pid . ',_ajax_nonce:"' . esc_js($ajax_nonce) . '"},function(r){'
-            . 'var el=$("#cfse-worker-status");if(!r||!r.ok){el.html("（未能查询 Worker 状态）");return;}'
+        // 只提示、不自动覆盖：远端新 / 本地新 / 一致 三种情况都由用户决定是否点「对齐」
+        echo '<script>jQuery(function($){'
+            . 'var $s=$("#cfse-worker-status");'
+            . 'function cfseCheck(){'
+            . '$s.html("查询中…");'
+            . '$.post(ajaxurl,{action:"cfse_worker_status",post_id:' . $pid . ',_ajax_nonce:"' . esc_js($ajax_nonce) . '"},function(r){'
+            . 'if(!r||!r.ok){$s.html("（查询不到 Worker 版本：该篇可能尚未同步到 Worker，或接口不可用）");return;}'
             . 'var h="Worker 版本：" + r.worker_modified + "<br/>本篇版本：" + r.local_modified;'
-            . 'h += r.need_sync ? "<br/><b style=\'color:#b32d2e;\'>⚠︎ Worker 端更新，建议对齐</b>" : "<br/><span style=\'color:#1d6f42;\'>✔ 已是最新</span>";'
-            . 'el.html(h);});});</script>';
+            . 'if(r.need_sync){h += "<br/><b style=\'color:#b32d2e;\'>⚠︎ Worker 端更新</b> —— 需要以 Worker 版本覆盖本篇吗？（点下方按钮）";}'
+            . 'else if(r.local_newer){h += "<br/><b style=\'color:#996800;\'>本地较新</b> —— 若以 Worker 版本覆盖，会丢失本地较新的修改。";}'
+            . 'else{h += "<br/><span style=\'color:#1d6f42;\'>✔ 两端一致</span>";}'
+            . '$s.html(h);});}'
+            . '$("#cfse-check-btn").on("click",cfseCheck);'
+            . 'if(' . ($auto ? 'true' : 'false') . '){cfseCheck();}'
+            . '});</script>';
     }
 
     /**
