@@ -224,6 +224,13 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **旧对象提示**：此前用中文原名上传的对象（如 `6正方形-1.jpg`）仍按旧 key 存放 ⇒ **重新发布一次即可生成新 key**，旧对象可清理。
   - **`schema.sql` 更新到 3.0.0**：补 posts 的 `content_format` 列、新增 settings/users/styles/app_passwords 与索引；文首写明「Worker `ensureCoreSchema` / WP `ensure_d1_schema` / 本文件**三处同步**」，并说明正常**无需手工执行**。
 
+- **批AI/AJ（一键初始化·部署侧 + 后台引导页，2026-09-14，已部署验证）**：把「别人能装上」这一步补齐。
+  - **部署侧**：`worker/wrangler.toml.example`（配置模板，3 个 `REPLACE_*` 占位 ⇒ **真实 ID 不再硬编码在仓库里**）+ `worker/scripts/setup.mjs`（创建 D1/KV/R2 并据此生成 `wrangler.toml`；支持 `--dry-run` 只打印、`--name=` 自定义前缀、解析不到 ID 时交互补填）+ `package.json` 加 `npm run setup` + `worker/README.md`（从零部署文档：前置 → 建资源 → 部署 → 初始化 → 内容三来源 → 常用配置 → 排障 → 目录速查）。
+  - **后台引导页（`static/admin/app.js`）**：`boot()` 未登录时先查 `/api/setup/status` —— **空库直接进「🚀 初始化站点」向导**（站点名 / URL / 管理员账号密码+确认 / 邮箱 → `POST /api/setup` → 成功提示并跳回登录）；也可用 **`#setup`** 手动进入（已初始化时只作查看并给提示）。老版本 Worker 没有该端点时静默跳过、走原登录流程。
+  - **实测**：`node --check` 通过；`node scripts/setup.mjs --dry-run` 打印将执行的 3 条 wrangler 命令、不创建资源也不卡交互；部署后线上 `/admin/app.js` 含 `renderSetupWizard`(3) / `checkSetup`(2) / `api/setup`(2)，与本地**字节数一致**（119403）；`/api/setup/status` → `{initialized:true, hasUsers:true, siteName:"yuebin's blog"}` ⇒ 已初始化站点**不会**误进向导。
+  - **尚未验证（诚实标注）**：真实**空库**下「向导 → 建管理员 → 登录」的完整链路（生产库已有数据，不能清空 users 表验证）；逻辑已就绪，建议首次部署到**新站点/新库**时走一遍。
+  - **建议**：`wrangler.toml` 含真实 D1/KV/R2 ID（私密），可 `git rm --cached worker/wrangler.toml` + 加进 `.gitignore`，本地文件保留、仓库只留 `.example`。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

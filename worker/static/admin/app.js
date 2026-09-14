@@ -1885,10 +1885,73 @@
     }).catch(function () {});
   }
 
+  /* ---------- 首次初始化向导（空库时自动进入；也可手动 #setup） ---------- */
+  function renderSetupWizard(note) {
+    var card = document.getElementById('login-card');
+    if (!card) return;
+    card.classList.remove('hidden');
+    document.getElementById('view').style.display = 'none';
+    document.getElementById('topbar').classList.add('hidden');
+    card.innerHTML =
+      '<h1>🚀 初始化站点</h1>' +
+      '<p class="muted" style="margin:4px 0 12px;">本站还没有任何账号。填好下面几项：会建好数据库表并创建第一个管理员。</p>' +
+      '<div class="grid" style="max-width:440px;">' +
+      '<label>站点名<input id="su-name" placeholder="我的站"></label>' +
+      '<label>站点 URL<input id="su-url" placeholder="https://example.com"></label>' +
+      '<label>管理员用户名<input id="su-user" placeholder="admin"></label>' +
+      '<label>管理员密码（至少 8 位）<input id="su-pass" type="password"></label>' +
+      '<label>再次输入密码<input id="su-pass2" type="password"></label>' +
+      '<label>邮箱（可选）<input id="su-email"></label>' +
+      '<div><button class="btn btn-primary" id="su-go">创建并完成初始化</button></div>' +
+      '<div id="su-msg" class="muted" style="white-space:pre-wrap;"></div>' +
+      '</div>';
+    var msg = document.getElementById('su-msg');
+    if (note) msg.textContent = note;
+    document.getElementById('su-go').addEventListener('click', function () {
+      var name = document.getElementById('su-name').value.trim() || 'My Static Site';
+      var siteUrl = document.getElementById('su-url').value.trim();
+      var u = document.getElementById('su-user').value.trim();
+      var p = document.getElementById('su-pass').value;
+      var p2 = document.getElementById('su-pass2').value;
+      if (!/^[A-Za-z0-9_.-]{3,40}$/.test(u)) { msg.textContent = '用户名需 3-40 位字母 / 数字 / _ . -'; return; }
+      if (p.length < 8) { msg.textContent = '密码至少 8 位'; return; }
+      if (p !== p2) { msg.textContent = '两次输入的密码不一致'; return; }
+      msg.textContent = '正在初始化…';
+      fetch('/api/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: u, password: p, siteName: name, siteUrl: siteUrl,
+          email: document.getElementById('su-email').value.trim(),
+        }),
+      }).then(function (r) { return r.json().then(function (d) { return { s: r.status, d: d }; }); })
+        .then(function (r) {
+          if (r.s === 201 && r.d && r.d.ok) {
+            msg.textContent = '✅ 初始化完成，正在跳转登录…\n（账号：' + u + '）';
+            setTimeout(function () { location.hash = ''; location.reload(); }, 1000);
+          } else {
+            msg.textContent = '❌ ' + ((r.d && r.d.error) || '初始化失败');
+          }
+        }).catch(function () { msg.textContent = '网络错误'; });
+    });
+  }
+
+  /** 检查是否需要初始化；老版本 Worker 没有该端点时静默跳过 */
+  function checkSetup() {
+    var force = String(location.hash || '').replace(/^#\/?/, '') === 'setup';
+    return fetch('/api/setup/status').then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.initialized === false) {
+        renderSetupWizard('');
+      } else if (force) {
+        renderSetupWizard('⚠️ 本站已完成初始化（已有账号）。这里仅作查看；若要重建请直接改 D1 的 users 表。');
+      }
+    }).catch(function () { /* 忽略：按老流程走登录 */ });
+  }
+
   function boot() {
     flash('flash-main', '', null);
     flash('flash-login', '', null);
-    if (!needAuth()) { setWho(); return; }
+    if (!needAuth()) { setWho(); checkSetup(); return; }
     setWho();
     goNav();
   }
