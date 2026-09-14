@@ -184,6 +184,15 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **实测**：test-2（1841）误标记已清（`exported=YES → no`）；仅 ① → `exported=no / synced_d1=YES`；② → `exported=YES`；③ → `exported=YES`；草稿+① → `exported=no / synced_d1=YES`。
   - **注意**：该列反映的是「**WP 侧的导出动作**」，不是「R2 里有没有对象」—— R2 对象也可能由 Worker 的**按需渲染**产生（例如 test-2 被访问后已回填 R2）。
 
+- **批AC（第三方编辑器联调准备：Worker 宽容 POST 更新 + Obsidian 插件改好入库，2026-09-14）**：按「先跑通第三步再决定第四步」的节奏，只做前两步 + 联调准备。
+  - **Worker 侧（已部署验证）**：`/wp-json/wp/v2/posts/<id>` 现在**同时接受 POST** 作为更新（原来只有 GET/PUT/PATCH/DELETE ⇒ 客户端用 POST 会 405）。实测：集合 `POST /posts` → 201；`POST /posts/<id>` → **200**；`PUT /posts/<id>` → 200；不存在的 id → 404。（第一次测到 405 是**部署传播延迟**，重测即通过 —— 以后改完 Worker 别急着立刻断言失败。）
+  - **插件侧（入库 `tools/obsidian-md-publisher/`：manifest.json / main.ts / README.md）**：在社区给的极简方案上修正三处 ——
+    ① 更新改用 **PUT**（原代码 `wp_id ? 'POST' : 'POST'` 对着我们的接口必然 405）；
+    ② 新增 **`![[a.jpg]]` → `![a.jpg](前缀/文件名)` 转换**（`marked` 不认 Obsidian wiki 语法；支持 `|说明`、`#锚点`、子目录，文件名走 `encodeURI`），前缀做成设置项；
+    ③ **去掉 Bearer 选项**（`/wp-json/*` 只认 Basic），并补 `throw: false` 与前置配置校验。请求体不再发 `wp_id`（Worker 只认 URL 里的 id）。
+  - **联调清单**（README 内亦有）：纯文发布 → Worker 后台看到 md 原稿 + 单页 200（可能带 `X-CFSE-Render: on-demand`）+ frontmatter 回写 `wp_id`；再发一次同一篇 → 应走 PUT 更新而非新增；带图发布 → 图片地址是否可访问（若 404 说明文件还没放上去，据此决定第四步要不要做 `/media`）。
+  - **未做（等第三步结果）**：`POST /wp/v2/media`（贴图上传通道）。另注：`[[笔记双链]]` 不会被渲染（Worker 只渲染标准 md）。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

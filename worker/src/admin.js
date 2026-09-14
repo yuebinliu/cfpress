@@ -2267,7 +2267,9 @@ export async function handleWpV2(request, env) {
         const row = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(id).first();
         if (!row) return wpErr('rest_post_invalid_id', '文章不存在：' + id, 404);
         if (method === 'GET') return wpJson(await wpPostShape(db, row, site));
-        if (method === 'PUT' || method === 'PATCH') {
+        // 宽容：POST /wp/v2/posts/<id> 也视为更新。
+        // WP 官方 REST 用 PUT/PATCH，但不少客户端（含自建 Obsidian 插件）习惯对带 id 的 URL 直接 POST。
+        if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
             let body = {};
             try { body = await request.json(); } catch (e) { return wpErr('rest_invalid_json', '无效 JSON', 400); }
             const p = wpPayloadFromRest(body, row);
