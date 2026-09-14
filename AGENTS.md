@@ -101,6 +101,15 @@
 > - 线上 `tpl:active` **确有值**（`single` = `twentyten`，整份 HTML 全文）⇒ **模板内容来自它，但渲染仍必须经过 `templates.js`**。
 >   这正是 `{{SITE_URL}}` 漏替换能被暴露（且修复与"是否应用过风格"无关）的原因。
 > - `tpl:active` 的**写入点**只在 `admin.js`（`:1368/1384/1513/1529/1579` = 保存/应用/回退风格时），**不存在"访问时注入"**；读取点在 `tplstore.js:9`。
+> - **`tpl:active` 实测结构（2026-09-14）**：6 个键 `single` / `item` / `pageHome` / `pageCategory` / `pageTag` / `pageArchive`；
+>   每个 = `{id, name, content}`，`content` 是该风格的**整份 HTML 模板全文**（实测 twentyten：single 25,436 / item 1,292 / pageHome 19,745 /
+>   pageCategory 19,949 / pageTag 19,577 / pageArchive 19,473 字符，合计 **105,472**）。
+>   内容就是 `{{SITE_URL}}` / `{{SITE_NAME}}` / `{{CONTENT}}` / `{{PAGINATION_PREV|NEXT}}` / `{{SIDEBAR_*}}` / `{{#IF_*}}` 这些占位符 ⇒ **它是「模板」（纯文本、不会自己渲染自己）**。
+> - **`templates.js` 的两部分，待遇不同（关键区分）**：
+>   ① 内嵌的 8 处默认模板字符串（占 162KB 的绝大头）—— **模板机制迁移期留下的兜底**，当 `tpl:active` 与 `tpl.json` 都缺失时才用 ⇒ **可忽视/可清空**；
+>   ② 渲染函数（`renderHomepage` / `renderCategoryPage` / `renderTagPage` / `renderArchivePage` / `cfseRenderItem` / `cfsePostUrl` …）—— **当前活跃的渲染器**，
+>      `routes.js` 每次请求都调用（`:502` 等）⇒ **不可删**。
+>   ⇒ 若将来想彻底不依赖 `templates.js`，那是**重构渲染器**（搬走/换实现），不是"删一个弃用文件"。
 >
 > **下一步（压缩后）**
 > 1. 排查上面的设置页布局问题；
