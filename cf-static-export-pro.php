@@ -255,10 +255,10 @@ public function get_config() {
                     : false;
             }
             // 3) 意图归一化：白名单 ∩ 模板可承接（模板不支持的路线不保存）
-            $intentIn = (isset($t['intent']) && is_array($t['intent'])) ? $t['intent'] : $tpl['defaults']['intent'];
+            $onIntent = $this->normalize_intent((isset($t['intent']) && is_array($t['intent'])) ? $t['intent'] : $tpl['defaults']['intent']);
             $intent = array();
             foreach (array('md', 'static-list', 'static-only', 'backup') as $ik) {
-                if (!empty($intentIn[$ik]) && in_array($ik, $tpl['intents'], true)) $intent[] = $ik;
+                if (in_array($ik, $onIntent, true) && in_array($ik, $tpl['intents'], true)) $intent[] = $ik;
             }
             $entry = array(
                 'id' => $id,
@@ -1770,6 +1770,25 @@ private function get_post_storage_path($post) {
         );
     }
 
+    /**
+     * 意图归一：兼容两种输入格式 ——
+     *   ① 表单键映射：["md" => "1", "static-only" => "1"]
+     *   ② 列表（模板 defaults / 已存储）：["md", "static-list"]
+     * 返回规范化后的意图名列表。两处（sanitize / validate）共用，避免格式混用漏检。
+     */
+    private function normalize_intent($raw) {
+        $out = array();
+        if (!is_array($raw)) return $out;
+        foreach ($raw as $k => $v) {
+            if (is_int($k)) {
+                if (is_string($v) && $v !== '') $out[] = $v;   // 列表格式：值是意图名
+            } else {
+                if (!empty($v)) $out[] = (string) $k;          // 键映射格式：键是意图名
+            }
+        }
+        return array_values(array_unique($out));
+    }
+
     /** 意图 → 必需能力（docs/hosting-templates.md §5） */
     private function intent_requires($intent) {
         switch ($intent) {
@@ -1863,7 +1882,7 @@ private function get_post_storage_path($post) {
             }
 
             // 5) 意图自洽（§6 第二层）
-            $intent = (isset($t['intent']) && is_array($t['intent'])) ? $t['intent'] : (isset($tpl['defaults']['intent']) ? $tpl['defaults']['intent'] : array());
+            $intent = $this->normalize_intent((isset($t['intent']) && is_array($t['intent'])) ? $t['intent'] : (isset($tpl['defaults']['intent']) ? $tpl['defaults']['intent'] : array()));
             foreach ($intent as $it) {
                 // 集合级检查的"需求"由意图决定（纯静态不需要 d1 ⇒ 不该警告 —— §6）
                 if ($it === 'md' || $it === 'static-list') $wantD1 = true;
