@@ -262,6 +262,8 @@ public function get_config() {
                 $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
             } else {
                 $entry['dir'] = isset($t['dir']) ? sanitize_text_field(trim($t['dir'])) : '';
+                // local 也可配 public_url（本地目录被 web 服务托管时，日志里就能给出可访问地址）
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
             }
             $out[] = $entry;
         }
@@ -1738,8 +1740,10 @@ private function get_post_storage_path($post) {
             return true;
         }
         if ($this->target_type($target) === 'local') {
-            // 纯静态档：只写本地目录，不联网
-            $file = $this->target_dir($target) . '/' . ltrim($path, '/');
+            // 纯静态档：只写本地目录，不联网（path_prefix 与 s3 一致地生效）
+            $prefix = isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/') : '';
+            $rel = $prefix !== '' ? ($prefix . '/' . ltrim($path, '/')) : ltrim($path, '/');
+            $file = $this->target_dir($target) . '/' . $rel;
             $dir = dirname($file);
             if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
                 $this->log('local 目标创建目录失败：' . $dir, 'ERROR');
@@ -1749,7 +1753,19 @@ private function get_post_storage_path($post) {
                 $this->log('local 目标写入失败：' . $file, 'ERROR');
                 return false;
             }
-            $this->log('local 目标已写入：' . $file . ' (' . strlen($content) . ' 字节)', 'DEBUG');
+            $pub = $this->target_public_url($target, $path);
+            $this->log('local 目标已写入：' . $file . ' (' . strlen($content) . ' 字节)' . ($pub !== '' ? (' → ' . $pub) : ''), 'DEBUG');
+            return true;
+        }
+        if ($this->target_type($target) === 's3') {
+            $ct = $content_type !== '' ? $content_type : 'application/octet-stream';
+            $r = $this->s3_request($target, 'PUT', $path, array(), $content, $ct);
+            if (!$r['ok']) {
+                $this->log('s3 目标 ' . $target['id'] . ' 上传失败：' . $r['hint'] . ($r['detail'] !== '' ? (' — ' . $r['detail']) : ''), 'ERROR');
+                return false;
+            }
+            $pub = $this->target_public_url($target, $path);
+            $this->log('s3 目标 ' . $target['id'] . ' 上传成功' . ($pub !== '' ? ('：' . $pub) : ''), 'DEBUG');
             return true;
         }
         $this->log('托管目标 ' . (isset($target['id']) ? $target['id'] : '?') . ' 的类型 ' . $this->target_type($target) . ' 尚未实现上传', 'WARNING');
@@ -1770,8 +1786,10 @@ private function get_post_storage_path($post) {
         }
         if ($this->target_type($target) === 'local') {
             $ok = true;
+            $prefix = isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/') : '';
             foreach ((array) $paths as $p) {
-                $file = $this->target_dir($target) . '/' . ltrim($p, '/');
+                $rel = $prefix !== '' ? ($prefix . '/' . ltrim($p, '/')) : ltrim($p, '/');
+                $file = $this->target_dir($target) . '/' . $rel;
                 if (file_exists($file) && !@unlink($file)) {
                     $this->log('local 目标删除失败：' . $file, 'WARNING');
                     $ok = false;
@@ -1789,8 +1807,43 @@ private function get_post_storage_path($post) {
             }
             return $ok;
         }
+        if ($this->target_type($target) === 's3') {
+            // S3 没有简单批量删除（多对象删除要 POST ?delete + XML），逐个删更直观
+            $ok = true;
+            foreach ((array) $paths as $p) {
+                $r = $this->s3_request($target, 'DELETE', $p);
+                if (!$r['ok'] && $r['code'] !== 'not_found') {
+                    $this->log('s3 目标 ' . $target['id'] . ' 删除失败（' . $p . '）：' . $r['hint'], 'WARNING');
+                    $ok = false;
+                }
+            }
+            return $ok;
+        }
         $this->log('托管目标 ' . (isset($target['id']) ? $target['id'] : '?') . ' 的类型 ' . $this->target_type($target) . ' 尚未实现删除', 'WARNING');
         return false;
+    }
+
+    /**
+     * 目标上某个 key 的**公开访问地址**（public_url 的正确用法）：
+     *   s3      ⇒ 优先 public_url；未配置则回退 endpoint/bucket（一般不可直接访问，仅作参考）
+     *   local   ⇒ 优先 public_url（若本地目录被 web 服务托管）；否则给 file:// 路径
+     *   worker  ⇒ 返回空串（公开地址由 Worker 侧决定，不在这里猜）
+     * 会带上该目标的 path_prefix。
+     */
+    private function target_public_url($target, $key) {
+        $type = $this->target_type($target);
+        if ($type === 'cfse-worker') return '';
+        $prefix = isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/') : '';
+        $p = ($prefix !== '' ? $prefix . '/' : '') . ltrim((string) $key, '/');
+        $pub = rtrim(isset($target['public_url']) ? (string) $target['public_url'] : '', '/');
+        if ($pub !== '') return $pub . '/' . $p;
+        if ($type === 's3') {
+            $c = $this->s3_creds($target);
+            if ($c['endpoint'] !== '' && $c['bucket'] !== '') return $c['endpoint'] . '/' . $c['bucket'] . '/' . $p;
+            return '';
+        }
+        if ($type === 'local') return 'file://' . $this->target_dir($target) . '/' . $p;
+        return '';
     }
 
     /** 按类型分派「清缓存」；local/s3 等无缓存层 ⇒ 视为无需清理（返回 true） */

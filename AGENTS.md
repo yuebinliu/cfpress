@@ -282,6 +282,15 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **实测**：SigV4 官方向量 11/11；`path_style` auto 判断 6/6；字段缺失 ⇒ `config`；不可达域 ⇒ `network`；**真实 R2 S3 端点 + 21 位假 AK ⇒ 400 `bad_credential`**、**32 位假 AK ⇒ 401 `unauthorized`**、bucket 错 ⇒ 401（凭证先校验）；设置页渲染 10 项全 ✅、`sanitize(s3)` 字段完整。
   - **未做（下一步）**：`s3` 的 **upload / delete** 分支（本轮按要求只先做 testConnection）；之后请用户填一条 R2 S3 目标做真机实测，再决定是否用它做备份目标。
 
+- **批BQ（s3 第三步：upload/delete 分支 + public_url 落地 + 双目标端到端验证，2026-09-14，已同步验证）**：
+  - **实现**：`target_upload` 的 s3 分支（PUT，复用 `s3_request` 的签名）；`target_delete` 的 s3 分支（**逐个 DELETE** —— S3 批量删除要 `POST ?delete` + XML，逐个更直观；**404 视为已达成**）；新增 `target_public_url($target,$key)`：s3 ⇒ 优先 `public_url`、否则回退 `endpoint/bucket`；local ⇒ 优先 `public_url`、否则 `file://`；worker ⇒ 空串（公开地址由 Worker 侧决定）；上传/写入成功日志**带上该目标的公开地址** —— 这就是 `public_url` 的用处（让你知道文件从哪访问）；`sanitize` 允许 local 也带 `public_url`。
+  - **实测（双目标端到端）**：
+    · **local(带 public_url) + local(带 `path_prefix=sub`)** ⇒ `export=true`、日志 `文件已上传（2 个目标）：… {"locA":true,"locB":true}`，两个目录分别落到 `<A>/<slug>/index.html` 与 `<B>/sub/<slug>/index.html` ✓；
+    · **s3(假凭证) + local** ⇒ `export=true`（**任一成功即成功**）、local 成功、日志 `s3 目标 s3x 上传失败：凭证被拒（401）…` ⇒ **s3 分支代码路径已走通**（真机写入待有效凭证）；
+    · `target_public_url` 三形态：s3+`public_url` ⇒ `https://cdn.example.com/r2/site/a/b.html`（含 path_prefix）；s3 无 ⇒ 回退 `endpoint/bucket`；local 无 ⇒ `file://…`；worker ⇒ 空 ✓。
+  - **又抓到一个真 bug（正是用户要求覆盖的点）**：**local 目标的 `path_prefix` 未生效**（写入/删除都漏拼前缀）—— 首轮验证里 `locB` 报 true，但文件不在带前缀的路径上。已修（与 s3 行为一致）并复验。
+  - **⚠️ 配置提醒**：若目标列表里**只有 s3**（当前线上就是这个状态），则**没有目标具备 `d1` 能力** ⇒ 写库会被跳过（列表页/后台看不到新文章）。建议**保留一条 cfse-worker 目标**，s3 作为额外分发/备份；且 s3 目标**不要勾**「文章数据」「清缓存」（它没有这两项能力，会 WARNING）。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）
