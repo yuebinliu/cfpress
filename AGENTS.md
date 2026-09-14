@@ -94,6 +94,13 @@
 >   `worker/src/routes.js:14` 与 `worker/src/admin.js:8` 都 `import … from './templates'`；列表页 / 归档页 / 后台预览都走它们。
 >   （本次 `{{SITE_URL}}` 残留的修复正是改在 `cfseRenderItem`，所以那些改动必须保留。）
 > ⇒ **结论**：文件保留；改渲染函数按上面"生成端与产物必须同步改"的规矩办；只有内嵌模板部分可以不当回事。
+> **分工证据（2026-09-14 实测，一句话：`tpl:active` 是数据、`templates.js` 是引擎，字符串不会自己渲染自己）**：
+> - `routes.js:502` → `renderHomepage(data, page, total, { pageTpl: await getActiveTplContent(env, 'pageHome') })`
+>   —— **模板字符串**由 `getActiveTplContent()` 从 KV `tpl:active` 取；**渲染函数**由 `templates.js` 提供。
+> - `admin.js:438` → `let h = tplOverride || CFSE_SINGLE_TPL || '';`（模板为空时才兜底用内嵌）。
+> - 线上 `tpl:active` **确有值**（`single` = `twentyten`，整份 HTML 全文）⇒ **模板内容来自它，但渲染仍必须经过 `templates.js`**。
+>   这正是 `{{SITE_URL}}` 漏替换能被暴露（且修复与"是否应用过风格"无关）的原因。
+> - `tpl:active` 的**写入点**只在 `admin.js`（`:1368/1384/1513/1529/1579` = 保存/应用/回退风格时），**不存在"访问时注入"**；读取点在 `tplstore.js:9`。
 >
 > **下一步（压缩后）**
 > 1. 排查上面的设置页布局问题；
