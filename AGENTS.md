@@ -239,6 +239,15 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **实测**：配置派生 = `site_url=https://doc.yuebin.uk`、`hosting_targets=[1 个 cfse-worker target（r2/d1/cache 全开）]`；默认导出 → `D1=有(published)` + R2 上传成功；**日志**：`文件已上传（1 个目标）：… → {"default":true}`、关掉 r2 能力后 `没有启用「静态文件」能力的托管目标，跳过上传：…`、删除同理 `文件已删除（1 个目标）…`；测试数据已清理。
   - **教训（顺手记）**：改 PHP 这种大文件时，替换段必须**整段自闭合**再拼接 —— 本次第一版少收一个 `}`，lint 报 `unexpected token "catch"`，而当时的应用脚本**没有校验 lint 就直接同步**，把坏文件推上了服务器（随即 git 回滚 + 重新同步恢复）。现在的应用脚本已改为「**lint 不通过就中止、绝不同步**」。
 
+- **批AL（多托管·local 适配器 + d1/purge 也分派，2026-09-14，已同步验证）**：让「纯静态档」真正跑通。
+  - **补上批 AK 的欠账**：`d1_batch` 与 `purge_page_caches` 原先仍只读 `site_url/auth_key`（会去连 Worker），纯静态档必然失败 ⇒ 现在**也按能力分派**：
+    · `d1_batch`：只对具备 `d1` 能力的目标执行；**没有这样的目标 ⇒ 不联网**，返回等长 null 数组（不算失败）；
+    · `purge_page_caches`：只对具备 `cache` 能力的目标执行；无目标 ⇒ 跳过；
+    · 原实现原封不动改名为 `worker_d1_batch($target, $statements)`（含 CF API 降级兜底）。
+  - **新增 `local` 类型**（真正实现，不再只是占位）：`target_upload` / `target_delete` 增加分支 —— 写/删本地文件（根目录默认 `CFSE_LOCAL_DIR`，可用 target 的 `dir` 指定；删除后顺带清空目录）；建议 `capabilities: {r2:true, d1:false, cache:false}`。新增帮手 `target_dir()` / `target_type()` / `target_purge()`。
+  - **实测**：① **只有 local 目标** → `export=true`、本地文件 `cfse-static/ak-local-test/cfse-al-local/index.html` **29473 字节写入成功**、`D1 无行`，日志「没有启用「D1 数据」能力的托管目标，跳过 2 条 SQL（纯静态档无需写库）」⇒ **全程零联网**；② **local + worker 双目标** → 本地有文件 + D1 有行 + Worker 单页 200；③ 清理干净。
+  - **再一个教训（工具链）**：python **非 r-string** 里写 `'/\'` 会变成 PHP 的 `'/'`（转义单引号）⇒ `unexpected token "."`。这次 **lint 门禁生效、没有把坏文件同步上去**（批 AK 的加固管用了）；构造这类字符串要写 `'/\\'` 或用 r-string。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

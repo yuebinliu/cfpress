@@ -1157,17 +1157,15 @@ private function get_post_storage_path($post) {
         }
         $keys = array_values(array_unique($keys));
         if (!$keys) return;
-        try {
-            wp_remote_post($site_url . '/purge-cache', array(
-                'timeout'    => 5,
-                'sslverify'  => false,
-                'headers'    => array('X-Auth-Key' => $auth, 'Content-Type' => 'application/json'),
-                'body'       => wp_json_encode(array('keys' => $keys)),
-            ));
-            $this->log('已请求清除页面缓存 ' . count($keys) . ' 个 key', 'DEBUG');
-        } catch (Throwable $e) {
-            $this->log('清除页面缓存失败: ' . $e->getMessage(), 'WARNING');
+        // 多托管：对所有「具备缓存能力」的目标清缓存；纯静态档（local）没有缓存层 ⇒ 跳过
+        $res = $this->for_each_target('cache', function ($t) use ($keys) {
+            return $this->target_purge($t, $keys);
+        });
+        if ($res['tried'] === 0) {
+            $this->log('没有启用「缓存」能力的托管目标，跳过清缓存（静态档无需清缓存）', 'DEBUG');
+            return;
         }
+        $this->log('已请求清除页面缓存 ' . count($keys) . ' 个 key → ' . wp_json_encode($res['results']), 'DEBUG');
     }
 
     // ============================================
@@ -1531,7 +1529,22 @@ private function get_post_storage_path($post) {
             }
             return true;
         }
-        $this->log('托管目标 ' . $target['id'] . ' 的类型 ' . $target['type'] . ' 尚未实现上传', 'WARNING');
+        if ($this->target_type($target) === 'local') {
+            // 纯静态档：只写本地目录，不联网
+            $file = $this->target_dir($target) . '/' . ltrim($path, '/');
+            $dir = dirname($file);
+            if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+                $this->log('local 目标创建目录失败：' . $dir, 'ERROR');
+                return false;
+            }
+            if (@file_put_contents($file, $content) === false) {
+                $this->log('local 目标写入失败：' . $file, 'ERROR');
+                return false;
+            }
+            $this->log('local 目标已写入：' . $file . ' (' . strlen($content) . ' 字节)', 'DEBUG');
+            return true;
+        }
+        $this->log('托管目标 ' . (isset($target['id']) ? $target['id'] : '?') . ' 的类型 ' . $this->target_type($target) . ' 尚未实现上传', 'WARNING');
         return false;
     }
 
@@ -1547,8 +1560,39 @@ private function get_post_storage_path($post) {
             }
             return true;
         }
-        $this->log('托管目标 ' . $target['id'] . ' 的类型 ' . $target['type'] . ' 尚未实现删除', 'WARNING');
+        if ($this->target_type($target) === 'local') {
+            $ok = true;
+            foreach ((array) $paths as $p) {
+                $file = $this->target_dir($target) . '/' . ltrim($p, '/');
+                if (file_exists($file) && !@unlink($file)) {
+                    $this->log('local 目标删除失败：' . $file, 'WARNING');
+                    $ok = false;
+                }
+                // 顺带清掉产生的空目录（最多 4 层）
+                $dir = dirname($file);
+                for ($i = 0; $i < 4; $i++) {
+                    $base = $this->target_dir($target);
+                    if (rtrim($dir, '/\\') === $base || !is_dir($dir)) break;
+                    $items = @scandir($dir);
+                    if (is_array($items) ? count(array_diff($items, array('.', '..'))) > 0 : true) break;
+                    if (!@rmdir($dir)) break;
+                    $dir = dirname($dir);
+                }
+            }
+            return $ok;
+        }
+        $this->log('托管目标 ' . (isset($target['id']) ? $target['id'] : '?') . ' 的类型 ' . $this->target_type($target) . ' 尚未实现删除', 'WARNING');
         return false;
+    }
+
+    /** 按类型分派「清缓存」；local/s3 等无缓存层 ⇒ 视为无需清理（返回 true） */
+    private function target_purge($target, $keys) {
+        if ($this->target_type($target) === 'cfse-worker') {
+            $resp = $this->worker_request($target, '/purge-cache', 'POST', array('keys' => array_values($keys)), 5);
+            if ($resp === null) return false;
+            return wp_remote_retrieve_response_code($resp) < 400;
+        }
+        return true;
     }
 
     private function upload_to_r2_via_worker($path, $content, $content_type = 'text/html', $content_encoding = null) {
@@ -1827,12 +1871,52 @@ private function get_post_storage_path($post) {
      * @param array $statements 形如 [ ['sql'=>..., 'params'=>[...]], ... ]
      * @return array|false 每句的查询结果（SELECT 为行数组，写语句为 null）；全部不可用时 false
      */
+    /** local 类型目标的根目录（未配置则用 CFSE_LOCAL_DIR） */
+    private function target_dir($target) {
+        $dir = (isset($target['dir']) && $target['dir'] !== '') ? (string) $target['dir'] : CFSE_LOCAL_DIR;
+        return rtrim($dir, '/\\');
+    }
+
+    /** 目标类型（默认 cfse-worker） */
+    private function target_type($target) {
+        return isset($target['type']) ? (string) $target['type'] : 'cfse-worker';
+    }
+
+    /**
+     * 写文章数据：只对「具备 d1 能力」的目标执行。
+     * 没有这样的目标（如纯静态档只有 local）⇒ **不联网**，返回等长 null 数组（不算失败）。
+     */
     private function d1_batch($statements) {
         $statements = array_values($statements);
         if (empty($statements)) return array();
 
-        $site_url = isset($this->config['site_url']) ? rtrim($this->config['site_url'], '/') : '';
-        $auth = isset($this->config['auth_key']) ? $this->config['auth_key'] : '';
+        $targets = isset($this->config['hosting_targets']) ? $this->config['hosting_targets'] : array();
+        $usable = array();
+        foreach ($targets as $t) {
+            if (!empty($t['capabilities']['d1'])) $usable[] = $t;
+        }
+        if (empty($usable)) {
+            $this->log('没有启用「D1 数据」能力的托管目标，跳过 ' . count($statements) . ' 条 SQL（纯静态档无需写库）', 'DEBUG');
+            return array_fill(0, count($statements), null);
+        }
+        foreach ($usable as $t) {
+            if ($this->target_type($t) === 'cfse-worker') {
+                $out = $this->worker_d1_batch($t, $statements);
+                if (is_array($out) && !empty($out)) return $out;
+            } else {
+                $this->log('托管目标 ' . (isset($t['id']) ? $t['id'] : '?') . ' 的类型 ' . $this->target_type($t) . ' 尚未实现写库', 'WARNING');
+            }
+        }
+        return array();
+    }
+
+    /** 单个 cfse-worker 目标写库（原 d1_batch 实现，含 CF API 降级兜底） */
+    private function worker_d1_batch($target, $statements) {
+        $statements = array_values($statements);
+        if (empty($statements)) return array();
+
+        $site_url = rtrim(isset($target['endpoint']) ? (string) $target['endpoint'] : '', '/');
+        $auth = isset($target['auth_key']) ? (string) $target['auth_key'] : '';
         if ($site_url !== '' && $auth !== '') {
             $resp = wp_remote_post($site_url . '/d1-batch', array(
                 'timeout'    => 60,
