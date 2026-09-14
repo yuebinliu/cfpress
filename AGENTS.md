@@ -2,6 +2,14 @@
 
 > 任何 AI 助手/开发者接手本项目前请先通读本文件。它汇总了架构决策、运行方式、当前进度与操作套路，避免重复摸索。
 
+> ⚡ **新会话接续（2026-09-14 更新 —— 只有几分钟的话，先读这段）**
+> - **批次线到「批N」**（最新提交 `a3a4c8b`）：生成/上传拆开（批1）→ md 标识透传（批2/批3）+ 编辑页「📝 文档格式」面板（批4）→ WP 主动拉取 Worker 文章（批J）→ 单篇对齐 / 覆盖拉取（批K）→ 修 AUTO_INCREMENT 并把来源判据换成 meta（批L）→ 面板默认自动比对、只提示不自动覆盖（批M）→ 对齐按钮改链接修嵌套（批N）。**全部已部署并经端到端验证。**
+> - **部署两条线**：① WP 插件在服务器 `/mnt/optane/webstack/www/wp-content/plugins/cf`（用 `docker exec web-php` 跑 PHP / `php -l`；改完 `tar over plink` 同步）—— **不需要 wrangler deploy**；② Worker 在本地 `worker/`，改 `worker/src/**` 后必须 `cd worker && npx wrangler deploy`（`routes.js` 与 `routes.template.js` 要同步改）。
+> - **本会话引入的关键约定**：md 标记是**可见字段** `content_format`（WP 后台「📝 文档格式」勾选或自定义字段=md）；「Worker 端诞生」的文章用 meta **`_cfse_remote_wp_id`** 记远端 ID（**绝不要再用 `import_id`**，会把 `wp_posts` 的 AUTO_INCREMENT 顶到 1.7e14，见批L）；`CFSE_WORKER_ID_MIN = 1e11` 只作兜底判据；Worker 只读接口 `GET /sync/posts`（X-Auth-Key，支持 `wp_id`/`min_wp_id`/`since`/`limit`）。
+> - **已知陷阱（都踩过）**：① `<form>` 不能放进 WP 编辑页（主表单嵌套 ⇒ 被浏览器忽略；用带 nonce 的链接或 AJAX）；② `re.findall(...)` 带 flags 而 `re.sub(...)` 不带 ⇒ **假成功**，改完必须 grep 产物核实；③ 改 >31KB 的大文件用 `write_file` 写 python 脚本 + 同回合 bash 执行（见第七节 harness 说明）；④ 验证中文内容别用 `json_encode(substr(...))`（截断多字节 → 返回 false，看起来像空）；⑤ **先 `php -l` 再同步**；⑥ 删 WP 文章若不想连带删 D1/R2，先 `remove_action('before_delete_post'|'trash_post', ...)`。
+> - **下一步候选**（细节见 `ROADMAP.md`）：多目标托管配置（F.2 缺口 3）／列表页静态生成（F.2 缺口 1/8，纯静态档最大件）／第三方编辑器写入口（A.1）／小项（IP 白名单、HTML 稳定化 15B、首页 `{{SITE_URL}}` 残留、模板 `{{SITE_NAME}}`）。
+> - **新会话开场三件事**：`git log --oneline -10`、`git status --short`、读本文件（其余细节按需查 `ROADMAP.md` / `EVOLUTION.md`）。
+
 ## 一、项目是什么
 
 WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静态 HTML 存 R2，Worker 负责前台路由（动态列表页从 D1 实时渲染、单页直读 R2），后台管理面（`/admin/`）在 Worker 上。
