@@ -2046,6 +2046,97 @@ private function get_post_storage_path($post) {
      * @param array $statements 形如 [ ['sql'=>..., 'params'=>[...]], ... ]
      * @return array|false 每句的查询结果（SELECT 为行数组，写语句为 null）；全部不可用时 false
      */
+    /**
+     * S3 用的 URI 编码（SigV4 规范）：字母数字与 -_.~ 原样；'/' 视参数决定是否编码；
+     * **已 percent-encoded 的 %xx 原样保留**（规范化成大写）—— 我们的 R2 key 里中文/空格就是这种形态，
+     * 若把它二次编码成 %25xx 会导致签名与实际对象名不一致。
+     */
+    private function sigv4_uri_encode($s, $encode_slash = true) {
+        $out = '';
+        $len = strlen($s);
+        for ($i = 0; $i < $len; $i++) {
+            $c = $s[$i];
+            if (ctype_alnum($c) || $c === '-' || $c === '_' || $c === '.' || $c === '~') {
+                $out .= $c;
+            } elseif ($c === '/') {
+                $out .= $encode_slash ? '%2F' : '/';
+            } elseif ($c === '%' && $i + 2 < $len && ctype_xdigit($s[$i + 1]) && ctype_xdigit($s[$i + 2])) {
+                // 原样保留（含大小写）：R2 key 里的中文/空格就是小写 %xx，转大写会与实际对象名不符
+                $out .= '%' . $s[$i + 1] . $s[$i + 2];
+                $i += 2;
+            } else {
+                $out .= '%' . strtoupper(bin2hex($c));
+            }
+        }
+        return $out;
+    }
+
+    /** canonical query string：按 key 升序 + 各自 URI 编码 */
+    private function sigv4_canonical_query($query) {
+        if (empty($query) || !is_array($query)) return '';
+        ksort($query);
+        $parts = array();
+        foreach ($query as $k => $v) {
+            $parts[] = $this->sigv4_uri_encode((string) $k, true) . '=' . $this->sigv4_uri_encode((string) $v, true);
+        }
+        return implode('&', $parts);
+    }
+
+    /**
+     * AWS Signature V4 签名（用于 S3 兼容对象存储：R2 / AWS S3 / MinIO / B2 等）。
+     *
+     * @param array  $creds   {access_key, secret_key, region, service(默认 s3), host}
+     * @param string $method  GET / PUT / DELETE …
+     * @param string $path    canonical 路径（path-style 时含 /bucket；不含 query）
+     * @param array  $query   查询参数 [k => v]
+     * @param string $payload 请求体（用于算 payload hash；GET/DELETE 传 ''）
+     * @param string $date    20150830T123600Z；默认取当前 UTC
+     * @param bool   $sign_content_sha 是否把 x-amz-content-sha256 计入签名头
+     *        （真实 S3/R2 请求建议签；AWS 官方 get-vanilla 向量只签 host 与 x-amz-date，自检时传 false）
+     * @return array 含 authorization / x-amz-date / payload_hash / canonical_request / string_to_sign / signature
+     */
+    private function sigv4_sign($creds, $method, $path, $query = array(), $payload = '', $date = null, $sign_content_sha = true) {
+        $ak = isset($creds['access_key']) ? (string) $creds['access_key'] : '';
+        $sk = isset($creds['secret_key']) ? (string) $creds['secret_key'] : '';
+        $region = !empty($creds['region']) ? (string) $creds['region'] : 'us-east-1';
+        $service = !empty($creds['service']) ? (string) $creds['service'] : 's3';
+        $host = isset($creds['host']) ? (string) $creds['host'] : '';
+        if ($date === null) $date = gmdate('Ymd\THis\Z');
+        $date_stamp = substr($date, 0, 8);
+
+        $payload_hash = hash('sha256', (string) $payload);
+        $canonical_uri = $this->sigv4_uri_encode($path, false);
+        $canonical_query = $this->sigv4_canonical_query($query);
+        // 参与的签名头（按字典序）；是否包含 x-amz-content-sha256 由参数决定
+        $sign_headers = array('host' => $host, 'x-amz-date' => $date);
+        if ($sign_content_sha) $sign_headers['x-amz-content-sha256'] = $payload_hash;
+        ksort($sign_headers);
+        $canonical_headers = '';
+        foreach ($sign_headers as $hk => $hv) $canonical_headers .= $hk . ':' . $hv . "\n";
+        $signed_headers = implode(';', array_keys($sign_headers));
+        $canonical_request = $method . "\n" . $canonical_uri . "\n" . $canonical_query . "\n"
+            . $canonical_headers . "\n" . $signed_headers . "\n" . $payload_hash;
+
+        $scope = $date_stamp . '/' . $region . '/' . $service . '/aws4_request';
+        $string_to_sign = "AWS4-HMAC-SHA256\n" . $date . "\n" . $scope . "\n" . hash('sha256', $canonical_request);
+
+        $k_date = hash_hmac('sha256', $date_stamp, 'AWS4' . $sk, true);
+        $k_region = hash_hmac('sha256', $region, $k_date, true);
+        $k_service = hash_hmac('sha256', $service, $k_region, true);
+        $k_signing = hash_hmac('sha256', 'aws4_request', $k_service, true);
+        $signature = hash_hmac('sha256', $string_to_sign, $k_signing);
+
+        return array(
+            'authorization' => 'AWS4-HMAC-SHA256 Credential=' . $ak . '/' . $scope
+                . ', SignedHeaders=' . $signed_headers . ', Signature=' . $signature,
+            'x-amz-date' => $date,
+            'payload_hash' => $payload_hash,
+            'canonical_request' => $canonical_request,
+            'string_to_sign' => $string_to_sign,
+            'signature' => $signature,
+        );
+    }
+
     /** local 类型目标的根目录（未配置则用 CFSE_LOCAL_DIR） */
     private function target_dir($target) {
         $dir = (isset($target['dir']) && $target['dir'] !== '') ? (string) $target['dir'] : CFSE_LOCAL_DIR;

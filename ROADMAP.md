@@ -98,6 +98,9 @@
 
 **未决（需拍板）**：① 落点（Worker / 内网 WP / 两端）；② 首批范围；③ 应用密码是否只给管理员角色。
 
+- **进行中（批 BO，2026-09-14）**：多托管第 2 步 s3 —— SigV4 签名已实现并通过 AWS 官方向量离线自检（11/11）。**下一步**：s3 的三个适配器分支（upload / delete / `testConnection()` 结构化错误分类）+ 设置页字段与类型放行；之后请用户填一条 R2 S3 目标做真机实测。
+
+
 - **已完成（批 BN，2026-09-14）**：s3 前置验证（`/health` 无需认证 ⇒ 测试连通性改用受保护接口）+ 修 `get_hosting_targets()` 白名单漏放 `local` 的 bug（纯静态档此前实际不可用）。
 - **下一步**：`s3` 适配器 —— 字段 = endpoint / bucket / region / access_key / secret_key / path-style / **public_url**；能力 `{r2:true,d1:false,cache:false}`；`path_prefix` 生效；path-style 自动判断 + 可手工覆盖；适配器带 `testConnection()`（用 `ListObjectsV2` 做 **SigV4 签名自检**）。
 

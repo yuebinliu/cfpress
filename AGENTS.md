@@ -264,6 +264,16 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
     · **为什么 AL 批没发现**：当时的验证是**直接改内存 `config`**（绕过了 option ⇒ 也就绕过了 `get_hosting_targets()`）⇒ **假通过**。**教训：验证一条链路要从「用户实际会改的入口」（option / 表单）进，别从中间层注入。**
   - **修复后复验**：只留 local ⇒ `config` 目标数 1、`get_hosting_targets()` 返回 `only-local(local)`、**不回落旧配置**；`d1_batch` 返回 `[null,null]` 且**耗时 0ms（未联网）**；文件只写本地（实写位置 `<dir>/<path>`，探针一度因 dir 与 path 叠层而误判，已确认成功并清理）；无 cfse-worker 目标时 `site_url/auth_key` 仍取旧设置（仅供「站点设置同步」等，不参与文件/数据分派）。
 
+- **批BO（s3 前置：SigV4 签名实现 + 离线自检，2026-09-14，已同步验证）**：
+  - **实现**：`sigv4_sign($creds,$method,$path,$query,$payload,$date,$sign_content_sha=true)` + `sigv4_uri_encode()` + `sigv4_canonical_query()`。签 `host` / `x-amz-content-sha256`（可关）/ `x-amz-date`；canonical request → string to sign → 派生密钥（`AWS4+sk` → date → region → service → `aws4_request`）→ HMAC；返回 `authorization` 与全部中间量（canonical_request / string_to_sign / payload_hash），便于排障。
+  - **离线自检（AWS 官方 SigV4 测试向量）11 项全过**：
+    · `get-vanilla`（GET /、空 body、只签 host+x-amz-date）⇒ `Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31`、`payload_hash=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`，canonical request 与 Authorization 头**逐字节一致**；
+    · `get-vanilla-empty-query-key`（`/?Param1=value1`）⇒ `Signature=a67d582fa61cc504c4bae71f336f98b97f1ea3c7a6bfe1b6e45aec72011b9aeb`；
+    · 真实形态（签 content-sha256）签名确定、signed headers 正确；URI 编码 4 例（`%xx` 原样、空格→`%20`、中文→`%E6%B1%89`、普通路径不变）。
+  - **自检抓到两个实现错误（离线自检的价值）**：
+    ① 起初把 `x-amz-content-sha256` 无条件计入签名头 ⇒ 与官方向量不符；改为**参数控制**（真实请求签、自检不签）；
+    ② **起初把已 percent-encoded 的 `%xx` 规范化成大写** ⇒ 与 R2 的 key（小写 `%e4%b8%ad`）不符，会导致 **SignatureDoesNotMatch**；已改为**原样保留**。**这条是接 R2 时必然踩的坑**，提前拦住了。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）
