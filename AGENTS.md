@@ -274,6 +274,14 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
     ① 起初把 `x-amz-content-sha256` 无条件计入签名头 ⇒ 与官方向量不符；改为**参数控制**（真实请求签、自检不签）；
     ② **起初把已 percent-encoded 的 `%xx` 规范化成大写** ⇒ 与 R2 的 key（小写 `%e4%b8%ad`）不符，会导致 **SignatureDoesNotMatch**；已改为**原样保留**。**这条是接 R2 时必然踩的坑**，提前拦住了。
 
+- **批BP（s3 第二步：`testConnection()` 先行 + UI 可填，2026-09-14，已同步验证）**：按用户建议把它当**调试前置工具**先做。
+  - **新增**：`s3_creds()`（解析 endpoint/bucket/region/ak/sk/path_style/path_prefix/public_url）、`s3_path_style()`（auto：R2 端点 / localhost / IP / 带端口 ⇒ path-style；`*.amazonaws.com` ⇒ virtual-host；其它自定义域 ⇒ virtual-host；**显式 path/virtual 可覆盖**）、`s3_request()`（按寻址方式拼 host/path → SigV4 签名 → 请求 → 分类）、`s3_classify()`（**结构化** `{code, hint}`，供 UI 直接提示）、`s3_test_connection()`（`ListObjectsV2&max-keys=1`，一次验「连通 + 签名 + bucket + 列举权限」）。
+  - **错误分类（用真实 R2 端点实测校准过）**：`config`（字段缺）/ `network` vs `timeout`（区分 cURL errno 6 / 28）/ **`unauthorized`（401：R2 对未知 access_key 直接 401）** / `signature_mismatch`（403 SignatureDoesNotMatch）/ `access_denied`（403 无权限）/ `no_such_bucket`（404）/ **`bad_credential`（400 InvalidArgument「access key has length N, should be 32」⇒ 提示用 R2 的 S3 凭证、别用 Global API Token）** / `wrong_region` / `bad_request`（400，提示换寻址方式）/ `ok`。
+  - **worker 目标的测试也改了**（落实批 BN 结论）：从 `/health` 改为**受保护接口 `/style-list`** ⇒ 401/403 直接显示 **「X-Auth-Key 不对」**，不再是笼统 HTTP 码；AJAX 统一返回 `{name, ok, code, http, detail}`。
+  - **设置页**：类型下拉 `s3` 由 disabled 改为可选；新增 s3 字段（bucket / region / access_key / secret_key / public_url / 寻址方式），JS 按类型切换显示；`sanitize_hosting_targets()` 与 `get_hosting_targets()` 白名单放行 `s3` 并保存上述字段（region 缺省 auto）。
+  - **实测**：SigV4 官方向量 11/11；`path_style` auto 判断 6/6；字段缺失 ⇒ `config`；不可达域 ⇒ `network`；**真实 R2 S3 端点 + 21 位假 AK ⇒ 400 `bad_credential`**、**32 位假 AK ⇒ 401 `unauthorized`**、bucket 错 ⇒ 401（凭证先校验）；设置页渲染 10 项全 ✅、`sanitize(s3)` 字段完整。
+  - **未做（下一步）**：`s3` 的 **upload / delete** 分支（本轮按要求只先做 testConnection）；之后请用户填一条 R2 S3 目标做真机实测，再决定是否用它做备份目标。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

@@ -232,7 +232,7 @@ public function get_config() {
             if (!is_array($t)) continue;
             // 只接受已实现的类型；未知类型直接丢弃（与运行期 get_hosting_targets 的「跳过」保持一致）
             $type = isset($t['type']) ? (string) $t['type'] : '';
-            if (!in_array($type, array('cfse-worker', 'local'), true)) continue;
+            if (!in_array($type, array('cfse-worker', 'local', 's3'), true)) continue;
             $name = isset($t['name']) ? sanitize_text_field($t['name']) : '';
             $id = isset($t['id']) && $t['id'] !== '' ? sanitize_key($t['id']) : sanitize_title($name);
             if ($id === '') $id = 't' . count($out);
@@ -251,6 +251,15 @@ public function get_config() {
             if ($type === 'cfse-worker') {
                 $entry['endpoint'] = isset($t['endpoint']) ? esc_url_raw(trim($t['endpoint'])) : '';
                 $entry['auth_key'] = isset($t['auth_key']) ? sanitize_text_field($t['auth_key']) : '';
+            } elseif ($type === 's3') {
+                $entry['endpoint'] = isset($t['endpoint']) ? esc_url_raw(trim($t['endpoint'])) : '';
+                $entry['bucket'] = isset($t['bucket']) ? sanitize_text_field(trim($t['bucket'])) : '';
+                $entry['region'] = isset($t['region']) && trim($t['region']) !== '' ? sanitize_text_field(trim($t['region'])) : 'auto';
+                $entry['access_key'] = isset($t['access_key']) ? sanitize_text_field(trim($t['access_key'])) : '';
+                $entry['secret_key'] = isset($t['secret_key']) ? sanitize_text_field(trim($t['secret_key'])) : '';
+                $mode = isset($t['path_style']) ? (string) $t['path_style'] : 'auto';
+                $entry['path_style'] = in_array($mode, array('auto', 'path', 'virtual'), true) ? $mode : 'auto';
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
             } else {
                 $entry['dir'] = isset($t['dir']) ? sanitize_text_field(trim($t['dir'])) : '';
             }
@@ -297,12 +306,24 @@ public function get_config() {
                 <select name="<?php echo esc_attr($n); ?>[type]" class="cfse-target-type" style="width:100%;">
                     <option value="cfse-worker" <?php selected($type, 'cfse-worker'); ?>>cfse-worker（CF Worker）</option>
                     <option value="local" <?php selected($type, 'local'); ?>>local（本地目录）</option>
-                    <option value="s3" disabled>s3（未实现）</option>
+                    <option value="s3" <?php selected($type, 's3'); ?>>s3（S3 兼容对象存储）</option>
                 </select>
             </td>
             <td>
                 <input type="text" class="cfse-f-endpoint" name="<?php echo esc_attr($n); ?>[endpoint]" value="<?php echo esc_attr(isset($t['endpoint']) ? $t['endpoint'] : ''); ?>" style="width:100%;" placeholder="https://你的站点" />
                 <input type="text" class="cfse-f-dir" name="<?php echo esc_attr($n); ?>[dir]" value="<?php echo esc_attr(isset($t['dir']) ? $t['dir'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="留空 = <?php echo esc_attr(CFSE_LOCAL_DIR); ?>" />
+                <div class="cfse-f-s3" style="margin-top:4px;display:none;">
+                    <input type="text" name="<?php echo esc_attr($n); ?>[bucket]" value="<?php echo esc_attr(isset($t['bucket']) ? $t['bucket'] : ''); ?>" style="width:49%;" placeholder="bucket 名" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[region]" value="<?php echo esc_attr(isset($t['region']) ? $t['region'] : 'auto'); ?>" style="width:49%;" placeholder="region（R2 填 auto）" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[access_key]" value="<?php echo esc_attr(isset($t['access_key']) ? $t['access_key'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="Access Key（R2 为 32 位）" />
+                    <input type="password" name="<?php echo esc_attr($n); ?>[secret_key]" value="<?php echo esc_attr(isset($t['secret_key']) ? $t['secret_key'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="Secret Key" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[public_url]" value="<?php echo esc_attr(isset($t['public_url']) ? $t['public_url'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="public_url：站点访问地址（如 https://cdn.example.com）" />
+                    <select name="<?php echo esc_attr($n); ?>[path_style]" style="width:100%;margin-top:2px;">
+                        <option value="auto" <?php selected(isset($t['path_style']) ? $t['path_style'] : 'auto', 'auto'); ?>>寻址方式：自动（按 endpoint 判断）</option>
+                        <option value="path" <?php selected(isset($t['path_style']) ? $t['path_style'] : 'auto', 'path'); ?>>path-style（/bucket/key）</option>
+                        <option value="virtual" <?php selected(isset($t['path_style']) ? $t['path_style'] : 'auto', 'virtual'); ?>>virtual-host（bucket.host/key）</option>
+                    </select>
+                </div>
             </td>
             <td><input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></td>
             <td><input type="text" name="<?php echo esc_attr($n); ?>[path_prefix]" value="<?php echo esc_attr(isset($t['path_prefix']) ? $t['path_prefix'] : ''); ?>" style="width:100%;" placeholder="（暂未使用）" /></td>
@@ -481,10 +502,14 @@ public function get_config() {
                                         var ep = tr.querySelector('.cfse-f-endpoint');
                                         var dir = tr.querySelector('.cfse-f-dir');
                                         var key = tr.querySelector('.cfse-f-key');
-                                        var isLocal = type && type.value === 'local';
+                                        var s3 = tr.querySelector('.cfse-f-s3');
+                                        var v = type ? type.value : 'cfse-worker';
+                                        var isLocal = (v === 'local');
+                                        var isS3 = (v === 's3');
                                         if (ep) ep.style.display = isLocal ? 'none' : '';
-                                        if (key) key.parentNode.style.display = isLocal ? 'none' : '';
+                                        if (key) key.parentNode.style.display = (isLocal || isS3) ? 'none' : '';
                                         if (dir) dir.style.display = isLocal ? '' : 'none';
+                                        if (s3) s3.style.display = isS3 ? '' : 'none';
                                       }
                                       function bind(tr){
                                         var type = tr.querySelector('.cfse-target-type');
@@ -500,8 +525,16 @@ public function get_config() {
                                         tmp.innerHTML = '<tr class="cfse-target-row">' +
                                           '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
                                           '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /><input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /></td>' +
-                                          '<td><select name="cf_hosting_targets[' + idx + '][type]" class="cfse-target-type" style="width:100%;"><option value="cfse-worker">cfse-worker（CF Worker）</option><option value="local">local（本地目录）</option></select></td>' +
-                                          '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" /></td>' +
+                                          '<td><select name="cf_hosting_targets[' + idx + '][type]" class="cfse-target-type" style="width:100%;"><option value="cfse-worker">cfse-worker（CF Worker）</option><option value="local">local（本地目录）</option><option value="s3">s3（S3 兼容对象存储）</option></select></td>' +
+                                          '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" />' +
+                                            '<div class="cfse-f-s3" style="margin-top:4px;display:none;">' +
+                                              '<input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:49%;" placeholder="bucket 名" />' +
+                                              '<input type="text" name="cf_hosting_targets[' + idx + '][region]" style="width:49%;" placeholder="region（R2 填 auto）" value="auto" />' +
+                                              '<input type="text" name="cf_hosting_targets[' + idx + '][access_key]" style="width:100%;margin-top:2px;" placeholder="Access Key（R2 为 32 位）" />' +
+                                              '<input type="password" name="cf_hosting_targets[' + idx + '][secret_key]" style="width:100%;margin-top:2px;" placeholder="Secret Key" />' +
+                                              '<input type="text" name="cf_hosting_targets[' + idx + '][public_url]" style="width:100%;margin-top:2px;" placeholder="public_url：站点访问地址" />' +
+                                              '<select name="cf_hosting_targets[' + idx + '][path_style]" style="width:100%;margin-top:2px;"><option value="auto">寻址方式：自动</option><option value="path">path-style</option><option value="virtual">virtual-host</option></select>' +
+                                            '</div></td>' +
                                           '<td><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></td>' +
                                           '<td><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" /></td>' +
                                           '<td style="white-space:nowrap;font-size:12px;">' +
@@ -1627,7 +1660,7 @@ private function get_post_storage_path($post) {
             $type = isset($t['type']) ? (string) $t['type'] : 'cfse-worker';
             // 已实现的类型白名单：cfse-worker（Worker）/ local（本地目录）。
             // s3 等尚未实现的类型仍然跳过并 WARNING（避免静默失效）。
-            if (!in_array($type, array('cfse-worker', 'local'), true)) {
+            if (!in_array($type, array('cfse-worker', 'local', 's3'), true)) {
                 $this->log('托管目标 ' . (isset($t['id']) ? $t['id'] : '?') . ' 的类型 ' . $type . ' 尚未实现，已跳过', 'WARNING');
                 continue;
             }
@@ -2080,6 +2113,128 @@ private function get_post_storage_path($post) {
             $parts[] = $this->sigv4_uri_encode((string) $k, true) . '=' . $this->sigv4_uri_encode((string) $v, true);
         }
         return implode('&', $parts);
+    }
+
+    /** 从 target 解析 S3 连接参数 */
+    private function s3_creds($target) {
+        $endpoint = rtrim(isset($target['endpoint']) ? (string) $target['endpoint'] : '', '/');
+        $parts = $endpoint !== '' ? parse_url($endpoint) : array();
+        $host = isset($parts['host']) ? $parts['host'] : '';
+        if ($host !== '' && !empty($parts['port'])) $host .= ':' . $parts['port'];
+        return array(
+            'endpoint' => $endpoint,
+            'scheme' => !empty($parts['scheme']) ? $parts['scheme'] : 'https',
+            'host' => $host,
+            'bucket' => isset($target['bucket']) ? trim((string) $target['bucket'], '/') : '',
+            'region' => !empty($target['region']) ? (string) $target['region'] : 'auto',
+            'access_key' => isset($target['access_key']) ? (string) $target['access_key'] : '',
+            'secret_key' => isset($target['secret_key']) ? (string) $target['secret_key'] : '',
+            'path_style' => $this->s3_path_style($target, $host),
+            'path_prefix' => isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/') : '',
+            'public_url' => rtrim(isset($target['public_url']) ? (string) $target['public_url'] : '', '/'),
+        );
+    }
+
+    /**
+     * 寻址方式：auto（默认，按 endpoint 判断）/ path（/bucket/key）/ virtual（bucket.host/key）。
+     * auto 规则：R2 存储端点、localhost、IP、带端口的 ⇒ path-style；*.amazonaws.com ⇒ virtual-host；其它自定义域名 ⇒ virtual-host（AWS 惯例），可用显式值覆盖。
+     */
+    private function s3_path_style($target, $host) {
+        $mode = isset($target['path_style']) ? (string) $target['path_style'] : 'auto';
+        if ($mode === 'path') return true;
+        if ($mode === 'virtual') return false;
+        $h = strtolower((string) $host);
+        if ($h === '') return true;
+        if (strpos($h, 'r2.cloudflarestorage.com') !== false) return true;
+        if (strpos($h, 'amazonaws.com') !== false) return false;
+        if (strpos($h, 'localhost') !== false) return true;
+        if (preg_match('/^\d+\.\d+\.\d+\.\d+/', $h)) return true;
+        if (strpos($h, ':') !== false) return true;
+        return false;
+    }
+
+    /** S3 错误分类：把 HTTP+返回体归成可读的 code / hint（供 UI 直接提示） */
+    private function s3_classify($code, $text) {
+        $x = strtolower((string) $text);
+        if ($code >= 200 && $code < 300) return array('code' => 'ok', 'hint' => '连通且签名通过');
+        if ($code === 301 || $code === 307) return array('code' => 'wrong_region', 'hint' => '被重定向（region 或寻址方式不对；R2 请把 region 填 auto）');
+        if ($code === 401) return array('code' => 'unauthorized', 'hint' => '凭证被拒（401）：access_key 不存在或已失效。R2 对未知 AK 直接返回 401；AK 存在但 secret 不对通常是 403 SignatureDoesNotMatch');
+        if ($code === 403 && strpos($x, 'signaturedoesnotmatch') !== false) return array('code' => 'signature_mismatch', 'hint' => 'Access Key / Secret Key 不对，或 region 与实际不符');
+        if ($code === 403 && (strpos($x, 'accessdenied') !== false || strpos($x, 'forbidden') !== false)) return array('code' => 'access_denied', 'hint' => '凭证能通过签名但无权限（检查该 Key 对本 bucket 的权限；若只是不能列举，上传通常仍可用）');
+        if ($code === 403) return array('code' => 'forbidden', 'hint' => '被拒（403）：多为签名或权限问题，见 detail');
+        if ($code === 404 && strpos($x, 'nosuchbucket') !== false) return array('code' => 'no_such_bucket', 'hint' => 'bucket 名不对（或 region 不对）');
+        if ($code === 404) return array('code' => 'not_found', 'hint' => '对象不存在（读对象时正常；上传时出现说明 bucket/path_prefix 有问题）');
+        if ($code === 400 && strpos($x, 'authorizationheader') !== false) return array('code' => 'bad_auth_header', 'hint' => '签名头格式错误（endpoint 是否多带了路径？应只填域名）');
+        if ($code === 400 && strpos($x, 'invalidargument') !== false && (strpos($x, 'access key') !== false || strpos($x, 'credential') !== false)) {
+            return array('code' => 'bad_credential', 'hint' => 'access_key 格式不对（R2 的 S3 Access Key 为 32 位；请用 R2 → Manage API Tokens 里创建的「S3 凭证」，不要用 Global API Token）');
+        }
+        if ($code === 400 && strpos($x, 'region') !== false) return array('code' => 'wrong_region', 'hint' => 'region 不对（R2 一般填 auto）');
+        if ($code === 400) return array('code' => 'bad_request', 'hint' => '请求被拒（400）：可能是「寻址方式」不对，改成 path 或 virtual 再试');
+        if ($code === 501 || $code === 411) return array('code' => 'unsupported', 'hint' => '该存储不支持这个请求（HTTP ' . $code . '）');
+        return array('code' => 'http_' . $code, 'hint' => 'HTTP ' . $code . '，见 detail 里的返回体');
+    }
+
+    /**
+     * 对 s3 目标发一次签名请求（自动按 path_style 决定 bucket 放 host 还是路径）。
+     * @return array {ok, http, code, hint, detail}
+     */
+    private function s3_request($target, $method, $key = '', $query = array(), $body = '', $content_type = '') {
+        $c = $this->s3_creds($target);
+        if ($c['host'] === '') return array('ok' => false, 'http' => 0, 'code' => 'config', 'hint' => 'endpoint 未填写或不合法（应形如 https://<account>.r2.cloudflarestorage.com）', 'detail' => '');
+        if ($c['bucket'] === '') return array('ok' => false, 'http' => 0, 'code' => 'config', 'hint' => 'bucket 未填写', 'detail' => '');
+        if ($c['access_key'] === '' || $c['secret_key'] === '') return array('ok' => false, 'http' => 0, 'code' => 'config', 'hint' => 'access_key / secret_key 未填写', 'detail' => '');
+
+        $full_key = $c['path_prefix'] !== '' ? ($c['path_prefix'] . '/' . ltrim((string) $key, '/')) : ltrim((string) $key, '/');
+        $host = $c['path_style'] ? $c['host'] : ($c['bucket'] . '.' . $c['host']);
+        $path = $c['path_style']
+            ? ('/' . $c['bucket'] . ($full_key !== '' ? '/' . $full_key : ''))
+            : ('/' . $full_key);
+        $creds = array(
+            'access_key' => $c['access_key'], 'secret_key' => $c['secret_key'],
+            'region' => $c['region'], 'service' => 's3', 'host' => $host,
+        );
+        $signed = $this->sigv4_sign($creds, $method, $path, $query, $body);
+        $url = $c['scheme'] . '://' . $host . $this->sigv4_uri_encode($path, false)
+            . (!empty($query) ? ('?' . $this->sigv4_canonical_query($query)) : '');
+        $headers = array(
+            'Authorization' => $signed['authorization'],
+            'x-amz-date' => $signed['x-amz-date'],
+            'x-amz-content-sha256' => $signed['payload_hash'],
+        );
+        if ($content_type !== '') $headers['Content-Type'] = $content_type;
+        $resp = wp_remote_request($url, array(
+            'method' => $method, 'timeout' => 60, 'sslverify' => false, 'headers' => $headers, 'body' => $body,
+        ));
+        if (is_wp_error($resp)) {
+            $msg = $resp->get_error_message();
+            $is_timeout = (strpos($msg, 'timed out') !== false || strpos($msg, 'error 28') !== false);
+            return array(
+                'ok' => false, 'http' => 0,
+                'code' => $is_timeout ? 'timeout' : 'network',
+                'hint' => ($is_timeout ? '请求超时（检查 endpoint 与网络出口）：' : '网络不可达：') . $msg,
+                'detail' => '',
+            );
+        }
+        $code = (int) wp_remote_retrieve_response_code($resp);
+        $text = (string) wp_remote_retrieve_body($resp);
+        $cls = $this->s3_classify($code, $text);
+        return array(
+            'ok' => ($code >= 200 && $code < 300),
+            'http' => $code,
+            'code' => $cls['code'],
+            'hint' => $cls['hint'],
+            'detail' => mb_substr(preg_replace('/\s+/', ' ', $text), 0, 300),
+        );
+    }
+
+    /**
+     * S3 连通性 + 签名自检：ListObjectsV2（max-keys=1）
+     *   200 ⇒ 连通、签名、bucket、列举权限全对；
+     *   403 SignatureDoesNotMatch ⇒ 凭证/region 错；403 AccessDenied ⇒ 无列举权限（上传可能仍可用）；
+     *   404 NoSuchBucket ⇒ bucket 名错。
+     */
+    private function s3_test_connection($target) {
+        return $this->s3_request($target, 'GET', '', array('list-type' => '2', 'max-keys' => '1'));
     }
 
     /**
@@ -2928,26 +3083,43 @@ public function handle_deploy_worker() {
             $name = (isset($t['name']) && $t['name'] !== '') ? $t['name'] : (isset($t['id']) ? $t['id'] : '?');
             $type = isset($t['type']) ? $t['type'] : 'cfse-worker';
             if ($type === 'cfse-worker') {
+                // 用受保护接口（/style-list）测：这样 401 能明确指向「X-Auth-Key 不对」——
+                // /health 不需要认证，只能证明「能连通」，证明不了 Key。
                 $base = rtrim(isset($t['endpoint']) ? (string) $t['endpoint'] : '', '/');
-                if ($base === '') { $out[] = array('name' => $name, 'ok' => false, 'detail' => '未配置端点'); continue; }
-                $resp = wp_remote_get($base . '/health', array('timeout' => 10, 'sslverify' => false));
-                if (is_wp_error($resp)) { $out[] = array('name' => $name, 'ok' => false, 'detail' => '连通失败：' . $resp->get_error_message()); continue; }
+                if ($base === '') {
+                    $out[] = array('name' => $name, 'ok' => false, 'code' => 'config', 'detail' => '未配置端点', 'http' => 0);
+                    continue;
+                }
+                $resp = $this->worker_request($t, '/style-list', 'GET', null, 10);
+                if ($resp === null) {
+                    $out[] = array('name' => $name, 'ok' => false, 'code' => 'network', 'detail' => '网络不可达或连接失败（检查端点是否可以访问）', 'http' => 0);
+                    continue;
+                }
                 $code = (int) wp_remote_retrieve_response_code($resp);
-                $body = json_decode(wp_remote_retrieve_body($resp), true);
-                $out[] = array(
-                    'name' => $name, 'ok' => ($code === 200),
-                    'detail' => 'HTTP ' . $code . ($body ? ' ' . wp_json_encode($body) : ''),
-                );
+                if ($code === 200) {
+                    $out[] = array('name' => $name, 'ok' => true, 'code' => 'ok', 'detail' => '连通且 X-Auth-Key 通过', 'http' => $code);
+                } elseif ($code === 401 || $code === 403) {
+                    $out[] = array('name' => $name, 'ok' => false, 'code' => 'auth', 'detail' => 'X-Auth-Key 不对（HTTP ' . $code . '）', 'http' => $code);
+                } else {
+                    $out[] = array('name' => $name, 'ok' => false, 'code' => 'http_' . $code, 'detail' => 'HTTP ' . $code, 'http' => $code);
+                }
             } elseif ($type === 'local') {
                 $dir = $this->target_dir($t);
                 if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-                    $out[] = array('name' => $name, 'ok' => false, 'detail' => '目录不存在且无法创建：' . $dir);
+                    $out[] = array('name' => $name, 'ok' => false, 'code' => 'fs', 'detail' => '目录不存在且无法创建：' . $dir, 'http' => 0);
                     continue;
                 }
                 $w = is_writable($dir);
-                $out[] = array('name' => $name, 'ok' => $w, 'detail' => $dir . ($w ? '（可写）' : '（不可写）'));
+                $out[] = array('name' => $name, 'ok' => $w, 'code' => $w ? 'ok' : 'fs', 'detail' => $dir . ($w ? '（可写）' : '（不可写）'), 'http' => 0);
+            } elseif ($type === 's3') {
+                $r = $this->s3_test_connection($t);
+                $out[] = array(
+                    'name' => $name, 'ok' => $r['ok'], 'code' => $r['code'],
+                    'detail' => $r['hint'] . ($r['http'] ? ('（HTTP ' . $r['http'] . '）') : '') . ($r['detail'] !== '' ? (' — ' . $r['detail']) : ''),
+                    'http' => $r['http'],
+                );
             } else {
-                $out[] = array('name' => $name, 'ok' => false, 'detail' => '类型 ' . $type . ' 尚未实现');
+                $out[] = array('name' => $name, 'ok' => false, 'code' => 'unimplemented', 'detail' => '类型 ' . $type . ' 尚未实现', 'http' => 0);
             }
         }
         wp_send_json_success(array('ok' => true, 'results' => $out));
