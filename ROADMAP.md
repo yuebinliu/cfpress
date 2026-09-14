@@ -1,7 +1,7 @@
 # CF Static Export Pro — 路线图 / 待办（ROADMAP）
 
 > 本文件只记「**还没做的事**」和「**未拍板的方案**」。已完成、已部署的架构与进度以 `AGENTS.md` 为准（那是权威交接文档）；演进叙事见 `EVOLUTION.md`。
-> 最后更新：2026-09-13
+> 最后更新：2026-09-14
 
 ---
 
@@ -48,6 +48,56 @@
 **下一步**：出「最小写入口」清单 —— md 直存（已有）+ 候选 1 防覆盖（1 个 SQL 条件 + 1 处跳过上传）+ Application Passwords / Token 认证 + 4 个端点（`GET/POST /wp/v2/posts`、`PUT|PATCH /wp/v2/posts/<id>`、`GET /wp/v2/categories|tags`、`POST /wp/v2/media`）+ 薄客户端最小形态。
 **可只做读**：先支持第三方工具"把站点当知识库读"（成本几乎为零），写入口之后再补。
 
+### A.1 最小写入口清单（2026-09-14 代码调研结论）
+
+**现状事实（已复核，带行号）**
+
+| 事实 | 位置 |
+|---|---|
+| **无任何 `/wp/v2/*` 兼容端点**（全仓无 `register_rest_route`） | `worker/src/routes.js` 分发表 `:70-470`；PHP 侧无命中 |
+| **无 Basic Auth / 应用密码**（只有 JWT + PBKDF2） | `worker/src/auth.js`：`verifyPassword :33`、`hashPassword :52`、`signJwt/verifyJwt :91/:103` |
+| md 直存 + 渲染出口**已具备**（本项无需新代码） | `admin.js:478-480`（`content_format`）、`src/md.js`（marked） |
+| 现有可复用写通道 | JWT 版 `/api/*`（`admin.js`）；X-Auth-Key 五接口（`/purge-cache :103`、`/style-list :123`、`builtin-sync :139`、`/d1-batch :159`、`/upload :193`、`/delete :196`，明文串比较）；媒体 `POST /api/media`（`admin.js:1509`，魔数校验 + R2 key 规则） |
+| **覆盖风险实存** | `cf-static-export-pro.php:1109-1124`：`INSERT OR REPLACE INTO posts …` 且 `content_format` 硬编码 `'html'`、`status` 硬编码 `'published'` |
+| 无审计表 / 无写幂等（仅 R2 上传有 md5 去重 `routes.js:609-627`） | 建表 `cf-static-export-pro.php:1077-1088`；`GET /api/audit` 是内容质检、非操作日志 |
+
+**落点：Worker 端（推荐）** —— 第三方编辑器在外网，内网 WP（`192.168.2.2`）不可达；且「md 文章的家在 Worker」与候选 1 语义一致（md 永不流经 WP）。内网 WP 端可后续按需补，共用同一契约。
+
+**端点契约（对第三方暴露 WP REST 形状，最小 4+1 个）**
+
+| 端点 | 语义 | 复用实现（不新写业务逻辑） |
+|---|---|---|
+| `GET /wp/v2/posts` | 列表（`page/per_page/status/search/categories/tags`） | `admin.js:700` 列表 SQL → 映射 WP 响应形状 |
+| `GET /wp/v2/posts/<id>` | 单篇（`content.rendered` 由 `mdToHtml` 出） | `admin.js:742` |
+| `POST /wp/v2/posts` | 新建（`title/content/status/slug/categories/tags/excerpt/date`） | `admin.js:757` + `buildPostPayload :475` |
+| `PUT\|PATCH /wp/v2/posts/<id>` | 更新 | `admin.js:791` |
+| `GET /wp/v2/categories\|tags` | 分类/标签 | `admin.js:1451` |
+| （媒体最小形态）`POST /wp/v2/media` | 上传图片 | 复用 `handleUpload :609` 或 `POST /api/media :1509` |
+
+**认证：Basic Auth（用户名 + 应用密码）** —— 第三方客户端只认这套
+- Worker 新增 `app_passwords(id, user_id, name, hash, created_at, last_used_at, revoked)`，哈希复用 `auth.js:52/33`（PBKDF2-SHA256）；
+- 生成入口：后台用户管理「生成应用密码」（明文一次性显示，可撤销）；
+- 中间件：`Authorization: Basic` → 校验 → 注入 `{uid, role}` 走现有权限判定；**不认 JWT**（第三方无 JWT 流程）。
+- 备选（不推荐）：WP Application Passwords（只有内网可达）、直接复用 JWT（第三方不认）。
+
+**防覆盖（候选 1，WP 侧 2 处改动）**
+1. 导出 SQL（`cf-static-export-pro.php:1109-1124`）改真 upsert：`ON CONFLICT(wp_id) DO UPDATE SET … WHERE posts.content_format != 'md'`；
+2. `do_export_post()`（`:581`）对 md 文章**跳过 R2 上传**（md 单页由 Worker `writeSinglePage()` 负责）。
+- 配套（已有共识）：编辑器对 `content_format='html'` 的文档给「本文档由 WP 托管」忠告，不上锁、不加列。
+
+**配套设施**
+- **限速（公网写入口必须有）**：按应用密码 id / IP 的内存滑窗，复用 `routes.js:34-47` `xauthRateAllowed()` 形态（0 KV）；
+- 审计：新表 `audit_log(ts,user_id,action,path,result)`，或最小档先 `console.log` 后置；
+- 幂等：`POST` 支持 `X-Idempotency-Key`（或 slug 二次唯一校验）—— 现状重复提交会新增一篇（`wp_id` 由 `Date.now()` 生成，`admin.js:771`）。
+
+**实施顺序（建议）**
+1. **档 0 只读**（成本近零）：`GET` 三端点 + Basic Auth 应用密码 —— 可立刻用于「把站点当知识库读」；
+2. **档 1 写**：`POST/PUT` + md 直存（已具备）+ 媒体；
+3. **档 2 防覆盖**：WP 两处改动 —— 这是「md 不被 WP 导出覆盖」的硬保证；
+4. **档 3 薄客户端**：Obsidian 插件 / 脚本最小形态。
+
+**未决（需拍板）**：① 落点（Worker / 内网 WP / 两端）；② 首批范围；③ 应用密码是否只给管理员角色。
+
 ---
 
 ## B. 单页 permalink 交给本项目自己驱动 —— ✅ **方案 A 已实现（2026-09-13）**，等你定目标结构后即可迁移
@@ -91,7 +141,7 @@
 ## C. 其它待办
 
 1. ✅ **已完成（2026-09-13，deploy `0925530a-64a3-4c4f-bcf7-c744faf1be9a`）**：在 `handleRequest` 统一入口加了「按来源 IP 的内存滑窗限速」（600 次/分钟，isolate 级 0 KV 成本；本地单测：同 IP 连打 605 次 → 允许 600/拒绝 5，换 IP 立即放行）。⚠️ **仍缺 IP 白名单**（未做，如需可后续补）。原描述：**四个 `X-Auth-Key` 写接口无限速**：`/upload`、`/delete`、`/purge-cache`、`/d1-batch`（`routes.js:157/160/67/123`）共用单一 `X-Auth-Key`，**只校验 key，无频率限制 / IP 白名单**。⚠️ 别混淆：**限速只覆盖了 Worker 后台** —— `/api/*` 写操作有每用户 90 次/分（内存滑窗，`admin.js:30-42`/`:560-562`）、登录有 IP 限速 60s/10 次（`auth.js:128-133`）；而上面这四个「插件→Worker」接口**不在**该分支内，**是敞开的**（key 泄漏即可无限写）。对外产品化时这条升级为必做。
-2. **「生成」与「上传」拆开**（用户构想）：目前 `save_post` 自动跑「生成 HTML → 上传 R2 → 写 D1」三件；希望拆成可分别触发，从而支持「WP 只写 D1、生成交给 Worker」的形态，也为将来独立的「WP 静态化插件（内置部署通道）」留接口。
+2. **「生成」与「上传」拆开**（用户构想）：目前 `save_post` 自动跑「生成 HTML → 上传 R2 → 写 D1」三件；希望拆成可分别触发，从而支持「WP 只写 D1、生成交给 Worker」的形态，也为将来独立的「WP 静态化插件（内置部署通道）」留接口。 —— **落地边界与改动点见 H 节。**
 3. **导出剩余耗时**：D1 写入已批量化、全量已并发（`tools/bulk-export-worker.php` + 设置页并发数），剩余是 WP 端渲染 + R2 上传的固定开销。
 4. **HTML 稳定化**：同一篇两次渲染的 HTML 差约 15B（疑为动态 id / 时间戳 / `?ver=` 类片段），导致「上传去重」（`cf-static-export-pro.php:963` 上传带 `md5`，Worker 命中回 `skipped`）对 HTML 不命中 → 每次导出都重复上传。
    ⚠️ **文档自相矛盾，待实测定论**：`AGENTS.md:98` 写的是「已核查：独立进程渲染确定，无需改造」，与本条（差 15B）冲突。定论方法：同一篇文章渲染两遍，`diff` 出那 15B 到底来自哪里。
@@ -169,10 +219,74 @@
 | 4 | **feed 静态化** | `/feed/` 现由 Worker 动态生成；纯静态档需静态 XML |
 | 5 | **搜索方案（待决策）** | `/?s=` 纯静态不可用 ⇒ 放弃，或上客户端索引（如 Pagefind） |
 | 6 | **媒体批量/增量同步** | 单张上传已有；补批量与"已存在则跳过" |
-| 7 | **X-Auth-Key 接口限速**（原 C.1） | ⚠️ **从"可选"升级为"对外必须"**：四个写接口共用单 key 且无限流，自用无碍，**给别人用就是敞开的门** |
+| 7 | ~~**X-Auth-Key 接口限速**（原 C.1）~~ | ✅ **已完成（2026-09-14，commit `e1041ba`）**：统一入口按来源 IP 内存滑窗 600 次/分（isolate 级、0 KV）。⚠️ 仍缺 **IP 白名单** |
+| **8** | **列表页抓取的 URL 改写与分页**（缺口 1 的实现细节） | 抓取路线现在只覆盖「单篇文章 URL」；纯静态档要**遍历分页**（首页/分类/标签/归档/分页）并把抓到页面里**指向原站/原结构的链接改写**为静态站形态 —— `normalize_source_hosts()` 只处理 host，分页链接与单页链接还需按 `storagePattern` 重写。这是纯静态档最实的一块工 |
+| **9** | **md 格式标识链路**（2026-09-14 实测新增，见 **G 节**） | WP 侧写入的 md 被导出端硬编码成 `html` ⇒ 线上单页/列表/feed 全是 md 原文。修法三处：①写入端写 post_meta ②导出读 meta（去掉 `content_format` 硬编码）③单页渲染认 md（`the_content` + Parsedown，或把单页生成交给 Worker） |
+| **10** | **单页写者冲突（防覆盖）** | 单页 R2 有**两个写者**（WP 导出链路 / Worker `writeSinglePage()`，均写同一 `storagePattern` key）。A 节候选 1 拿 `content_format='md'` 兼作「归属」标记，在「WP 侧也能产生 md」后会失效（自伤）⇒ 归属需单独表达（A 节候选 2 的 `origin` 列）。详见 **H 节第 3 点** |
 
 **产品线 1（Worker 纯 CMS）** —— 缺：① 一键初始化（建 D1 表 / 建管理员 / 绑 KV·R2 / 部署引导）；② **第三方编辑器写入口**（见 **A 节**：REST 写子集 + Application Passwords + md 直存 + 候选 1 防覆盖）—— 这正是"纯 CMS"该有的能力，之前单列成 A 节，这里回指；③ 空库可跑的验证（不能假设由 WP 喂数据）；④ 对外文档（安装/配置/部署/备份恢复）；⑤ ❓**是否多租户**（一个 Worker 服务多站点？若做 SaaS 架构完全不同，需先明确）。
 
 **产品线 3（风格生成）** —— 维持自用，无需完善。
 
 **排期建议**：`C.2 生成/上传拆开` → **列表页静态生成**（产品线 2 的真正大件）→ 多后端抽象与产品拆分。
+
+---
+
+## G. md 文章链路缺陷（2026-09-14 实测诊断，**未修**）
+
+**现象**：经 WP 侧写入的 md 文章，线上单页与列表摘要都是 **md 原文**（`## 标题`、代码块原样显示），不渲染。
+
+**实测证据（2026-09-14）**
+- D1（Cloudflare API 只读）：`content_format` 全表分布 **`html` 290 / `md` 3**；那 3 篇 md 的 `wp_id` 是 `Date.now()*100+rand` 形态（`178935742698156` 等）= **Worker 端新建**，渲染正常。
+- 测试文「测试MD」（WP `ID 1751`）在 D1 里曾是 **`content_format="html"`**（WP 来源一律被写成 html）；其线上单页 `/%e6%b5%8b%e8%af%95md/`（35650B，带 `postid-1751`、无 `{{}}` 残留 ⇒ 由 WP `generate_post_html()` 生成）里 `<h2>` 计数 **0**、正文出现原始 `## 方法1：查看实时连接状态`；首页同篇摘要 = md 原文被压平成一段 `<p>…`。
+- **来源区分特征**：WP 来源 = WP 自增 `wp_id`（1751…）；Worker 来源 = `Date.now()*100+rand`。两者在 D1 同表混存，**没有显式来源列**（正是 A 节候选 2 「`origin` 列」要解决的）。
+
+**病灶链**
+```
+tool/index.php「MD」模式（md 原文直塞 post_content，WP 侧无任何格式标记）
+  → save_post 自动导出
+     ├ generate_post_html()：主题模板直接吐 post_content → R2 单页 = md 原文
+     └ write_to_d1()：INSERT OR REPLACE … content_format 硬编码 'html'（:1109-1111）→ D1 标成 html
+        → Worker 列表/feed 按 html 渲染（摘要=原文）；「重建全部单页」也会按 html 处理 ⇒ 会把原本正确的好页面弄坏
+```
+
+**关键验证（已做）**：`the_content` 过滤器**确实在渲染路径上** —— Twenty Ten 单页模板 `loop-single.php:37` 调 `the_content()`，一级渲染 `render_with_template()`（`:746-757`）就是 `load_template(single.php)`；二级降级 `fetch_from_frontend()` 抓 WP 前台同样过 `the_content`。⇒ **挂一个过滤器即可同时修好单页与 WP 前台显示**，不必逐处改模板。
+
+**候选修法（互斥，待拍板）**
+- **A′ 家在 WP（推荐，改动最小）**：① `tool/index.php` 的 MD 模式加一行 `update_post_meta($post_id,'_cfse_content_format','md')`；② 插件导出读该 meta（去掉 `content_format` 硬编码，`status` 一并改读真实状态）；③ 插件 `add_filter('the_content', …)`，**仅当该篇 meta=md** 时用 `Parsedown->text()`（`setSafeMode(true)`；服务器 `tool/Parsedown.php` 现成）⇒ 单页/WP 前台渲染正确 + D1 存 md 原文带标记 ⇒ 列表/feed/重建也正确。
+  边界：**只统一「格式与渲染」，不是双向同步** —— Worker 端改同一篇（同 wp_id），下次 WP 导出仍会覆盖（那是防覆盖，见 A 节候选 1）。遗留风险：在 WP 后台编辑器保存 md 文章会被 HTML 化（需实测/约定不进后台编辑器）。
+- **内容检测式（不推荐）**：`the_content` 上用正则判断「疑似 md」（他人建议方案）。风险：md 与 HTML 混写的文章会被整篇重渲染；且**不解决 D1 标记**（列表/feed/重建仍错）。
+- **B 家在 Worker**：`tool/index.php` 的 MD 模式改走 MD2HTML（或弃用），**WP 永不出 md**；md 只在 Worker 端新建（现有 3 篇 md 即此形态）。代价：放弃「md 原稿存在 WP、可在 WP 侧编辑」。
+
+**数据处理状态**
+- ✅ 「测试MD」（WP `1751`）**已删**（2026-09-14）：WP 库无、D1 无、线上单页 404、首页无残留 —— 走 `before_delete_post` → 插件 `delete_post()`（`:1323`）同步清 R2 + D1（含 `post_taxonomy` 与孤儿 `taxonomies`）。
+- ⏳ **D1 里仍有 10 篇 Worker 端测试文**（`wp_id > 1e11`，均 `status=published`、线上可见）：`test mad geshi` / `testfor MD` / `testtmd`（md）+ `打发发达发放安抚发放到` / `滚滚滚余余余` / `fdafafafafaf` / `eraahagag` / `dererar` / `tesertererere` / `测大地方`（html）—— 待定是否清理。
+- ⏳ 线上首页列表条目的作者链接残留未替换占位符 `href="{{SITE_URL}}/author/admin/"`（item 模板的 `{{SITE_URL}}` 未注入），独立处理。
+
+---
+
+## H. 「生成 / 上传」拆开的落地方案（2026-09-14 调研，细化 C.2）
+
+**现状：没有边界** —— `do_export_post()`（`:581`）把四步串在一个函数里：生成 `generate_post_html()`（`:600`）→ 上传 `upload_to_r2_via_worker()`（`:616`，路径 `get_post_storage_path()` `:612`）→ 写 D1 `write_to_d1()`（`:629`）→ 清缓存 `purge_page_caches()`（`:639`）。
+
+**⚠️ 更正：「调试模式」不是「仅生成」** —— `cf_debug_mode`（option；`CFSE_DEBUG_DIR = WP_CONTENT_DIR.'/cf-debug'`，`:31`）只在 `upload_to_r2_via_worker()` **内部**（`:950-954`）按 R2 相对路径镜像落一份副本，随后**继续上传** ⇒ 它是「上传前留档」。真正阻断上传的唯一条件是 `auth_key` 为空（`:959-962`，且会抛异常）。要做成「仅生成」，需在 `:612-623` 之间插一个分支（改动很小）。
+
+**可拆的边界（按依赖划分）**
+
+| 段 | 函数 | 依赖 | 能否独立 |
+|---|---|---|---|
+| 生成 | `generate_post_html()` `:700` → `render_with_template()` `:721` / `fetch_from_frontend()` `:778` | 强绑 WP 运行时（篡改 `$wp_query/$post/$more`、`load_template`、HTTP 回环到自身站点） | ❌ |
+| 上传 | `upload_to_r2_via_worker()` `:948` | 仅 `site_url` / `auth_key` / `debug_mode` | ✅ 干净边界 |
+| 写索引 | `write_to_d1()` `:1101` → `d1_batch()` `:1226` | 仅 config（降级直连 CF API） | ✅ |
+| 删除 | `delete_from_r2()` `:1357` | 仅 config | ✅ |
+| 清缓存 | `purge_page_caches()` `:685` | 仅 config | ✅ |
+
+⇒ **「托管后端适配层」要抽象的正是这四个动作**：`/upload`、`/delete`、`/d1-batch`、`/purge-cache`（+ 可选 `/style-list`）。契约 = 路径 + 字节 + 认证头（见 F.1）。出网调用点全清单：`/purge-cache` `:685`/`:1309`、`/upload` `:957`、`/d1-batch` `:1230`、`/delete` `:1361`、`/style-list` `:1407`/`:1423`、CF `api.cloudflare.com` 兜底 `:1178`/`:1205`。
+
+**拆分带来的三个直接收益**
+1. **纯静态档**（F.2 缺口 1、2）：生成 → 落盘（`fetch_from_frontend()` 抓 WP 前台真实输出），上传另起一步；后台按钮拆成「抓取/生成到本地」与「上传到远端」。
+2. **多托管目标**（F.2 缺口 3）：换后端 = 换 URL + Key + 认证方式（含「有无 D1」能力标记）。
+3. **md 单页由谁渲染**（G 节第 ③ 项的替代解）：单页 R2 有**两个写者** —— WP 端导出链路 与 Worker 端 `writeSinglePage()`（`worker/src/admin.js:436`，仅 `/api/posts` POST/PUT/rebuild/batch publish 触发），两者写**同一个 key**（同一 `storagePattern`），谁后写谁覆盖 ⇒ 这正是「防覆盖」的核心矛盾。**md 单页若交给 Worker 生成**（D1 里 md 原文 + `marked` 已就绪，`admin.js:421`），G 节第 ③ 项不必做；留在 WP 生成才需要 ③。
+
+**建议顺序**：拆边界（机械重构、不改行为）→ 加「仅生成」分支 + 多目标配置 → 定 md 单页生成归属（与 G 节 ③ 二选一）。
+
