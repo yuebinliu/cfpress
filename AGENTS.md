@@ -149,6 +149,15 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **修复**：改回 `CFSE_WORKER_ID_MIN`（一处）。**验证**：重新导出 1789/1801 → `do_export_post=true`、D1 出现 `content_format=md` 行、单页 200、首页列表可见；回归窗口（当日 09:00 后修改）核对 = 2 篇、`D1 缺行 0`，且 **D1 297 行 = WP 已发布 297 篇**（完全对齐）。
   - **教训**：① 类内引用这个插件的常量（`CFSE_LOCAL_DIR`/`CFSE_WORKER_DIR`/`CFSE_WORKER_ID_MIN` 等）**都是全局常量，不要加 `self::`**；② 导出是 **R2 → D1 两段**，**R2 成功 ≠ 导出成功** —— 判断是否生效看「日志尾部有无 ERROR」+「D1 是否有行」；③ 动过导出 SQL 这类拼接后，必须在服务器上跑一次真实导出（本次用 probe 调 `do_export_post`）再收工。
 - **待定（既有问题，非本轮引入，未修）**：`?_cfse_internal=1` 的抓取请求会让插件 `__construct()` 早退 ⇒ `init_hooks()` 不执行 ⇒ `render_md_content` 未挂载 ⇒ **「前台抓取」路径产出的 md 单页里 md 未渲染**（`### ` 原样落在 `<p>` 里）。因 `load-once` 限制，**批量导出时每进程从第 2 篇起都会走抓取路径**，影响面不小；内部模板渲染路径、以及直接访问前台都是正常的（实测 `?p=1801`：`## `=0、`**`=0、`<strong>`=4）。修法（一行）：早退分支里补挂 `add_filter('the_content', array($this, 'render_md_content'), 9);`；修完需重建受影响的单页（Worker 侧 `marked` 渲染）。
+- **批YY（发布行为开关 + 草稿同步 + 删除优化，2026-09-14，已同步验证）**：
+  - **① 发布行为三开关**（设置页新增「发布行为」行；`load_config`/`register_settings`/UI 三处同加）：`cf_auto_generate_single`（发布时自动生成单页到本地，默认关）、`cf_auto_publish_remote`（发布时自动上传到远端 R2+D1+清缓存，默认关）、`cf_sync_drafts`（草稿也同步到 D1，默认关）。**三项默认全关** ⇒ WP 侧保存文章不再动远端（对齐“静态托管可拆分”的远景：需要全静态的站点再勾选），要同步时用工作台「📦 内容发布」手动生成/发布。`export_post()` 由“只处理 publish”改为按状态+开关分派：publish → `export_post_by_switches($post,$gen,$pub)`（**只渲染一次**，按需落盘/上传）；draft → `sync_draft_to_d1()`。
+  - **② 草稿同步**：`sync_draft_to_d1()` 只写 D1（`status='draft'`：无 slug 时用占位 `draft-<ID>`），不生成单页、不上传 R2（`build_post_meta()` 的 `status` 也从硬编码 `published` 改为反映真实状态）。好在 Worker 后台看到/管理 WP 草稿。
+  - **③ 删除优化**（用户反馈：批量删除慢、本地单页不跟着删）：
+    - **本地产物立即删**（新增 `delete_local_artifact()`：unlink `CFSE_LOCAL_DIR/<storagePath>` + 向上清空目录）—— 之前完全漏了这一步，`cfse-static/` 会残留；
+    - **远端清理聚合到 `shutdown`**（`flush_pending_deletes()`）：批量删除时逐篇同步会变成 2×N 次公网请求（这就是后台卡顿的原因），聚合后整批只发 **2 次**（R2 一个 `/delete`（paths 数组）+ D1 一个批量）；
+    - auto-draft / 无固定链接（`?p=<ID>`）的文章跳过远端清理（它们本就没有单页）。
+  - **实测**（probe，逐场景）：开关默认值 false×3；全关 + publish → 跳过（D1 无行）；草稿 + `sync_drafts` → D1 `status=draft` 且无单页；两开关全开 → D1 `published` + R2 单页 200；只开生成 + 改标题 → 本地更新、D1 不变；只开上传 + 改标题 → D1 更新；删除 → 本地产物消失、Worker 单页 404（带随机 query 也 404 ⇒ 非 CDN 缓存）、D1 行消失；日志显示「批量删除远端清理完成：R2 2 个路径、D1 2 篇」（整批 2 次请求）。
+  - **注意**：三项默认全关后，**WP 侧发布文章不再自动同步** —— 若希望保持“WP 发布即上线”，请勾上「自动上传到远端」（需要本地单页再勾「自动生成单页」）。
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

@@ -181,6 +181,11 @@ class CF_Static_Export_Pro {
             'posts_per_page' => max(1, (int) get_option('cf_posts_per_page', 10)),
             // 编辑页是否自动比对 Worker 版本（默认关；打开后打开编辑页即查询，关则用面板里的「🔍 检查」按钮）
             'worker_auto_check' => (bool) get_option('cf_worker_auto_check', true),
+            // 发布行为开关（默认全关：WP 侧保存文章不动远端，内容交给 Worker/第三方编辑器管理；
+            // 需要「WP 全自动静态化」的站点再勾选）
+            'auto_generate_single' => (bool) get_option('cf_auto_generate_single', false),
+            'auto_publish_remote' => (bool) get_option('cf_auto_publish_remote', false),
+            'sync_drafts' => (bool) get_option('cf_sync_drafts', false),
         );
     }
 public function get_config() {
@@ -240,6 +245,9 @@ public function get_config() {
             // 列表每页文章数（默认取 WP「设置→阅读」的 posts_per_page，即 10）
             'cf_posts_per_page' => array('sanitize' => 'intval', 'default' => 10),
             'cf_worker_auto_check' => array('sanitize' => 'boolval', 'default' => true),
+            'cf_auto_generate_single' => array('sanitize' => 'boolval', 'default' => 0),
+            'cf_auto_publish_remote' => array('sanitize' => 'boolval', 'default' => 0),
+            'cf_sync_drafts' => array('sanitize' => 'boolval', 'default' => 0),
         );
         foreach ($fields as $key => $args) {
             register_setting('cf_static_export_pro', $key, $args);
@@ -337,6 +345,13 @@ public function get_config() {
                             <tr><th><label for="cf_export_concurrency">全量导出并发数</label></th>
                                 <td><input type="number" id="cf_export_concurrency" name="cf_export_concurrency" value="<?php echo esc_attr($this->config['export_concurrency']); ?>" style="width:100px" min="1" max="8" />
                                     <p class="description">「🔄 全量导出」时并行进程数（1~8，默认 4）。并发越高全量越快，同时占用更多服务器资源；设为 1 即逐篇串行。R2/D1 写入为幂等覆盖，并发安全。</p></td></tr>
+                            <tr><th>发布行为</th>
+                                <td>
+                                    <p class="description">控制「在 WP 侧保存 / 发布文章」时自动做什么。<b>三项默认都不勾</b> —— 此时 WP 侧保存文章<b>不会</b>动远端（内容由 Worker 后台或第三方编辑器如 Obsidian 管理），需要同步时用下方「📦 内容发布」卡手动生成/发布。要「WP 全自动静态化」的站点再勾选。</p>
+                                    <label><input type="checkbox" name="cf_auto_generate_single" value="1" <?php checked($this->config['auto_generate_single']); ?> /> 发布文章时自动<b>生成单页到本地</b>（写入 <code>cfse-static/</code>，只渲染落盘、不联网、不写 D1）</label><br/>
+                                    <label><input type="checkbox" name="cf_auto_publish_remote" value="1" <?php checked($this->config['auto_publish_remote']); ?> /> 发布文章时自动<b>上传到远端</b>（R2 单页 + D1 数据 + 清缓存）</label><br/>
+                                    <label><input type="checkbox" name="cf_sync_drafts" value="1" <?php checked($this->config['sync_drafts']); ?> /> <b>草稿也同步</b>到远端（只写 D1 的 <code>status=draft</code>，不生成单页、不上传 R2；便于在 Worker 后台看到草稿）</label>
+                                </td></tr>
                             <tr><th>高级选项</th>
                                 <td>
                                     <label><input type="checkbox" name="cf_clean_dynamic_scripts" value="1" <?php checked($this->config['clean_scripts']); ?> /> 移除动态脚本</label><br/>
@@ -597,12 +612,30 @@ private function get_post_storage_path($post) {
         if (wp_is_post_revision($post_id)) return;
         if (wp_is_post_autosave($post_id)) return;
         $post = get_post($post_id);
-        if (!$post || $post->post_status !== 'publish' || $post->post_type !== 'post') {
+        if (!$post || $post->post_type !== 'post') {
             $GLOBALS['cfse_in_export'] = false;
             return;
         }
         if (get_post_meta($post_id, '_cfse_probe', true) === '1') {
             $this->log("文章 {$post_id} 为外观探针文章，跳过导出", 'DEBUG');
+            $GLOBALS['cfse_in_export'] = false;
+            return;
+        }
+        // 发布行为开关（设置页「发布行为」）：默认全关 ⇒ WP 侧保存文章不动远端
+        $auto_gen = !empty($this->config['auto_generate_single']);
+        $auto_pub = !empty($this->config['auto_publish_remote']);
+        $sync_drafts = !empty($this->config['sync_drafts']);
+        if ($post->post_status === 'draft') {
+            if (!$sync_drafts && !$auto_pub) {
+                $this->log("文章 {$post_id} 为草稿，未开启「草稿也同步」，跳过", 'DEBUG');
+                $GLOBALS['cfse_in_export'] = false;
+                return;
+            }
+        } elseif ($post->post_status !== 'publish') {
+            $GLOBALS['cfse_in_export'] = false;
+            return;
+        } elseif (!$auto_gen && !$auto_pub) {
+            $this->log("文章 {$post_id} 未开启「自动生成单页 / 自动上传到远端」，跳过（可在设置页勾选，或用后台『📦 内容发布』手动导出）", 'DEBUG');
             $GLOBALS['cfse_in_export'] = false;
             return;
         }
@@ -621,7 +654,11 @@ private function get_post_storage_path($post) {
         try {
             $this->log("开始导出文章 {$post_id}: {$post->post_title}");
             $start_time = microtime(true);
-            $result = $this->do_export_post($post);
+            if ($post->post_status === 'draft') {
+                $result = $this->sync_draft_to_d1($post);
+            } else {
+                $result = $this->export_post_by_switches($post, $auto_gen, $auto_pub);
+            }
             $duration = round(microtime(true) - $start_time, 2);
             if ($result) {
                 $this->log("文章 {$post_id} 导出成功，耗时 {$duration}s", 'INFO');
@@ -671,7 +708,7 @@ private function get_post_storage_path($post) {
             'categories' => wp_json_encode($categories, JSON_UNESCAPED_UNICODE),
             'tags' => wp_json_encode($tags, JSON_UNESCAPED_UNICODE),
             'featured_image' => get_the_post_thumbnail_url($post->ID, 'full') ?: '',
-            'status' => 'published'
+            'status' => ($post->post_status === 'draft' ? 'draft' : 'published')
         );
 
         return array(
@@ -778,6 +815,32 @@ private function get_post_storage_path($post) {
         $this->purge_page_caches();
 
         return true;
+    }
+
+    /**
+     * 按设置页开关执行：生成到本地（可选）+ 上传到远端（可选）。只渲染一次 HTML。
+     */
+    private function export_post_by_switches($post, $do_generate, $do_publish) {
+        $artifact = $this->build_post_artifact($post);
+        if ($do_generate) $this->write_artifact_local($artifact);
+        if ($do_publish) return $this->publish_artifact($artifact);
+        return true;
+    }
+
+    /**
+     * 草稿同步：只写 D1（status=draft），不生成单页、不上传 R2。
+     * 用途：让 WP 侧的草稿在 Worker 后台也能看到/管理（前台列表只显示 published，不受影响）。
+     */
+    private function sync_draft_to_d1($post) {
+        $meta = $this->build_post_meta($post);
+        $meta['post_data']['status'] = 'draft';
+        if (empty($meta['post_data']['slug'])) {
+            $meta['post_data']['slug'] = 'draft-' . $post->ID;
+            $this->log("草稿 {$post->ID} 尚无 slug，使用占位 slug '{$meta['post_data']['slug']}'", 'DEBUG');
+        }
+        $ok = $this->write_to_d1($meta['post_data'], $meta['categories'], $meta['tags']);
+        $this->log("草稿 {$post->ID} 同步到 D1（status=draft）：" . ($ok ? '成功' : '失败'), $ok ? 'INFO' : 'ERROR');
+        return $ok;
     }
 
     /**
@@ -1695,22 +1758,86 @@ private function get_post_storage_path($post) {
         self::$deleted_post_ids[$post_id] = true;
         // get_post_storage_path() 已返回含 index.html 的完整文件路径
         $r2_path = $this->get_post_storage_path($post);
-        // R2：一次请求删除正文与 .gz（Worker /delete 支持 paths 数组）
-        $this->delete_from_r2(array($r2_path, $r2_path . '.gz'));
 
-        // 确保表结构存在后清理（防止表缺失时删除逻辑报错）
-        $this->ensure_d1_schema();
+        // auto-draft / 草稿等尚无固定链接的文章不会产出单页（路径会退化成 ?p=<ID>），
+        // 跳过远端清理，避免批量删除时发无谓请求
+        if ($post->post_status === 'auto-draft' || strpos($r2_path, '?') !== false) {
+            $this->log("文章 {$post_id}（{$post->post_status}）无固定链接/无单页，跳过远端清理", 'DEBUG');
+            return;
+        }
+
+        // ① 本地产物：立即删除（无网络，快）—— 之前漏了这一步，导致 cfse-static/ 里残留
+        $this->delete_local_artifact($r2_path);
+
+        // ② 远端清理（R2 + D1）：攒到请求结束一次性批量执行。
+        //    批量删除 20 篇时，逐篇同步会变成 40 次公网请求（这就是后台删除卡顿的原因）；聚合后只需 2 次。
+        self::$pending_delete_paths[] = $r2_path;
+        self::$pending_delete_paths[] = $r2_path . '.gz';
         // D1 里存的是「远端 wp_id」（Worker 端诞生的篇在 WP 侧是自增 ID，映射记在 meta）
         $d1_wp_id = $this->get_remote_wp_id($post_id);
         if (!$d1_wp_id) $d1_wp_id = $post_id;
-        // D1：三条清理语句一次批量提交
-        $this->d1_batch(array(
-            array('sql' => 'DELETE FROM post_taxonomy WHERE post_id = ?', 'params' => array($d1_wp_id)),
-            array('sql' => 'DELETE FROM posts WHERE wp_id = ?', 'params' => array($d1_wp_id)),
-            array('sql' => 'DELETE FROM taxonomies WHERE slug NOT IN (SELECT DISTINCT taxonomy_slug FROM post_taxonomy)', 'params' => array()),
-        ));
+        self::$pending_delete_ids[] = $d1_wp_id;
+        if (!self::$pending_deletes_registered) {
+            self::$pending_deletes_registered = true;
+            add_action('shutdown', array($this, 'flush_pending_deletes'), 5);
+        }
 
-        $this->log("文章 {$post_id} 已删除", 'INFO');
+        $this->log("文章 {$post_id} 已删除（本地产物已清；远端清理将在本次请求结束时批量执行）", 'INFO');
+    }
+
+    /** 待清理的远端条目（请求结束时一次性批量提交，避免批量删除时逐篇等待 Worker） */
+    private static $pending_delete_paths = array();
+    private static $pending_delete_ids = array();
+    private static $pending_deletes_registered = false;
+
+    /**
+     * 删除本地产物（CFSE_LOCAL_DIR 下与 R2 key 同构的路径）并顺带清掉产生的空目录。
+     */
+    private function delete_local_artifact($r2_path) {
+        $local = CFSE_LOCAL_DIR . '/' . ltrim($r2_path, '/');
+        if (file_exists($local)) {
+            if (@unlink($local)) {
+                $this->log("本地产物已删除: {$local}", 'DEBUG');
+            } else {
+                $this->log("本地产物删除失败: {$local}", 'WARNING');
+            }
+        }
+        // 向上清空目录（最多 4 层：年月/slug 等），非空即停
+        $dir = dirname($local);
+        for ($i = 0; $i < 4; $i++) {
+            if (rtrim($dir, '/\\') === rtrim(CFSE_LOCAL_DIR, '/\\') || !is_dir($dir)) break;
+            $items = @scandir($dir);
+            if ($entries = is_array($items) ? array_diff($items, array('.', '..')) : array()) break;
+            if (!@rmdir($dir)) break;
+            $dir = dirname($dir);
+        }
+    }
+
+    /**
+     * 请求结束（shutdown）时一次性提交远端清理：R2 一个请求（paths 数组）+ D1 一个批量请求。
+     */
+    public function flush_pending_deletes() {
+        if (empty(self::$pending_delete_paths) && empty(self::$pending_delete_ids)) return;
+        $paths = array_values(array_unique(array_filter(self::$pending_delete_paths)));
+        $ids = array_values(array_unique(array_filter(self::$pending_delete_ids)));
+        self::$pending_delete_paths = array();
+        self::$pending_delete_ids = array();
+        try {
+            if (!empty($paths)) $this->delete_from_r2($paths);
+            if (!empty($ids)) {
+                $this->ensure_d1_schema();
+                $stmts = array();
+                foreach ($ids as $id) {
+                    $stmts[] = array('sql' => 'DELETE FROM post_taxonomy WHERE post_id = ?', 'params' => array($id));
+                    $stmts[] = array('sql' => 'DELETE FROM posts WHERE wp_id = ?', 'params' => array($id));
+                }
+                $stmts[] = array('sql' => 'DELETE FROM taxonomies WHERE slug NOT IN (SELECT DISTINCT taxonomy_slug FROM post_taxonomy)', 'params' => array());
+                $this->d1_batch($stmts);
+            }
+            $this->log('批量删除远端清理完成：R2 ' . count($paths) . ' 个路径、D1 ' . count($ids) . ' 篇', 'INFO');
+        } catch (Throwable $e) {
+            $this->log('批量删除远端清理异常：' . $e->getMessage(), 'ERROR');
+        }
     }
 
     /**
