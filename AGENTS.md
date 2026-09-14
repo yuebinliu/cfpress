@@ -84,6 +84,17 @@
 > **验证方式**：`curl -s https://doc.yuebin.uk/ | grep -c "{{"` ⇒ 应为 **0**（列表页由 Worker 渲染，需 `npm run deploy` 后才生效）。
 > **✅ 已部署验证（Version `b6796465-01c1-4b91-b0eb-2830249ccf10`）**：首页 / `category/life-feeling` / `tag/wordpress` / `aboutme` 的 `{{` 计数**全部为 0**，作者链接正确渲染为 `https://doc.yuebin.uk/author/admin/`，单页 HTTP 200。
 >
+> **📌 `worker/src/templates.js` 的现状（2026-09-14 核实，只标注不删除）**
+> 该文件由两部分组成，**待遇完全不同**：
+> - **内嵌的默认模板字符串**（8 处 `const pageTpl/itemTpl = "…"`，占 162KB 的绝大部分）—— **基本已弃用，可以忽视**。
+>   运行时模板来自 `tpl:active`（KV，由「应用风格」写入）或内置风格包的 `tpl.json`；渲染函数用 `options.pageTpl` / `options.itemTpl` 接收它们。
+>   内嵌字符串只剩"两者都缺失"时的最后兜底 ⇒ **查模板内容请以 `tpl.json` / `tpl:active` 为准**。
+> - **渲染函数**（`renderHomepage` / `renderCategoryPage` / `renderTagPage` / `renderArchivePage` / `CFSE_SINGLE_TPL` /
+>   `cfseRenderItem` / `cfsePostUrl` / `cfseIfBlock` / `cfseReplace` / `cfseSidebar*`）—— **不可删，仍是运行时核心**：
+>   `worker/src/routes.js:14` 与 `worker/src/admin.js:8` 都 `import … from './templates'`；列表页 / 归档页 / 后台预览都走它们。
+>   （本次 `{{SITE_URL}}` 残留的修复正是改在 `cfseRenderItem`，所以那些改动必须保留。）
+> ⇒ **结论**：文件保留；改渲染函数按上面"生成端与产物必须同步改"的规矩办；只有内嵌模板部分可以不当回事。
+>
 > **下一步（压缩后）**
 > 1. 排查上面的设置页布局问题；
 > 2. 等用户填**有效 R2 S3 凭证**跑真机 s3 上传/删除（测试连通性 → 保存一篇 → 看日志的公开地址 → 访问确认）；
