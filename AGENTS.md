@@ -61,6 +61,17 @@
 >
 > **托管目标模板化设计基线**：`docs/hosting-templates.md` —— 模板按 **provider** 分（不按能力组合）、能力在模板上限内**自由开关**、意图显式 + 三层校验（UI 可选性 / 保存警告 / 运行期日志）；分阶段实施（先 target/模板层，旧 CF option 暂留作默认模板取数来源；保住 `site_url`/`auth_key` 派生链）。**状态：设计文档，未实施。**
 >
+> **✅ 阶段一（托管目标模板化）已完成（2026-09-14，提交 `b518f78` → `7f7b40d`）**
+> 设计基线与验收标准：`docs/hosting-templates.md`（模板按 provider 分 / 能力在模板上限内**自由开关** / 意图显式 / 三层校验 / `transport` 判定 provider）。
+> 已落地：
+> - ① `get_hosting_templates()`（`cloudflare`/`s3`/`local`，含 `transport` + `legacy_type`；只读内置）
+> - ② `get_hosting_targets()` 兼容读（`template` 优先 → 旧 `type` 按 `legacy_type` 反查 → 冲突以 template 为准且**静默**；能力归一 §12.7；兜底优先级 **显式 > 列表 > 兜底**）
+> - ③ 设置页：**模板下拉** + 能力（含 `render`，模板不支持的置灰）+ 意图多选 + **字段联动** + **行内警告**（含修复按钮）+ 保存重算 `type` 并**回显**（`$adjustments`）
+> - ④ `validate_hosting_targets()`（**意图驱动**：纯静态只勾 r2 **不警告**）+ `normalize_intent()`（兼容表单键映射 `['md'=>'1']` 与列表 `['md']` 两种格式 —— 曾因混用导致意图被清空，务必保留该函数）
+> - ⑤ 迁移完成：快照 `cfse_targets_backup`（可回滚）；`w1`→`cloudflare`/意图 `md+static-list`；`s3t`→`s3`/意图 `static-only`
+> 验收：**A1/A2/A3/A4 四条硬门禁全过** + 全链路导出（文章 1633：内部模板渲染 67KB、`{"s3t":false,"w1":true}`、`D1 批量执行 N 条（Worker）`）✓
+> **待用户人工核对**：B7② 的 JS 字段联动（11 项清单在 `docs/hosting-templates.md`，重点含「**动态新增行的初始显隐**」）。
+>
 > **下一步（压缩后）**
 > 1. 排查上面的设置页布局问题；
 > 2. 等用户填**有效 R2 S3 凭证**跑真机 s3 上传/删除（测试连通性 → 保存一篇 → 看日志的公开地址 → 访问确认）；
