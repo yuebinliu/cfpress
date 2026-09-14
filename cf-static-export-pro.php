@@ -117,6 +117,9 @@ class CF_Static_Export_Pro {
 		add_action('admin_menu', array($this, 'add_admin_menu'));
 		add_action('admin_init', array($this, 'register_settings'));
 		add_action('save_post', array($this, 'export_post'), 10, 3);
+		add_action('add_meta_boxes', array($this, 'add_doc_format_metabox'));
+		// 优先级 5：必须早于导出钩子（save_post 优先级 10），否则本次导出读到的是旧标记
+		add_action('save_post', array($this, 'save_doc_format_meta'), 5, 3);
 		add_filter('the_content', array($this, 'render_md_content'), 9);
 		add_action('before_delete_post', array($this, 'delete_post'));
 		add_action('trash_post', array($this, 'delete_post'));
@@ -790,6 +793,41 @@ private function get_post_storage_path($post) {
     // ============================================
     // Markdown 渲染（md 文章；与 Worker 端 marked 对齐）
     // ============================================
+    // ============================================
+    // 文章编辑页「📝 文档格式」面板（Markdown 原稿标记）
+    // ============================================
+    public function add_doc_format_metabox() {
+        add_meta_box('cfse_doc_format', '📝 文档格式', array($this, 'render_doc_format_metabox'), 'post', 'side', 'high');
+    }
+
+    public function render_doc_format_metabox($post) {
+        $is_md = ($this->get_content_format($post->ID) === 'md');
+        wp_nonce_field('cfse_doc_format_save', 'cfse_doc_format_nonce');
+        echo '<label><input type="checkbox" name="cfse_content_format_md" value="1" ' . checked($is_md, true, false) . ' /> 本文档是 Markdown 原稿</label>';
+        echo '<p class="description" style="margin-top:6px;">勾选后导出时写入 <code>content_format=md</code>：静态站的列表 / feed 用 marked 渲染、单页用 Parsedown 渲染（与 WP 前台一致）。</p>';
+        echo '<p class="description" style="color:#b32d2e;"><strong>注意</strong>：md 原稿请用编辑器的「文本」标签页粘贴/编辑 —— 「可视」模式保存会重排正文。</p>';
+    }
+
+    /**
+     * 保存「文档格式」标记。
+     * 优先级 5：必须早于导出钩子（save_post 优先级 10），否则本次自动导出读到的还是旧标记。
+     * 无本面板 nonce / 无权限时直接返回 —— tool/index.php 发布、快速编辑、REST 保存都不带这个 nonce，
+     * 因此不会误删由其它途径写入的 content_format 标记。
+     */
+    public function save_doc_format_meta($post_id, $post = null, $update = null) {
+        if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+        if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) return;
+        if (!isset($_POST['cfse_doc_format_nonce']) || !wp_verify_nonce($_POST['cfse_doc_format_nonce'], 'cfse_doc_format_save')) return;
+        if (!$post) $post = get_post($post_id);
+        if (!$post || $post->post_type !== 'post') return;
+        if (!current_user_can('edit_post', $post_id)) return;
+        if (!empty($_POST['cfse_content_format_md'])) {
+            update_post_meta($post_id, 'content_format', 'md');
+        } else {
+            delete_post_meta($post_id, 'content_format');
+        }
+    }
+
     /**
      * 读取文章内容格式，返回值只有 'md' / 'html'。
      * 优先可见字段 content_format（与 D1 posts.content_format 同名；WP 后台编辑页的「自定义字段」
