@@ -60,6 +60,20 @@
 
 > 一句话：**模板定义 provider 的能力上限；走哪条路线由用户在模板上限内选。**
 
+**判定"是不是同一个 provider"的三要素**：**写入机制（`transport`）** + **字段集** + **能力上限**。
+三者都相同才算同一个 provider —— **能力相同 ≠ provider 相同**：
+
+| provider | 写入机制 |
+|---|---|
+| `cloudflare` | Worker HTTP 接口（`/upload`、`/d1-batch`、purge）|
+| `s3` | HTTP PUT 对象存储（SigV4）|
+| `local` | 写文件系统（`file_put_contents`）|
+| `github`（预留）| **git commit + push**，再经 CI 部署 |
+
+GitHub Pages 与服务端能力**看起来**都只需 `r2`（写静态文件），但写入机制与字段集完全不同 ⇒
+**它是独立 provider，不能由 `local` / `s3` 承担**。用 `local` 承担时实际发生的是"生成到本地再手工推"，
+那是另一回事，却在 UI 上表现为"已发布" —— 属于**静默语义错位**，与问题 P2 同类。
+
 ### 2.3 能力：上限 vs 选用（**不设"只能关不能开"**）
 
 早期草案曾提出"target 只能降级、不能升级"，**该限制已废弃** —— 它把"provider 上限"误当成"站点约束"。
@@ -78,6 +92,7 @@
 {
   "id": "cloudflare",                     // 模板标识（= provider）
   "name": "Cloudflare（Worker + R2 + D1）",
+  "transport": "worker-api",              // 写入机制：worker-api | fs | s3 | git（provider 三要素之一）
   "capabilities": {                       // 能力**上限**：这台 provider 最多能做到什么
     "r2": true,                           // 存静态文件（R2 / 任意对象存储）
     "d1": true,                           // 写结构化数据（文章入库，供列表页/后台读取）
@@ -95,11 +110,15 @@
 
 内置模板（首批）：
 
-| id | 能力上限 | 可承接的意图 | 需要的站点字段 |
-|---|---|---|---|
-| `cloudflare` | `r2 d1 render cache` | 全部（md / static-list / static-only / backup）| `endpoint` `auth_key` `path_prefix` `public_url`（可选）|
-| `s3` | `r2` | `static-only` `backup` | `endpoint` `bucket` `region` `access_key` `secret_key` `path_style` `path_prefix` `public_url` |
-| `local` | `r2` | `static-only` `backup` | `dir` `path_prefix` `public_url`（可选）|
+| id | transport | 能力上限 | 可承接的意图 | 需要的站点字段 |
+|---|---|---|---|---|
+| `cloudflare` | `worker-api` | `r2 d1 render cache` | 全部（md / static-list / static-only / backup）| `endpoint` `auth_key` `path_prefix` `public_url`（可选）|
+| `s3` | `s3` | `r2` | `static-only` `backup` | `endpoint` `bucket` `region` `access_key` `secret_key` `path_style` `path_prefix` `public_url` |
+| `local` | `fs` | `r2` | `static-only` `backup` | `dir` `path_prefix` `public_url`（可选）|
+| `github`（**预留，暂未实现**）| `git` | `r2` | `static-only`（若实现）| `repo` `branch` `credentials`（deploy key 或 PAT）|
+
+> **`github` 仅为预留记录**：写入形态是 push 到 Git 仓库 + CI 部署，与 `local` / `s3` 都不同，**不实现时不要用它冒充**。
+> 若暂不实现，UI 上就**不出现**该 provider，文档如实写明"该场景需用户手工推" —— 不用 `local` / `s3` 顶替，避免"生成到本地"被误解为"已发布"。
 
 > `s3` / `local` **没有 `d1` / `render` / `cache`** ⇒ "服务 md"路线在 UI 上**不出现**（不是警告，是不可选）。
 
@@ -223,8 +242,13 @@
 
 ## 10. 开放问题（实施前需拍板）
 
-1. **发布到 GitHub 归哪类？** 它看起来是"静态文件落点"的另一种形式（`local` + 手动 push 即可满足），
-   是否需要独立的 provider 模板，还是归入 `static-only` 路线由既有 `local` / `s3` 承担？
+1. ~~发布到 GitHub 归入 `static-only`、由 `local` / `s3` 承担~~ —— **已否决**（理由见 §2.2 判定标准：能力相同 ≠ provider 相同）。
+   **结论：GitHub Pages 是独立 provider（`transport: git`），文档中记为"预留，暂未实现"。**
+   将来若实现，两条候选路径待选：
+   - **本地 git push**：需要服务器有 git + 认证（deploy key 或 PAT），并做增量提交（只 commit 变化文件）；
+   - **GitHub Contents / Trees API**：无需本地 git，走 HTTP；但**必须批量提交**（Trees API 一次 commit 提交多文件），
+     逐文件 PUT 会在全量重建时撞 API 速率限制（292 篇 × 2 文件 ≈ 584 次请求）。
+   **在实现之前，本场景保持"用户手工推"**，不提供替代 provider。
 2. **`cache` 能力的实际动作**目前只有"清 KV"（`cache` 对应 `purge`），是否需要扩展定义（例如 CDN 缓存刷新）。
 3. **模板是否允许用户自定义 / 新增**（首批只内置 3 个），还是定位为"只读内置"。
 4. **凭证不再明文回显**：`api_token` / `secret_key` 目前明文存 `wp_options` 且设置页 GET 明文回显；
