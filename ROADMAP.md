@@ -98,6 +98,9 @@
 
 **未决（需拍板）**：① 落点（Worker / 内网 WP / 两端）；② 首批范围；③ 应用密码是否只给管理员角色。
 
+- **待定（既有，未修）**：`?_cfse_internal=1` 抓取请求使插件 `__construct()` 早退 ⇒ `the_content` 的 md 渲染钩子未挂 ⇒ **「前台抓取」路径产出的单页里 md 未渲染**（批量导出时每进程第 2 篇起都走该路径）。修法一行，见 AGENTS.md「批WW」待定项。
+
+
 **✅ 已实现（UU 批，2026-09-14）**：档 0+1+2 全部落地 —— `/wp-json/wp/v2/*`（与 `/wp/v2/*`）的 posts CRUD / categories / tags / users/me / types / taxonomies；Basic Auth（用户名 + 应用密码，也接受账号密码）＋ `app_passwords` 表与后台「🔑 应用密码」UI；WP 侧防覆盖（导出改真 upsert 且 `WHERE posts.wp_id < CFSE_WORKER_ID_MIN`＋`publish_artifact()` 对 Worker 托管文章跳过后半段）。**归属仍用 wp_id 形态**（未加 `origin` 列）。媒体上传（贴图）按用户指示暂缓。详见 AGENTS.md「UU 批」。
 
 

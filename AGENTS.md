@@ -143,6 +143,12 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **实测（curl 端到端）**：应用密码 200 / 账号密码兜底 200 / 无认证与错误密码 401；`POST posts`（md）201 → 单页 200，且 `<h2>/<strong>/<li>` 与 `content.raw` 的 `## ` 证明 **md 渲染 + 原稿保存**都正确；PATCH 改标题 → 单页重建为新标题；转草稿 → 单页 404；DELETE → 单页 404；`categories/tags/types` 200；列表带 `X-WP-Total` 正常、WP 导出的文章与 Worker 端文章都可见；中文搜索 200；WP 侧 `is_worker_owned_post()`：WP 原生文章 false、拉取来的 true；导出 SQL/DDL 含保护 ✓；测试数据已清空（`app_passwords` 0 行、测试文章 0 篇）。
   - **坑**：① **`UID` 是 bash 只读内建变量** —— 验证脚本里 `UID=...` 会静默失败成系统 UID（当时应用密码写到了 `user_id=197609`，认证查 `user_id=1` 必然 401；换 `MYID` 即好）；② Windows 下 `node -e` 的中文字面量会按 GBK 解析 ⇒ 用 `\uXXXX` 转义或从文件读、或用 hex 验证（`e68993` = 「打」）；③ 应用密码哈希别用 PBKDF2（CPU 预算）。
   - **未做（有意冻结）**：`POST /wp/v2/media`（贴图）—— 先通文字/分类链路，按用户指示后补；`/wp/v2/pages`、评论等其余 WP 端点不在范围。
+- **批WW（回归修复：WP 后台发布 md 文章未同步到 Worker，2026-09-14，已修复并验证）**：
+  - **症状**：UU 批（第三方写入口）同步后，WP 后台发布 md 文章 → 后台显示发布成功，但 **Worker 端/D1 里没有这一篇**。
+  - **根因（UU 批引入的回归）**：把导出 SQL 从 `INSERT OR REPLACE` 改真 upsert 时，把**全局常量** `CFSE_WORKER_ID_MIN`（`:37` 的 `define(...)`）误写成 **`self::CFSE_WORKER_ID_MIN`** ⇒ 每篇导出都在**「写 D1」这一步**抛 `Error: Undefined constant CF_Static_Export_Pro::CFSE_WORKER_ID_MIN` ⇒ **R2 单页已上传、D1 一行未写**（“半成功”形态；日志里是一条 `[ERROR] 文章 N 导出异常: Undefined constant ...`，紧随 `Worker 上传成功` 之后）。含 2026-09-14 10:10（1789 卧槽）、10:15（1801 测试2）两篇。
+  - **修复**：改回 `CFSE_WORKER_ID_MIN`（一处）。**验证**：重新导出 1789/1801 → `do_export_post=true`、D1 出现 `content_format=md` 行、单页 200、首页列表可见；回归窗口（当日 09:00 后修改）核对 = 2 篇、`D1 缺行 0`，且 **D1 297 行 = WP 已发布 297 篇**（完全对齐）。
+  - **教训**：① 类内引用这个插件的常量（`CFSE_LOCAL_DIR`/`CFSE_WORKER_DIR`/`CFSE_WORKER_ID_MIN` 等）**都是全局常量，不要加 `self::`**；② 导出是 **R2 → D1 两段**，**R2 成功 ≠ 导出成功** —— 判断是否生效看「日志尾部有无 ERROR」+「D1 是否有行」；③ 动过导出 SQL 这类拼接后，必须在服务器上跑一次真实导出（本次用 probe 调 `do_export_post`）再收工。
+- **待定（既有问题，非本轮引入，未修）**：`?_cfse_internal=1` 的抓取请求会让插件 `__construct()` 早退 ⇒ `init_hooks()` 不执行 ⇒ `render_md_content` 未挂载 ⇒ **「前台抓取」路径产出的 md 单页里 md 未渲染**（`### ` 原样落在 `<p>` 里）。因 `load-once` 限制，**批量导出时每进程从第 2 篇起都会走抓取路径**，影响面不小；内部模板渲染路径、以及直接访问前台都是正常的（实测 `?p=1801`：`## `=0、`**`=0、`<strong>`=4）。修法（一行）：早退分支里补挂 `add_filter('the_content', array($this, 'render_md_content'), 9);`；修完需重建受影响的单页（Worker 侧 `marked` 渲染）。
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

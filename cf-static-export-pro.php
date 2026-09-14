@@ -1468,7 +1468,7 @@ private function get_post_storage_path($post) {
                         content_format = excluded.content_format, excerpt = excluded.excerpt,
                         date = excluded.date, modified = excluded.modified, status = excluded.status,
                         categories = excluded.categories, tags = excluded.tags, featured_image = excluded.featured_image
-                      WHERE posts.wp_id < " . (int) self::CFSE_WORKER_ID_MIN,
+                      WHERE posts.wp_id < " . (int) CFSE_WORKER_ID_MIN,
             'params' => array(
                 $post_data['wp_id'],
                 $post_data['slug'],
