@@ -1678,11 +1678,6 @@ private function get_post_storage_path($post) {
                     ? array('r2' => true, 'd1' => true, 'cache' => true)
                     : array('r2' => true, 'd1' => false, 'cache' => false);
             }
-            // 非 Worker 类型强制关掉 d1 / cache（即使表单里被勾选）——s3/local 无从执行这两个动作。
-            if ($type !== 'cfse-worker') {
-                $t['capabilities']['d1'] = false;
-                $t['capabilities']['cache'] = false;
-            }
             if (!isset($t['path_prefix'])) $t['path_prefix'] = '';
             $out[] = $t;
         }
