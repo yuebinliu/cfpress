@@ -344,5 +344,24 @@ tool/index.php「MD」模式（md 原文直塞 post_content，WP 侧无任何格
 - **B. 第三方编辑器直连 Worker**（A 节写入口：`/wp/v2` 兼容 + 应用密码）—— 解决"外网 / 移动端写作"；
 - **C. 统一诞生地**：md 文章一律在 WP 侧写（`tool/index.php` 或编辑页「📝 文档格式」勾选）→ 自动推送；不在 Worker 端新建 ⇒ **永远不需要"拉回来"**。
 
+### I.1 用 `wp_id` 形态判定「诞生地」（2026-09-14 用户提出，**判据成立**）
+
+**判据**：`wp_id` 的形态天然区分来源 —— WP 侧是**自增小整数**（当前 1751、1763…），Worker 侧是**时间戳形态**（新建用 `Date.now()*100+rand` ≈ 1.7e14，`/api/import` 用 `Date.now()*1000000+i`）。取一个远高于任何自增序列的阈值（如 `1e11`）即可零误判地区分。
+
+**用例 1：生成「待拉取清单」（零新字段）** —— *D1 里存在 + WP 里不存在 + `wp_id` 为时间戳形态* = Worker 端诞生的文章 ⇒ 由 WP 主动拉取（网络方向只允许 WP → Worker）。
+
+**用例 2：拉取后仍能标识来源** —— 拉取时用 `wp_insert_post(['import_id' => $worker_wp_id])` 保持两端 ID 一致（WP 允许指定正整数 ID），于是该篇在 WP 里**仍是时间戳形态** ⇒ "原生于 Worker"这个信息天然保留，**不需要新增 `origin` 列**。这与 `content_format` 的透传是同一套思路：让**已存在的数据**（形态 / 字段）驱动逻辑，而不是新增耦合。
+
+**必须补的三点**
+1. **判据集中一处**：插件与 Worker 共用同一个阈值常量/函数（如 `CFSE_WORKER_ID_MIN = 1e11`），别两边各写一套（将来调阈值不会有遗漏）。
+2. **「拉取 = WP 接管」必须显式告知**：拉进 WP 后该篇由 WP 托管 —— 此后 Worker 侧的编辑会被下次 WP 导出覆盖。若想保留"两端都能改"，才需要显式 `origin`/锁（**未来项**，不是现在）。
+3. **冲突处理**：拉取时若 WP 里已存在同 ID，**跳过并报告**（用 `get_post($wp_id)` 判断存在，天然幂等），不要盲覆盖 WP 现有内容。
+
+**落地草图（未实施，等拍板）**
+- **Worker 侧**：新增只读接口（X-Auth-Key，放 `routes.js` 非登录区，仿 `/style-list`）`GET /sync/posts?limit=&since=` → `{posts:[{wp_id,slug,title,content,content_format,excerpt,date,modified,status,categories,tags,featured_image}]}`；
+- **WP 侧**：设置页新增「📥 从 Worker 拉取文章」—— 逐篇 `get_post($wp_id)` 判存在 → 不存在则 `wp_insert_post(['import_id'=>$wp_id, 'post_title'=>…, 'post_name'=>slug, 'post_content'=>…, 'post_status'=>…, 'meta_input'=>['content_format'=>…]])` + 分类/标签按 slug 映射（`wp_set_post_terms`，不存在则创建）→ 结束后报告「新增 N 篇 / 跳过 M 篇」；
+- **可选**：给拉取来的篇加一个**仅展示用**的 meta（如 `_cfse_origin=worker`），后台显示"原生于 Worker"，**不参与任何数据流判断**。
+
+
 
 
