@@ -98,6 +98,9 @@
 
 **未决（需拍板）**：① 落点（Worker / 内网 WP / 两端）；② 首批范围；③ 应用密码是否只给管理员角色。
 
+**✅ 已实现（UU 批，2026-09-14）**：档 0+1+2 全部落地 —— `/wp-json/wp/v2/*`（与 `/wp/v2/*`）的 posts CRUD / categories / tags / users/me / types / taxonomies；Basic Auth（用户名 + 应用密码，也接受账号密码）＋ `app_passwords` 表与后台「🔑 应用密码」UI；WP 侧防覆盖（导出改真 upsert 且 `WHERE posts.wp_id < CFSE_WORKER_ID_MIN`＋`publish_artifact()` 对 Worker 托管文章跳过后半段）。**归属仍用 wp_id 形态**（未加 `origin` 列）。媒体上传（贴图）按用户指示暂缓。详见 AGENTS.md「UU 批」。
+
+
 ---
 
 ## B. 单页 permalink 交给本项目自己驱动 —— ✅ **方案 A 已实现（2026-09-13）**，等你定目标结构后即可迁移

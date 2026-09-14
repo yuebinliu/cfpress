@@ -14,7 +14,7 @@ import { getPostsByTaxonomy, getTaxonomyInfo, getRecentPosts, getPostsByArchive,
 import { renderCategoryPage, renderTagPage, renderHomepage, renderArchivePage } from './templates';
 import { getCache, setCache, deleteCache, purgeCache } from './cache';
 import { getActiveTplContent } from './tplstore';
-import { handleAdminRequest } from './admin';
+import { handleAdminRequest, handleWpV2 } from './admin';
 import { getSiteContext } from './site';
 import { getCacheConfig } from './cacheconfig';
 import { mdToHtml } from './md';
@@ -266,6 +266,15 @@ export async function handleRequest(request, env) {
     // ============================================
     // 管理后台 API（/api/*）：JWT 登录 / 文章与分类标签管理
     // ============================================
+    // ============================================
+    // WP REST 兼容写入口（第三方 md 编辑器：Obsidian / Ulysses / 脚本）
+    //   路径：/wp-json/wp/v2/* 与 /wp/v2/*
+    //   认证：Basic Auth（用户名 + 应用密码），不走 /api/* 的 JWT 中间件
+    // ============================================
+    if (path.startsWith('/wp-json/') || path.startsWith('/wp/v2/')) {
+        return await handleWpV2(request, env);
+    }
+
     if (path.startsWith('/api/')) {
         return await handleAdminRequest(request, env);
     }

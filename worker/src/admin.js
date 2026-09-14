@@ -548,7 +548,9 @@ export async function handleAdminRequest(request, env) {
     // admin：全部；editor/author：内容管理；subscriber：仅个人资料
     const role = authPayload.role || 'subscriber';
     const isWrite = request.method === 'POST' || request.method === 'PUT' || request.method === 'DELETE';
-    const adminOnly = path.startsWith('/api/users')
+    // 应用密码允许「本人」管理自己的（下面端点内部再做归属校验）
+    const isAppPwRoute = /^\/api\/users\/(\d+)\/app-passwords$/.test(path) || /^\/api\/app-passwords\/(\d+)$/.test(path);
+    const adminOnly = (path.startsWith('/api/users') && !isAppPwRoute)
         || (isWrite && (path === '/api/settings' || path.startsWith('/api/import')
             || path === '/api/cache/purge' || path.startsWith('/api/posts/rebuild-single')
             || path.startsWith('/api/posts/batch')));
@@ -563,6 +565,38 @@ export async function handleAdminRequest(request, env) {
     }
 
     const db = env.D1_DATABASE;
+
+    // ---- 应用密码（Application Passwords；第三方 md 编辑器认证用）----
+    const apm = path.match(/^\/api\/users\/(\d+)\/app-passwords$/);
+    if (apm) {
+        const uidApp = parseInt(apm[1], 10);
+        if (authPayload.role !== 'admin' && authPayload.sub !== uidApp) return json({ error: '无权限' }, 403);
+        await ensureAppPasswordsTable(env);
+        if (method === 'GET') {
+            const rows = await db.prepare('SELECT id, user_id, name, created_at, last_used_at, revoked FROM app_passwords WHERE user_id = ? ORDER BY id DESC').bind(uidApp).all();
+            return json({ items: rows.results || [] });
+        }
+        if (method === 'POST') {
+            let body = {};
+            try { body = await request.json(); } catch (e) { body = {}; }
+            const apName = String(body.name || '').trim() || '未命名';
+            const plain = genAppPasswordPlain();
+            const hash = await hashAppPassword(plain);
+            await db.prepare('INSERT INTO app_passwords (user_id, name, pass_hash, created_at, last_used_at, revoked) VALUES (?, ?, ?, ?, ?, 0)')
+                .bind(uidApp, apName, hash, nowDateTime(), '').run();
+            const last = await db.prepare('SELECT id FROM app_passwords WHERE user_id = ? ORDER BY id DESC LIMIT 1').bind(uidApp).first();
+            return json({ ok: true, id: last ? last.id : 0, name: apName, password: plain, warning: '明文只显示这一次，请立即保存' });
+        }
+    }
+    const apd = path.match(/^\/api\/app-passwords\/(\d+)$/);
+    if (apd && method === 'DELETE') {
+        const aid = parseInt(apd[1], 10);
+        const apRow = await db.prepare('SELECT * FROM app_passwords WHERE id = ?').bind(aid).first();
+        if (!apRow) return json({ error: 'not found' }, 404);
+        if (authPayload.role !== 'admin' && authPayload.sub !== apRow.user_id) return json({ error: '无权限' }, 403);
+        await db.prepare('UPDATE app_passwords SET revoked = 1 WHERE id = ?').bind(aid).run();
+        return json({ ok: true });
+    }
 
     // GET /api/me
     if (path === '/api/me' && method === 'GET') {
@@ -1778,3 +1812,439 @@ export async function handleAdminRequest(request, env) {
 
     return json({ error: '接口不存在' }, 404);
 }
+
+
+// ============================================================
+// WP REST 兼容写入口（第三方 md 编辑器：Obsidian / Ulysses / 脚本）
+//   路径：/wp-json/wp/v2/* 与 /wp/v2/*
+//   认证：Basic Auth（用户名 + 应用密码；也接受账号密码，与 WP Application Passwords 一致）
+//   归属：新建文章 wp_id = Date.now()*100+rand（时间戳量级，即 CFSE_WORKER_ID_MIN 之上 ⇒ Worker 端诞生）
+//         格式：新建默认 content_format='md'（第三方为 md 编辑器）；若请求体看起来是 HTML 则按 html 存
+// ============================================================
+
+const AP_CHARS = 'abcdefghijkmnpqrstuvwxyz23456789';
+const wpv2Buckets = new Map();
+
+function apBytesHex(bytes) { let out = ''; for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, '0'); return out; }
+function apHexBytes(hex) {
+    const clean = String(hex).replace(/[^0-9a-fA-F]/g, '');
+    const out = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
+    return out;
+}
+function apConstEq(a, b) {
+    const x = String(a).toLowerCase(), y = String(b).toLowerCase();
+    if (x.length !== y.length) return false;
+    let d = 0;
+    for (let i = 0; i < x.length; i++) d |= x.charCodeAt(i) ^ y.charCodeAt(i);
+    return d === 0;
+}
+
+/** 生成应用密码明文：20 位 base32（去掉易混的 l/o/0/1），按 4 位分组便于抄写 */
+function genAppPasswordPlain() {
+    const bytes = crypto.getRandomValues(new Uint8Array(20));
+    let str = '';
+    for (let i = 0; i < bytes.length; i++) str += AP_CHARS[bytes[i] % AP_CHARS.length];
+    return str.match(/.{1,4}/g).join('-');
+}
+
+/** 应用密码哈希：高熵随机串 ⇒ SHA-256+盐足够（PBKDF2 100k 每请求 20-40ms 会撞免费档 CPU 上限） */
+async function hashAppPassword(plain) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const input = new Uint8Array(salt.length + plain.length);
+    input.set(salt, 0);
+    input.set(new TextEncoder().encode(plain), salt.length);
+    const bits = await crypto.subtle.digest('SHA-256', input);
+    return 'sha256$' + apBytesHex(salt) + '$' + apBytesHex(new Uint8Array(bits));
+}
+
+async function verifyAppPassword(plain, stored) {
+    stored = String(stored || '');
+    if (!stored) return false;
+    if (stored.indexOf('pbkdf2_sha256$') === 0) return verifyPassword(plain, stored);
+    const parts = stored.split('$');
+    if (parts.length !== 3 || parts[0] !== 'sha256') return false;
+    const salt = apHexBytes(parts[1]);
+    const input = new Uint8Array(salt.length + plain.length);
+    input.set(salt, 0);
+    input.set(new TextEncoder().encode(plain), salt.length);
+    const bits = await crypto.subtle.digest('SHA-256', input);
+    return apConstEq(apBytesHex(new Uint8Array(bits)), parts[2]);
+}
+
+async function ensureAppPasswordsTable(env) {
+    try {
+        await env.D1_DATABASE.prepare("CREATE TABLE IF NOT EXISTS app_passwords (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', pass_hash TEXT NOT NULL, last_used_at TEXT DEFAULT '', created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)").run();
+        await env.D1_DATABASE.prepare('CREATE INDEX IF NOT EXISTS idx_apppw_user ON app_passwords(user_id)').run();
+    } catch (e) {
+        console.error('ensureAppPasswordsTable:', e);
+    }
+}
+
+/** Basic Auth → {id, username, role, displayName, email, apId}；失败返回 null */
+async function authenticateAppPassword(db, request) {
+    const auth = request.headers.get('Authorization') || '';
+    const m = auth.match(/^Basic\s+(.+)$/i);
+    if (!m) return null;
+    let decoded = '';
+    try { decoded = atob(m[1].trim()); } catch (e) { return null; }
+    const ix = decoded.indexOf(':');
+    if (ix <= 0) return null;
+    const username = decoded.slice(0, ix).trim();
+    const password = decoded.slice(ix + 1).replace(/\s+/g, '');
+    if (!username || !password) return null;
+    const u = await db.prepare('SELECT * FROM users WHERE user_login = ?').bind(username).first();
+    if (!u || parseInt(u.user_status, 10) !== 1) return null;
+    let rows = { results: [] };
+    try {
+        rows = await db.prepare('SELECT id, pass_hash FROM app_passwords WHERE user_id = ? AND revoked = 0').bind(u.id).all();
+    } catch (e) { /* 表未建：忽略，走账号密码兜底 */ }
+    for (const r of (rows.results || [])) {
+        if (await verifyAppPassword(password, r.pass_hash)) {
+            try { await db.prepare('UPDATE app_passwords SET last_used_at = ? WHERE id = ?').bind(nowDateTime(), r.id).run(); } catch (e) {}
+            return { id: u.id, username: u.user_login, role: u.role, displayName: u.display_name, email: u.user_email, apId: r.id };
+        }
+    }
+    if (await verifyPassword(password, u.user_pass)) {
+        return { id: u.id, username: u.user_login, role: u.role, displayName: u.display_name, email: u.user_email, apId: 0 };
+    }
+    return null;
+}
+
+/** 写入口限速：内存滑窗（isolate 级，0 KV）；读 600/分、写 90/分 */
+function wpv2RateAllowed(key, isWrite) {
+    const limit = isWrite ? 90 : 600;
+    const now = Date.now();
+    const k = String(key);
+    let arr = wpv2Buckets.get(k);
+    if (!arr) { arr = []; wpv2Buckets.set(k, arr); }
+    while (arr.length && now - arr[0] > 60000) arr.shift();
+    if (arr.length >= limit) return false;
+    arr.push(now);
+    return true;
+}
+
+function wpErr(code, message, status) {
+    return new Response(JSON.stringify({ code: code, message: message, data: { status: status } }), {
+        status: status,
+        headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+    });
+}
+
+function wpJson(data, status) {
+    return new Response(JSON.stringify(data), {
+        status: status || 200,
+        headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+    });
+}
+
+function wpIso(dt) { return String(dt || '').replace(' ', 'T'); }
+function wpInternalStatus(st) {
+    const v = String(st || '').toLowerCase();
+    return (v === 'publish' || v === 'published') ? 'published' : 'draft';
+}
+function wpRoleNames(role) {
+    const r = String(role || '');
+    if (r === 'admin') return ['administrator'];
+    if (r === 'editor') return ['editor'];
+    if (r === 'author') return ['author'];
+    return ['subscriber'];
+}
+
+/** 取 WP REST 字段文本：支持字符串 / {raw} / {rendered} */
+function wpFieldText(v) {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v === 'object') {
+        if (typeof v.raw === 'string') return v.raw;
+        if (typeof v.rendered === 'string') return v.rendered;
+        return undefined;
+    }
+    return String(v);
+}
+
+/** 把分类/标签 slug 列表映射成 term id（WP 客户端认 id） */
+async function wpTermIds(db, type, listJson) {
+    const items = parseTaxoList(listJson);
+    if (!items.length) return [];
+    const rows = await db.prepare('SELECT rowid AS id, slug FROM taxonomies WHERE type = ?').bind(type).all();
+    const map = {};
+    for (const r of (rows.results || [])) map[r.slug] = r.id;
+    const out = [];
+    for (const t of items) {
+        if (t && map[t.slug] !== undefined) out.push(map[t.slug]);
+    }
+    return out;
+}
+
+/** 入参 terms（id 或 slug 或对象）→ [{name, slug}]；返回 null 表示"未提供" */
+async function wpResolveTerms(db, type, input) {
+    if (input === undefined || input === null) return null;
+    const list = Array.isArray(input) ? input : (typeof input === 'string' ? String(input).split(',') : [input]);
+    const rows = await db.prepare('SELECT rowid AS id, slug, name FROM taxonomies WHERE type = ?').bind(type).all();
+    const byId = {}, bySlug = {};
+    for (const t of (rows.results || [])) { byId[String(t.id)] = t; bySlug[t.slug] = t; }
+    const out = [];
+    for (const el of list) {
+        if (el === undefined || el === null || el === '') continue;
+        let hit = null;
+        if (typeof el === 'object') {
+            if (el.id !== undefined) hit = byId[String(el.id)];
+            else if (el.slug) hit = bySlug[String(el.slug)];
+        } else {
+            const key = String(el).trim();
+            hit = byId[key] || bySlug[key];
+        }
+        if (hit) out.push({ name: hit.name, slug: hit.slug });
+    }
+    return out;
+}
+
+/** WP REST 请求体 → 内部 payload（categories/tags 由调用方解析后填入） */
+function wpPayloadFromRest(body, row) {
+    const prevFmt = row ? ((row.content_format === 'md') ? 'md' : 'html') : 'md';
+    let fmt = prevFmt;
+    const fmtIn = (body.content_format !== undefined) ? body.content_format
+        : (body.meta && typeof body.meta === 'object' ? body.meta.content_format : undefined);
+    const titleIn = wpFieldText(body.title);
+    const title = (titleIn !== undefined ? String(titleIn) : (row ? String(row.title) : '')).trim();
+    if (!title) return { error: '标题不能为空' };
+    const contentIn = wpFieldText(body.content);
+    const rawContent = contentIn !== undefined ? String(contentIn) : (row ? String(row.content || '') : '');
+    const looksHtml = /<(p|div|h[1-6]|ul|ol|li|blockquote|pre|img|figure|br)\b/i.test(rawContent);
+    if (fmtIn === 'md' || fmtIn === 'html') fmt = fmtIn;
+    else if (fmtIn === undefined && looksHtml) fmt = 'html';
+    const content = fmt === 'md' ? rawContent : scrubHtml(rawContent);
+    const slugIn = body.slug !== undefined ? String(body.slug) : (row ? String(row.slug || '') : '');
+    const slug = (slugIn ? slugIn : (slugify(title) || ('p' + Date.now().toString(36)))).toLowerCase();
+    const status = body.status !== undefined ? wpInternalStatus(body.status) : (row ? (row.status === 'published' ? 'published' : 'draft') : 'draft');
+    const excerptIn = wpFieldText(body.excerpt);
+    const excerpt = (excerptIn !== undefined && String(excerptIn).trim() !== '')
+        ? String(excerptIn).trim()
+        : (row ? String(row.excerpt || '') : (fmt === 'md' ? mdToText(content, 200) : excerptOf(content)));
+    const dateIn = body.date !== undefined ? String(body.date).replace('T', ' ').replace(/\..*$/, '').slice(0, 19) : '';
+    return {
+        title: title,
+        content: content,
+        content_format: fmt,
+        slug: slug,
+        status: status,
+        excerpt: excerpt,
+        featured_image: body.featured_image !== undefined ? String(body.featured_image) : (row ? String(row.featured_image || '') : ''),
+        date: dateIn || (row ? String(row.date || '') : localDateTime(0)),
+    };
+}
+
+/** 组装 WP REST 的 post 形状（含 content.rendered：md 由 marked 渲染） */
+async function wpPostShape(db, row, site) {
+    const fmt = (row.content_format === 'md') ? 'md' : 'html';
+    const raw = String(row.content || '');
+    return {
+        id: row.wp_id,
+        date: wpIso(row.date),
+        date_gmt: wpIso(row.date),
+        modified: wpIso(row.modified),
+        modified_gmt: wpIso(row.modified),
+        slug: row.slug,
+        status: row.status === 'published' ? 'publish' : 'draft',
+        type: 'post',
+        link: postPublicUrl(row, site),
+        title: { rendered: row.title, raw: row.title },
+        content: { rendered: fmt === 'md' ? mdToHtml(raw) : raw, raw: raw, protected: false },
+        excerpt: { rendered: String(row.excerpt || ''), raw: String(row.excerpt || ''), protected: false },
+        author: 0,
+        featured_media: 0,
+        comment_status: 'closed',
+        ping_status: 'closed',
+        sticky: false,
+        format: 'standard',
+        categories: await wpTermIds(db, 'category', row.categories),
+        tags: await wpTermIds(db, 'tag', row.tags),
+        meta: { content_format: fmt, cfse_wp_id: row.wp_id },
+        cfse: { content_format: fmt, categories: parseTaxoList(row.categories), tags: parseTaxoList(row.tags) },
+    };
+}
+
+/**
+ * 入口：命中 /wp-json/wp/v2/* 或 /wp/v2/* 时由 routes 调用
+ */
+export async function handleWpV2(request, env) {
+    const url = new URL(request.url);
+    const method = request.method;
+    const raw = url.pathname.replace(/^\/wp-json/, '');
+    if (!(raw === '/wp/v2' || raw.indexOf('/wp/v2/') === 0)) return wpErr('rest_no_route', '未找到路由', 404);
+    const route = raw.slice('/wp/v2'.length) || '/';
+    const db = env.D1_DATABASE;
+
+    const user = await authenticateAppPassword(db, request);
+    if (!user) {
+        return new Response(JSON.stringify({ code: 'rest_forbidden', message: '认证失败：请用「用户名 + 应用密码」的 Basic Auth（或账号密码）', data: { status: 401 } }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json; charset=UTF-8', 'WWW-Authenticate': 'Basic realm="cf-static-export-pro"' },
+        });
+    }
+    if (user.role === 'subscriber') return wpErr('rest_forbidden', '该用户无权访问写入口', 403);
+    const isWrite = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+    if (!wpv2RateAllowed(user.apId || user.id, isWrite)) return wpErr('too_many_requests', '请求过于频繁，请稍后再试', 429);
+
+    const site = await getSiteContext(env);
+    console.log('[wpv2] ' + method + ' ' + raw + ' user=' + user.username + ' ip=' + (request.headers.get('CF-Connecting-IP') || '-'));
+
+    // 当前用户
+    if (route === '/users/me' && method === 'GET') {
+        return wpJson({
+            id: user.id,
+            name: user.displayName || user.username,
+            slug: user.username,
+            url: '', description: '',
+            link: (site.url || '') + '/author/' + user.username + '/',
+            roles: wpRoleNames(user.role),
+            capabilities: {}, extra_capabilities: {}, avatar_urls: {},
+            cfse: { role: user.role, content_format: 'md' },
+        });
+    }
+    // 类型 / 分类法探测（部分客户端启动时会请求）
+    if (route === '/types' && method === 'GET') {
+        return wpJson({ post: { slug: 'post', name: '文章', rest_base: 'posts', hierarchical: false, supports: { title: true, editor: true, excerpt: true, thumbnail: false, custom_fields: true } } });
+    }
+    if (route === '/taxonomies' && method === 'GET') {
+        return wpJson({
+            category: { slug: 'category', types: ['post'], rest_base: 'categories', name: '分类' },
+            post_tag: { slug: 'post_tag', types: ['post'], rest_base: 'tags', name: '标签' },
+        });
+    }
+
+    // 分类 / 标签
+    const termM = route.match(/^\/(categories|tags)(?:\/([^/]+))?$/);
+    if (termM) {
+        const type = termM[1] === 'tags' ? 'tag' : 'category';
+        if (!termM[2] && method === 'GET') {
+            const per = Math.min(100, Math.max(1, parseInt(url.searchParams.get('per_page') || '100', 10) || 100));
+            const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
+            const rows = await db.prepare('SELECT rowid AS id, slug, name FROM taxonomies WHERE type = ? ORDER BY name COLLATE NOCASE ASC LIMIT ? OFFSET ?').bind(type, per, (page - 1) * per).all();
+            const out = [];
+            for (const t of (rows.results || [])) {
+                const c = await db.prepare("SELECT COUNT(*) AS n FROM post_taxonomy pt JOIN posts p ON p.wp_id = pt.post_id AND p.status = 'published' WHERE pt.taxonomy_type = ? AND pt.taxonomy_slug = ?").bind(type, t.slug).first();
+                out.push({ id: t.id, count: parseInt((c && c.n) || 0, 10), description: '', link: '', name: t.name, slug: t.slug, taxonomy: type === 'tag' ? 'post_tag' : 'category', parent: 0 });
+            }
+            return wpJson(out);
+        }
+        if (!termM[2] && method === 'POST') {
+            let body = {};
+            try { body = await request.json(); } catch (e) { return wpErr('rest_invalid_json', '无效 JSON', 400); }
+            const tName = String(body.name || '').trim();
+            if (!tName) return wpErr('rest_invalid_param', '名称不能为空', 400);
+            const tSlug = body.slug ? String(body.slug) : (slugify(tName) || ('c' + Date.now().toString(36)));
+            await db.prepare('INSERT INTO taxonomies (type, slug, name) VALUES (?, ?, ?) ON CONFLICT(type, slug) DO UPDATE SET name = excluded.name').bind(type, tSlug, tName).run();
+            const tRow = await db.prepare('SELECT rowid AS id, slug, name FROM taxonomies WHERE type = ? AND slug = ?').bind(type, tSlug).first();
+            return wpJson({ id: tRow ? tRow.id : 0, count: 0, description: '', name: tName, slug: tSlug, taxonomy: type === 'tag' ? 'post_tag' : 'category', parent: 0 }, 201);
+        }
+        return wpErr('rest_no_route', '方法不支持', 405);
+    }
+
+    // 文章集合
+    if (route === '/posts') {
+        if (method === 'GET') {
+            const per = Math.min(100, Math.max(1, parseInt(url.searchParams.get('per_page') || '10', 10) || 10));
+            const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
+            const search = url.searchParams.get('search') || '';
+            const statusQ = url.searchParams.get('status') || 'publish';
+            const conds = [], vals = [];
+            if (statusQ && statusQ !== 'any') { conds.push('status = ?'); vals.push(wpInternalStatus(statusQ)); }
+            if (search) { conds.push('(title LIKE ? OR content LIKE ?)'); vals.push('%' + search + '%', '%' + search + '%'); }
+            const where = conds.length ? (' WHERE ' + conds.join(' AND ')) : '';
+            const rows = await db.prepare('SELECT * FROM posts' + where + ' ORDER BY date DESC, wp_id DESC LIMIT ? OFFSET ?').bind(...vals, per, (page - 1) * per).all();
+            const cnt = await db.prepare('SELECT COUNT(*) AS c FROM posts' + where).bind(...vals).first();
+            const total = parseInt((cnt && cnt.c) || 0, 10);
+            const out = [];
+            for (const r of (rows.results || [])) out.push(await wpPostShape(db, r, site));
+            return new Response(JSON.stringify(out), {
+                status: 200,
+                headers: {
+                    'Content-Type': 'application/json; charset=UTF-8',
+                    'X-WP-Total': String(total),
+                    'X-WP-TotalPages': String(Math.ceil(total / per) || 1),
+                },
+            });
+        }
+        if (method === 'POST') {
+            let body = {};
+            try { body = await request.json(); } catch (e) { return wpErr('rest_invalid_json', '无效 JSON', 400); }
+            const p = wpPayloadFromRest(body);
+            if (p.error) return wpErr('rest_invalid_param', p.error, 400);
+            const catsIn = await wpResolveTerms(db, 'category', body.categories);
+            const tagsIn = await wpResolveTerms(db, 'tag', body.tags);
+            p.categories = catsIn === null ? [] : catsIn;
+            p.tags = tagsIn === null ? [] : tagsIn;
+            let finalSlug = p.slug;
+            for (let tries = 1; tries <= 20; tries++) {
+                const hit = await db.prepare('SELECT wp_id FROM posts WHERE slug = ?').bind(finalSlug).first();
+                if (!hit) break;
+                finalSlug = p.slug + '-' + (tries + 1);
+            }
+            const wpId = Date.now() * 100 + Math.floor(Math.random() * 100);
+            const dt = localDateTime(site.timezoneOffset || 0);
+            const catJson = JSON.stringify(withDefaultCategory(p.categories));
+            const tagJson = JSON.stringify(p.tags || []);
+            await db.prepare('INSERT INTO posts (wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                .bind(wpId, finalSlug, p.title, p.content, p.content_format, p.excerpt, p.date || dt, dt, p.status, catJson, tagJson, p.featured_image).run();
+            await db.prepare('DELETE FROM post_taxonomy WHERE post_id = ?').bind(wpId).run();
+            const cats = await syncTaxonomy(db, wpId, 'category', withDefaultCategory(p.categories));
+            const tags = await syncTaxonomy(db, wpId, 'tag', p.tags);
+            if (cats.length || tags.length) {
+                await db.prepare('UPDATE posts SET categories = ?, tags = ? WHERE wp_id = ?').bind(JSON.stringify(cats), JSON.stringify(tags), wpId).run();
+            }
+            if (p.status === 'published') {
+                const rowPub = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(wpId).first();
+                if (rowPub) await writeSinglePage(env, rowPub);
+                await purgeLists(env);
+            }
+            const created = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(wpId).first();
+            return wpJson(await wpPostShape(db, created, site), 201);
+        }
+        return wpErr('rest_no_route', '方法不支持', 405);
+    }
+
+    // 文章单项
+    const pm = route.match(/^\/posts\/(\d+)$/);
+    if (pm) {
+        const id = parseInt(pm[1], 10);
+        const row = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(id).first();
+        if (!row) return wpErr('rest_post_invalid_id', '文章不存在：' + id, 404);
+        if (method === 'GET') return wpJson(await wpPostShape(db, row, site));
+        if (method === 'PUT' || method === 'PATCH') {
+            let body = {};
+            try { body = await request.json(); } catch (e) { return wpErr('rest_invalid_json', '无效 JSON', 400); }
+            const p = wpPayloadFromRest(body, row);
+            if (p.error) return wpErr('rest_invalid_param', p.error, 400);
+            const catsIn = await wpResolveTerms(db, 'category', body.categories);
+            const tagsIn = await wpResolveTerms(db, 'tag', body.tags);
+            if (p.slug !== row.slug) {
+                const clash = await db.prepare('SELECT wp_id FROM posts WHERE slug = ? AND wp_id != ?').bind(p.slug, id).first();
+                if (clash) return wpErr('rest_slug_conflict', 'slug 已被其它文章占用：' + p.slug, 409);
+            }
+            await db.prepare('DELETE FROM post_taxonomy WHERE post_id = ?').bind(id).run();
+            const cats = await syncTaxonomy(db, id, 'category', withDefaultCategory(catsIn === null ? parseTaxoList(row.categories) : catsIn));
+            const tags = await syncTaxonomy(db, id, 'tag', tagsIn === null ? parseTaxoList(row.tags) : tagsIn);
+            await db.prepare('UPDATE posts SET slug = ?, title = ?, content = ?, content_format = ?, excerpt = ?, modified = ?, status = ?, categories = ?, tags = ?, featured_image = ? WHERE wp_id = ?')
+                .bind(p.slug, p.title, p.content, p.content_format, p.excerpt, localDateTime(site.timezoneOffset || 0), p.status, JSON.stringify(cats), JSON.stringify(tags), p.featured_image, id).run();
+            const newRow = await db.prepare('SELECT * FROM posts WHERE wp_id = ?').bind(id).first();
+            if (row.status === 'published' && row.slug !== p.slug) await deleteSinglePage(env, row);
+            if (p.status === 'published' && newRow) await writeSinglePage(env, newRow);
+            if (p.status === 'draft') await deleteSinglePage(env, newRow || row);
+            await purgeLists(env);
+            return wpJson(await wpPostShape(db, newRow, site));
+        }
+        if (method === 'DELETE') {
+            await db.prepare('DELETE FROM post_taxonomy WHERE post_id = ?').bind(id).run();
+            await db.prepare('DELETE FROM posts WHERE wp_id = ?').bind(id).run();
+            await db.prepare('DELETE FROM taxonomies WHERE slug NOT IN (SELECT DISTINCT taxonomy_slug FROM post_taxonomy)').run();
+            await deleteSinglePage(env, row);
+            await purgeLists(env);
+            return wpJson({ deleted: true, previous: { id: row.wp_id, slug: row.slug, title: { rendered: row.title } } });
+        }
+        return wpErr('rest_no_route', '方法不支持', 405);
+    }
+
+    return wpErr('rest_no_route', '未找到路由：' + raw, 404);
+}
+

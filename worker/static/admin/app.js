@@ -959,6 +959,7 @@
           '<td class="muted">' + esc(String(u.user_registered || '').slice(0, 10)) + '</td>' +
           '<td style="white-space:nowrap;"><button class="btn btn-sm" data-tgl="' + u.id + '" data-status="' + u.user_status + '">' + (u.user_status === 1 ? '禁用' : '启用') + '</button> ' +
           '<button class="btn btn-sm" data-pw="' + u.id + '">重置密码</button> ' +
+          '<button class="btn btn-sm" data-ap="' + u.id + '" data-apname="' + esc(u.user_login) + '">🔑 应用密码</button> ' +
           '<button class="btn btn-sm btn-danger" data-deluser="' + u.id + '">删除</button></td></tr>';
       }).join('');
       var add = '<div class="toolbar" style="margin-top:12px;border-top:1px solid #eee;padding-top:12px;">' +
@@ -968,7 +969,8 @@
         '<input placeholder="昵称" id="u-disp" style="max-width:110px;">' +
         '<select id="u-role" style="max-width:100px;"><option value="editor">编辑</option><option value="author">作者</option><option value="admin">管理员</option><option value="subscriber">订阅者</option></select>' +
         '<button class="btn btn-primary" id="u-add">新增用户</button></div>';
-      sec.innerHTML = '<h1>用户</h1><div class="card grid"><table><thead><tr><th>用户名</th><th>昵称</th><th>邮箱</th><th>角色</th><th>注册</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' + add + '</div>';
+      sec.innerHTML = '<h1>用户</h1><div class="card grid"><table><thead><tr><th>用户名</th><th>昵称</th><th>邮箱</th><th>角色</th><th>注册</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' + add + '</div>' +
+        '<div class="card" id="ap-panel" style="margin-top:12px;display:none;"></div>';
       bindUserActions();
     }).catch(function (e) {
       sec.innerHTML = '<h1>用户</h1><div class="card"><p>' + (e.status === 403 ? '（仅管理员可管理用户）' : esc(e.message)) + '</p></div>';
@@ -1020,6 +1022,72 @@
         }).catch(function (e) { flash('flash-main', e.message, 'err'); });
       });
     });
+    document.querySelectorAll('[data-ap]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        renderAppPasswords(b.getAttribute('data-ap'), b.getAttribute('data-apname') || '');
+      });
+    });
+  }
+
+  /* ---------- 应用密码（第三方 md 编辑器认证用）---------- */
+  function renderAppPasswords(uid, uname) {
+    var host = document.getElementById('ap-panel');
+    if (!host) return;
+    host.style.display = 'block';
+    host.innerHTML = '<h2 style="margin:6px 0;">🔑 ' + esc(uname) + ' 的应用密码</h2>' +
+      '<p class="muted" style="margin:4px 0 10px;">给第三方 md 编辑器（Obsidian / Ulysses / 脚本）用：认证 <b>Basic Auth</b>，用户名 = <b>' + esc(uname) +
+      '</b>，密码 = 下面生成的应用密码；接口路径 <code>/wp-json/wp/v2/</code>（文章写入默认按 Markdown 保存）。</p>' +
+      '<table><thead><tr><th>名称</th><th>创建</th><th>最后使用</th><th>操作</th></tr></thead><tbody id="ap-tbody"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody></table>' +
+      '<div class="toolbar" style="margin-top:10px;"><button class="btn btn-primary" id="ap-new">＋ 生成新密码</button>' +
+      '<button class="btn btn-sm" id="ap-close">收起</button></div>' +
+      '<div id="ap-plain"></div>';
+
+    function loadList() {
+      api('/api/users/' + uid + '/app-passwords').then(function (d) {
+        var rows = (d.items || []).map(function (x) {
+          return '<tr><td>' + esc(x.name || '') + '</td>' +
+            '<td class="muted">' + esc(String(x.created_at || '').slice(0, 16)) + '</td>' +
+            '<td class="muted">' + esc(String(x.last_used_at || '').slice(0, 16) || '—') + '</td>' +
+            '<td>' + (x.revoked ? '<span class="muted">已撤销</span>' : '<button class="btn btn-sm btn-danger" data-apdel="' + x.id + '">撤销</button>') + '</td></tr>';
+        }).join('');
+        var tb = document.getElementById('ap-tbody');
+        if (tb) tb.innerHTML = rows || '<tr><td colspan="4" class="muted">还没有应用密码</td></tr>';
+        host.querySelectorAll('[data-apdel]').forEach(function (d2) {
+          d2.addEventListener('click', function () {
+            if (!confirm('撤销这个应用密码？正在使用它的客户端会立即失效。')) return;
+            api('/api/app-passwords/' + d2.getAttribute('data-apdel'), { method: 'DELETE' }).then(function () {
+              flash('flash-main', '已撤销', 'ok');
+              loadList();
+            }).catch(function (e) { flash('flash-main', e.message, 'err'); });
+          });
+        });
+      }).catch(function (e) {
+        var tb = document.getElementById('ap-tbody');
+        if (tb) tb.innerHTML = '<tr><td colspan="4" class="muted">读取失败：' + esc(e.message) + '</td></tr>';
+      });
+    }
+    loadList();
+
+    var nb = document.getElementById('ap-new');
+    if (nb) nb.addEventListener('click', function () {
+      var nm = prompt('给这个应用密码起个名字（便于日后辨认，如：Obsidian）：', 'Obsidian');
+      if (nm === null) return;
+      api('/api/users/' + uid + '/app-passwords', { method: 'POST', body: { name: nm } }).then(function (r) {
+        document.getElementById('ap-plain').innerHTML = '<div style="margin:10px 0;padding:10px;background:#f0f6fc;border-left:4px solid #2271b1;">' +
+          '<b>请立即保存（只显示这一次）：</b>' +
+          '<p style="margin:6px 0;font-family:monospace;font-size:15px;user-select:all;">' + esc(r.password) + '</p>' +
+          '<button class="btn btn-sm" id="ap-copy">复制</button></div>';
+        var cb = document.getElementById('ap-copy');
+        if (cb) cb.addEventListener('click', function () {
+          if (navigator.clipboard) navigator.clipboard.writeText(r.password);
+          flash('flash-main', '已复制到剪贴板', 'ok');
+        });
+        flash('flash-main', '已生成应用密码', 'ok');
+        loadList();
+      }).catch(function (e) { flash('flash-main', e.message, 'err'); });
+    });
+    var cl = document.getElementById('ap-close');
+    if (cl) cl.addEventListener('click', function () { host.style.display = 'none'; });
   }
 
   /* ---------- 质检报告 ---------- */

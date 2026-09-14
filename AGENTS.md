@@ -3,11 +3,12 @@
 > 任何 AI 助手/开发者接手本项目前请先通读本文件。它汇总了架构决策、运行方式、当前进度与操作套路，避免重复摸索。
 
 > ⚡ **新会话接续（2026-09-14 更新 —— 只有几分钟的话，先读这段）**
-> - **批次线到「批N」**（最新提交 `a3a4c8b`）：生成/上传拆开（批1）→ md 标识透传（批2/批3）+ 编辑页「📝 文档格式」面板（批4）→ WP 主动拉取 Worker 文章（批J）→ 单篇对齐 / 覆盖拉取（批K）→ 修 AUTO_INCREMENT 并把来源判据换成 meta（批L）→ 面板默认自动比对、只提示不自动覆盖（批M）→ 对齐按钮改链接修嵌套（批N）。**全部已部署并经端到端验证。**
+> - **批次线到「批 UU」**（第三方写入口已落地；此前最新 批N `a3a4c8b`）：生成/上传拆开（批1）→ md 标识透传（批2/批3）+ 编辑页「📝 文档格式」面板（批4）→ WP 主动拉取 Worker 文章（批J）→ 单篇对齐 / 覆盖拉取（批K）→ 修 AUTO_INCREMENT 并把来源判据换成 meta（批L）→ 面板默认自动比对、只提示不自动覆盖（批M）→ 对齐按钮改链接修嵌套（批N）。**全部已部署并经端到端验证。**
 > - **部署两条线**：① WP 插件在服务器 `/mnt/optane/webstack/www/wp-content/plugins/cf`（用 `docker exec web-php` 跑 PHP / `php -l`；改完 `tar over plink` 同步）—— **不需要 wrangler deploy**；② Worker 在本地 `worker/`，改 `worker/src/**` 后必须 `cd worker && npx wrangler deploy`（`routes.js` 与 `routes.template.js` 要同步改）。
 > - **本会话引入的关键约定**：md 标记是**可见字段** `content_format`（WP 后台「📝 文档格式」勾选或自定义字段=md）；「Worker 端诞生」的文章用 meta **`_cfse_remote_wp_id`** 记远端 ID（**绝不要再用 `import_id`**，会把 `wp_posts` 的 AUTO_INCREMENT 顶到 1.7e14，见批L）；`CFSE_WORKER_ID_MIN = 1e11` 只作兜底判据；Worker 只读接口 `GET /sync/posts`（X-Auth-Key，支持 `wp_id`/`min_wp_id`/`since`/`limit`）。
 > - **已知陷阱（都踩过）**：① `<form>` 不能放进 WP 编辑页（主表单嵌套 ⇒ 被浏览器忽略；用带 nonce 的链接或 AJAX）；② `re.findall(...)` 带 flags 而 `re.sub(...)` 不带 ⇒ **假成功**，改完必须 grep 产物核实；③ 改 >31KB 的大文件用 `write_file` 写 python 脚本 + 同回合 bash 执行（见第七节 harness 说明）；④ 验证中文内容别用 `json_encode(substr(...))`（截断多字节 → 返回 false，看起来像空）；⑤ **先 `php -l` 再同步**；⑥ 删 WP 文章若不想连带删 D1/R2，先 `remove_action('before_delete_post'|'trash_post', ...)`。
 > - **下一步候选**（细节见 `ROADMAP.md`）：多目标托管配置（F.2 缺口 3）／列表页静态生成（F.2 缺口 1/8，纯静态档最大件）／第三方编辑器写入口（A.1）／小项（IP 白名单、HTML 稳定化 15B、首页 `{{SITE_URL}}` 残留、模板 `{{SITE_NAME}}`）。
+> - **第三方写入口（UU 批）**：`/wp-json/wp/v2/*`（或 `/wp/v2/*`）用 **Basic Auth（用户名 + 应用密码，也接受账号密码）**；应用密码在 Worker 后台「用户 → 🔑 应用密码」生成；新建文章一律 `wp_id = Date.now()*100+rand` + `content_format='md'`（归属仍看 wp_id 形态，没加列）；WP 导出对 Worker 托管的文章会跳过（真 upsert 的 `WHERE posts.wp_id < 1e11` + `publish_artifact()` 提前 return）。
 > - **新会话开场三件事**：`git log --oneline -10`、`git status --short`、读本文件（其余细节按需查 `ROADMAP.md` / `EVOLUTION.md`）。
 
 ## 一、项目是什么
@@ -132,6 +133,16 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **附带修正**：对齐时把 WP 侧 `post_modified` **按远端值修正**（`wp_update_post()` 会强制设成当前时间、传参无效 ⇒ 保存后用 `$wpdb` 直改 + `clean_post_cache`）—— 否则本地时间永远更新，「检查」会一直显示「本地较新」。
   - **实测**：渲染 `has_nested_form=NO` / `has_align_link=YES` / `default_hidden=YES` / `help_icon=YES` / `no_confirm=OK` / `show_only_when_need_sync=YES`；handler 模拟（`$_REQUEST` + nonce）→ `REDIRECT_TO=[...post.php?post=1785&action=edit&cfse_aligned=1]`、`post_modified` 由 `09-13 12:28:34` 更新为当前；对齐后 `worker_modified == local_modified`（`23:50:00`）⇒ `need_sync=false`、`local_newer=false` ⇒ 面板显示「✔ 两端一致」且按钮隐藏。
   - **教训**：**不要把 `<form>` 放进 WP 编辑页**（主表单已包裹整个编辑区）—— 用链接（带 nonce）或 AJAX。
+- **UU 批（A.1 第三方编辑器写入口 / WP REST 兼容层，2026-09-14，已部署验证）**：让 Obsidian 等 **md 编辑器**直接读写站点（目标用户就是 md 编辑器，不做通用 WP 客户端）。
+  - **端点**（`/wp-json/wp/v2/*` 与 `/wp/v2/*` 两个前缀都认；实现 = `worker/src/admin.js` 末尾 `handleWpV2()`；`routes.js` 与 `routes.template.js` 同步加分发，放在 `/api/*` 之前）：`GET/POST /posts`、`GET/PUT|PATCH/DELETE /posts/<id>`、`GET/POST /categories|tags`、`GET /users/me`、`GET /types`、`GET /taxonomies`。
+  - **认证 = Basic Auth（用户名 + 应用密码）**：新表 `app_passwords(id,user_id,name,pass_hash,last_used_at,created_at,revoked)`（WP 的 D1 schema 迁移已含；Worker 首次生成时也会 `ensureAppPasswordsTable()` 兜底）。应用密码明文 = 20 位 base32（去易混字符）分 5 组；**哈希用 SHA-256+盐而非 PBKDF2** —— 高熵随机串无需慢哈希，而 PBKDF2-100k 每请求 20–40ms 会撞免费档 CPU（登录低频，故那里保留 PBKDF2）。同时**接受账号密码**（与 WP Application Passwords 行为一致），方便 curl/脚本。后台：用户页「🔑 应用密码」→ 生成（明文只显示一次 + 复制）/ 列表（含最后使用时间）/ 撤销；本人也能管自己的（`adminOnly` 判定已放行该路由）。
+  - **归属与格式**（沿用既定规则，**未新增字段**）：新建文章 `wp_id = Date.now()*100+rand`（时间戳量级 ⇒ Worker 端诞生）、默认 `content_format='md'`（请求体看起来是 HTML 则按 html 存）；`content.rendered` 由 `mdToHtml` 出、`content.raw` 给原稿；`cfse` 字段附 slug 形式的分类/标签。
+  - **兼容映射**：`publish↔published` 互转；`categories/tags` 用 `taxonomies.rowid` 当 term ID（WP 客户端认 ID），入参同时接受 ID/slug/字符串/对象；`content`、`title`、`excerpt` 接受字符串或 `{raw}`。
+  - **档 2 防覆盖（WP 侧，A 节候选 1）**：① 导出 SQL 由 `INSERT OR REPLACE` 改**真 upsert** —— `ON CONFLICT(wp_id) DO UPDATE SET … WHERE posts.wp_id < CFSE_WORKER_ID_MIN`（归属判据用 **wp_id 形态**，不用 content_format，避免误伤 WP 原生 md 文章）；② `publish_artifact()` 对 `is_worker_owned_post()`（存在 `_cfse_remote_wp_id` 且 ≥ 1e11）的文章**跳过 R2 上传与 D1 覆盖**并记 INFO 日志。
+  - **限速/审计**：`wpv2RateAllowed()` 内存滑窗（isolate 级，0 KV）—— 读 600/分、写 90/分；每请求 `console.log('[wpv2] METHOD path user ip')`（`wrangler tail` 可见）。
+  - **实测（curl 端到端）**：应用密码 200 / 账号密码兜底 200 / 无认证与错误密码 401；`POST posts`（md）201 → 单页 200，且 `<h2>/<strong>/<li>` 与 `content.raw` 的 `## ` 证明 **md 渲染 + 原稿保存**都正确；PATCH 改标题 → 单页重建为新标题；转草稿 → 单页 404；DELETE → 单页 404；`categories/tags/types` 200；列表带 `X-WP-Total` 正常、WP 导出的文章与 Worker 端文章都可见；中文搜索 200；WP 侧 `is_worker_owned_post()`：WP 原生文章 false、拉取来的 true；导出 SQL/DDL 含保护 ✓；测试数据已清空（`app_passwords` 0 行、测试文章 0 篇）。
+  - **坑**：① **`UID` 是 bash 只读内建变量** —— 验证脚本里 `UID=...` 会静默失败成系统 UID（当时应用密码写到了 `user_id=197609`，认证查 `user_id=1` 必然 401；换 `MYID` 即好）；② Windows 下 `node -e` 的中文字面量会按 GBK 解析 ⇒ 用 `\uXXXX` 转义或从文件读、或用 hex 验证（`e68993` = 「打」）；③ 应用密码哈希别用 PBKDF2（CPU 预算）。
+  - **未做（有意冻结）**：`POST /wp/v2/media`（贴图）—— 先通文字/分类链路，按用户指示后补；`/wp/v2/pages`、评论等其余 WP 端点不在范围。
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

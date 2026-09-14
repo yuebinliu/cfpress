@@ -716,6 +716,15 @@ private function get_post_storage_path($post) {
     }
 
     /**
+     * 该篇的「家」是否在 Worker 端（归属判据 = wp_id 形态，见 CFSE_WORKER_ID_MIN）。
+     * 这类文章由 Worker 侧 writeSinglePage() 渲染单页并维护 D1，WP 导出不得覆盖。
+     */
+    private function is_worker_owned_post($post) {
+        $remote = $this->get_remote_wp_id($post->ID);
+        return ($remote && $remote >= CFSE_WORKER_ID_MIN);
+    }
+
+    /**
      * 阶段 2：发布到远端（上传 R2 + 同步媒体 + 写 D1 + 清缓存）。
      *
      * @param array       $artifact    build_post_artifact()/build_post_meta() 的返回值（后者须自带 path）
@@ -725,6 +734,13 @@ private function get_post_storage_path($post) {
         $post = $artifact['post'];
         $html = $html_source === null ? (isset($artifact['html']) ? $artifact['html'] : '') : $html_source;
         if ($html === '') throw new Exception('正文为空，无法发布');
+
+        // Worker 端诞生的文章（md 编辑器的家）：跳过 R2 上传与 D1 覆盖 —— 否则会把 Worker 渲染的
+        // md 单页换成 WP 前台 HTML，并把 D1 里的 md 原稿冲掉（A 节候选 1 的硬保证）
+        if ($this->is_worker_owned_post($post)) {
+            $this->log("文章 {$post->ID} 由 Worker 端托管（远端 wp_id=" . $this->get_remote_wp_id($post->ID) . "），跳过 R2 上传与 D1 覆盖", 'INFO');
+            return true;
+        }
 
         $content_type = 'text/html; charset=utf-8';
         $content_encoding = null;
@@ -1419,6 +1435,8 @@ private function get_post_storage_path($post) {
             "CREATE INDEX IF NOT EXISTS idx_pt_post ON post_taxonomy(post_id)",
             "CREATE INDEX IF NOT EXISTS idx_pt_slug ON post_taxonomy(taxonomy_slug)",
             "CREATE TABLE IF NOT EXISTS styles (id TEXT NOT NULL, version INTEGER NOT NULL, name TEXT, tpl_json TEXT, updated_at TEXT, PRIMARY KEY (id, version))",
+            "CREATE TABLE IF NOT EXISTS app_passwords (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', pass_hash TEXT NOT NULL, last_used_at TEXT DEFAULT '', created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)",
+            "CREATE INDEX IF NOT EXISTS idx_apppw_user ON app_passwords(user_id)",
             "INSERT INTO _cfse_meta (k, v) VALUES ('schema_version', '" . (int) self::D1_SCHEMA_VERSION . "') ON CONFLICT(k) DO UPDATE SET v = excluded.v",
         );
         foreach ($ddl as $sql) {
@@ -1441,8 +1459,16 @@ private function get_post_storage_path($post) {
 
         // 1. 写入 posts
         $statements[] = array(
-            'sql' => "INSERT OR REPLACE INTO posts (wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            // 真 upsert：wp_id 冲突时更新，但「Worker 端诞生」的行（wp_id ≥ CFSE_WORKER_ID_MIN）不覆盖
+            // —— 归属判据用 wp_id 形态（WP 文章 = WP post ID；Worker 文章 = 时间戳量级）
+            'sql' => "INSERT INTO posts (wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      ON CONFLICT(wp_id) DO UPDATE SET
+                        slug = excluded.slug, title = excluded.title, content = excluded.content,
+                        content_format = excluded.content_format, excerpt = excluded.excerpt,
+                        date = excluded.date, modified = excluded.modified, status = excluded.status,
+                        categories = excluded.categories, tags = excluded.tags, featured_image = excluded.featured_image
+                      WHERE posts.wp_id < " . (int) self::CFSE_WORKER_ID_MIN,
             'params' => array(
                 $post_data['wp_id'],
                 $post_data['slug'],
