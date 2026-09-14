@@ -36,8 +36,16 @@
 > - **`/tmp` 不是同一个地方**：native node/python 看不到 git-bash 的 `/tmp`；node 的 `require("tmp/x.json")` 会被当包名解析 ⇒ 写 `./tmp/x.json`。
 >
 > **设置页 UI 坑（未结）**
-> - 往 WP `<table class="form-table">` 里插宽内容（如 `widefat` 大表）会**撑坏两列布局**（左列被挤窄、横向溢出）。批 BR 已把「托管目标」搬成 `</table>` 之后的独立卡片 + `overflow-x:auto` + `max-width:100%`，
->   但**用户反馈刷新后仍无明显效果** ⇒ **根因待查**（下次接手请先看：是否 `.cfse-card`/`wrap` 宽度问题、是否浏览器缓存、用户所指的"基础配置栏"是否为其它卡片）。
+> - 往 WP `<table class="form-table">` 里插宽内容（如 `widefat` 大表）会**撑坏两列布局**，但**批 BR 的搬表格无效**（方向错了）。
+> - **✅ 已定位并修复（批 BS，2026-09-14）**：用户现象是「**基础配置很窄、状态面板太宽**」——一句话指出这是**卡片级列宽**问题，真正根因在设置页最外层
+>   `<div class="cfse-grid">`（`:443`，左「⚙️ 基础配置」`:444` / 右「📊 状态面板」`:605`）：
+>   `.cfse-grid { grid-template-columns: 2fr 1fr }` 的 grid item **隐含 `min-width:auto`**，右列的 `min-content` 撑破 2:1 比例 ⇒ 左列被挤窄。
+>   撑宽右列的候选：`CFSE_LOCAL_DIR` 长路径的 `<code>`、`.stat-value` 时间戳、以及 **WP `.button` 默认 `white-space:nowrap`**（按钮文案不换行）。
+>   **修法（结构性）**：`.cfse-grid` 改 `minmax(0, 1fr) minmax(280px, 360px)` + `align-items:start`，两列 card 加 `min-width:0`，`code`/`.stat-value` 加 `overflow-wrap:anywhere`
+>   ⇒ 右列**上限 360px**，左列必然拿回 `容器宽 - 380px` —— 不再依赖内容宽度。已渲染验证（37933B、无告警、旧 `2fr 1fr` 已清除、grid 直接子列=2）。
+>   **注意 CSS 有两份且必须同步**：`assets/admin.css`（`wp_enqueue_style`，在 head）与 `settings_page()` 末尾的内联 `<style>`（`~:737`，在 body 尾）——**内联胜**。
+> - **教训（两条，都值得记）**：① `fr` 网格列被 `min-content` 撑破时，**改内容（搬表格 / 加 overflow）是治标，必须动列定义（`minmax(0, …)`）**；
+>   ② **用户报 UI 问题先问清「哪个区域 vs 哪个区域」** —— "基础配置窄 / 状态面板宽"立刻指向卡片级列宽，而当时误判为"表格撑坏 form-table"，白做一批 BR。
 >
 > **下一步（压缩后）**
 > 1. 排查上面的设置页布局问题；
