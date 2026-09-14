@@ -117,6 +117,13 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **修正（改用按行替换，不再用跨行正则）**：① 自动比对开关 **默认开**（`get_option('cf_worker_auto_check', true)` + register default `true` + 设置页文案同步）；② 面板**只提示、永不自动覆盖**：远端新 → 「⚠︎ Worker 端更新 —— 需要以 Worker 版本覆盖本篇吗？（点下方按钮）」；本地较新 → 「⚠︎ 本地较新 —— 若以 Worker 版本覆盖，会丢失本地较新的修改」；一致 → 「✔ 两端一致」。
   - **实测**：`config[worker_auto_check]=true`、`has_check_btn=YES`、`has_auto_submit=NO`、`auto_flag=true`、初始状态「正在查询…」；`php -l` 通过（这次先 lint 再同步）。
   - **教训（同类第二条）**：`re.findall(...)` 带 flags 而 `re.sub(...)` 不带 ⇒ 假成功。**批量改代码后，验证必须检查产物内容（grep 关键符号 / 渲染输出），不能只信脚本打印的 OK**。
+- **批N：修复「对齐本篇」不生效 + 交互按用户要求调整（2026-09-14，已部署验证）**：
+  - **真因（用户报告「点了没起作用、还跳到文章列表」）**：面板里的「对齐本篇」用了 **`<form>`，而它嵌在 WP 编辑页主表单内部** —— 浏览器会忽略内层 form ⇒ 点击实际提交的是 **WP 自己的编辑表单**，我们的 handler 从未被调用（日志里没有对齐记录即为佐证）。
+  - **修复**：改用**链接**（`wp_nonce_url(admin_url('admin-post.php?action=cfse_align_worker&post_id=...'))`），handler 相应改读 `$_REQUEST`（链接是 GET）；入口即记日志；文章不存在时记 ERROR 并退回列表页；跳转用 `get_edit_post_link()`（失败才退列表页）⇒ 对齐后**回到当前文章**。
+  - **交互（按用户要求）**：① 按钮**默认隐藏，仅当「远端更新」时出现**（本地较新 / 两端一致都不给覆盖入口，避免误覆盖）；② 文案改「**对齐本篇**」；③ 去掉 `confirm` 弹窗，改按钮旁的**问号图标**（`dashicons-editor-help` + `title` 说明）；④ 提示语改「⚠︎ 远端更新，建议对齐」。
+  - **附带修正**：对齐时把 WP 侧 `post_modified` **按远端值修正**（`wp_update_post()` 会强制设成当前时间、传参无效 ⇒ 保存后用 `$wpdb` 直改 + `clean_post_cache`）—— 否则本地时间永远更新，「检查」会一直显示「本地较新」。
+  - **实测**：渲染 `has_nested_form=NO` / `has_align_link=YES` / `default_hidden=YES` / `help_icon=YES` / `no_confirm=OK` / `show_only_when_need_sync=YES`；handler 模拟（`$_REQUEST` + nonce）→ `REDIRECT_TO=[...post.php?post=1785&action=edit&cfse_aligned=1]`、`post_modified` 由 `09-13 12:28:34` 更新为当前；对齐后 `worker_modified == local_modified`（`23:50:00`）⇒ `need_sync=false`、`local_newer=false` ⇒ 面板显示「✔ 两端一致」且按钮隐藏。
+  - **教训**：**不要把 `<form>` 放进 WP 编辑页**（主表单已包裹整个编辑区）—— 用链接（带 nonce）或 AJAX。
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

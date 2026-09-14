@@ -858,32 +858,32 @@ private function get_post_storage_path($post) {
     public function render_worker_sync_metabox($post) {
         $pid = (int) $post->ID;
         $auto = !empty($this->config['worker_auto_check']);
+        // 用链接而不是 <form>：WP 编辑页的主表单包裹整个编辑区，内层 <form> 会被浏览器忽略
+        $align_url = wp_nonce_url(admin_url('admin-post.php?action=cfse_align_worker&post_id=' . $pid), 'cfse_align_worker_' . $pid);
         echo '<p class="description">本篇由 <b>Worker 端诞生</b>，可把 Worker 的最新版本对齐过来。</p>';
         echo '<p style="margin:8px 0;"><button type="button" class="button" id="cfse-check-btn">🔍 检查 Worker 端版本</button></p>';
         echo '<div id="cfse-worker-status" style="margin:8px 0;padding:8px;background:#f6f7f7;border-radius:3px;font-size:12px;line-height:1.7;color:#646970;">'
             . ($auto ? '正在查询…' : '点上面的按钮查询两端版本时间。') . '</div>';
-        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
-        echo '<input type="hidden" name="action" value="cfse_align_worker" />';
-        echo '<input type="hidden" name="post_id" value="' . $pid . '" />';
-        wp_nonce_field('cfse_align_worker_' . $pid);
-        echo '<button type="submit" class="button" onclick="return confirm(\'用 Worker 端最新版本覆盖本篇内容（标题 / 正文 / 别名 / 分类标签）？\')">↻ 从 Worker 对齐本篇</button>';
-        echo '</form>';
+        echo '<p id="cfse-align-wrap" style="margin:8px 0;display:none;">'
+            . '<a href="' . esc_url($align_url) . '" class="button button-primary" id="cfse-align-btn">对齐本篇</a>'
+            . ' <span class="dashicons dashicons-editor-help" style="color:#787c82;vertical-align:text-bottom;" title="用 Worker 端的标题 / 正文 / 别名 / 分类标签覆盖本篇（会覆盖 WP 侧对该篇的修改）"></span>'
+            . '</p>';
         if (isset($_GET['cfse_aligned'])) {
             echo $_GET['cfse_aligned'] === '1'
                 ? '<p style="margin:8px 0 0;color:#2271b1;"><b>✅ 已对齐到 Worker 版本</b></p>'
                 : '<p style="margin:8px 0 0;color:#b32d2e;"><b>❌ 对齐失败</b>（未能从 Worker 取到该篇，见日志）</p>';
         }
         $ajax_nonce = wp_create_nonce('cfse_worker_status');
-        // 只提示、不自动覆盖：远端新 / 本地新 / 一致 三种情况都由用户决定是否点「对齐」
+        // 按钮只在「远端更新」时出现；本地较新 / 一致 都不给覆盖入口（避免误覆盖）
         echo '<script>jQuery(function($){'
-            . 'var $s=$("#cfse-worker-status");'
+            . 'var $s=$("#cfse-worker-status"),$w=$("#cfse-align-wrap");'
             . 'function cfseCheck(){'
-            . '$s.html("查询中…");'
+            . '$w.hide();$s.html("查询中…");'
             . '$.post(ajaxurl,{action:"cfse_worker_status",post_id:' . $pid . ',_ajax_nonce:"' . esc_js($ajax_nonce) . '"},function(r){'
             . 'if(!r||!r.ok){$s.html("（查询不到 Worker 版本：该篇可能尚未同步到 Worker，或接口不可用）");return;}'
             . 'var h="Worker 版本：" + r.worker_modified + "<br/>本篇版本：" + r.local_modified;'
-            . 'if(r.need_sync){h += "<br/><b style=\'color:#b32d2e;\'>⚠︎ Worker 端更新</b> —— 需要以 Worker 版本覆盖本篇吗？（点下方按钮）";}'
-            . 'else if(r.local_newer){h += "<br/><b style=\'color:#996800;\'>本地较新</b> —— 若以 Worker 版本覆盖，会丢失本地较新的修改。";}'
+            . 'if(r.need_sync){h += "<br/><b style=\'color:#b32d2e;\'>⚠︎ 远端更新，建议对齐</b>";$w.show();}'
+            . 'else if(r.local_newer){h += "<br/><b style=\'color:#996800;\'>本地较新</b> —— 若以 Worker 版本覆盖，会丢失本地修改。";}'
             . 'else{h += "<br/><span style=\'color:#1d6f42;\'>✔ 两端一致</span>";}'
             . '$s.html(h);});}'
             . '$("#cfse-check-btn").on("click",cfseCheck);'
@@ -2180,6 +2180,18 @@ public function handle_deploy_worker() {
         }
         update_post_meta($post_id, 'content_format', $fmt);
         if (!empty($remote['wp_id'])) update_post_meta($post_id, '_cfse_remote_wp_id', (int) $remote['wp_id']);
+        // wp_update_post() 总是把 post_modified 设成当前时间（参数会被忽略），这里按远端值直接修正：
+        // 两端时间一致，「检查」才会显示「✔ 两端一致」而不是一直「本地较新」
+        if (!empty($remote['modified'])) {
+            global $wpdb;
+            $mod = (string) $remote['modified'];
+            $wpdb->update(
+                $wpdb->posts,
+                array('post_modified' => $mod, 'post_modified_gmt' => get_gmt_from_date($mod)),
+                array('ID' => (int) $post_id)
+            );
+            clean_post_cache((int) $post_id);
+        }
         $this->apply_worker_terms($post_id, isset($remote['categories']) ? $remote['categories'] : '', 'category');
         $this->apply_worker_terms($post_id, isset($remote['tags']) ? $remote['tags'] : '', 'post_tag');
         if ($prev_skip === null) unset($GLOBALS['cfse_skip_export']); else $GLOBALS['cfse_skip_export'] = $prev_skip;
@@ -2188,19 +2200,30 @@ public function handle_deploy_worker() {
 
     /** 「↻ 从 Worker 对齐本篇」 */
     public function handle_align_worker() {
-        $post_id = isset($_POST['post_id']) ? (int) $_POST['post_id'] : 0;
+        // 面板里的「对齐本篇」是链接（GET），所以读 $_REQUEST
+        $post_id = isset($_REQUEST['post_id']) ? (int) $_REQUEST['post_id'] : 0;
+        $this->log("收到「对齐本篇」请求：post_id={$post_id}", 'INFO');
         if (!$post_id || !current_user_can('edit_post', $post_id)) wp_die('权限不足');
         check_admin_referer('cfse_align_worker_' . $post_id);
+        $post = get_post($post_id);
+        if (!$post) {
+            $this->log("对齐失败：WP 侧文章不存在 post_id={$post_id}", 'ERROR');
+            wp_safe_redirect(add_query_arg('cfse_aligned', '0', admin_url('edit.php')));
+            exit;
+        }
         $remote_id = $this->get_remote_wp_id($post_id);
         $remote = $remote_id ? $this->fetch_worker_post($remote_id) : null;
         $ok = false;
         if ($remote) {
             $ok = $this->overwrite_post_from_remote($post_id, $remote);
         } else {
-            $this->log("对齐失败：未能从 Worker 取到 wp_id={$post_id}", 'ERROR');
+            $this->log("对齐失败：未能从 Worker 取到远端 wp_id={$remote_id}（WP post_id={$post_id}）", 'ERROR');
         }
-        $this->log("从 Worker 对齐 wp_id={$post_id}：" . ($ok ? '成功' : '失败'), $ok ? 'INFO' : 'ERROR');
-        wp_safe_redirect(add_query_arg('cfse_aligned', $ok ? '1' : '0', get_edit_post_link($post_id, 'raw')));
+        $this->log("从 Worker 对齐 wp_id={$post_id}（远端 {$remote_id}）：" . ($ok ? '成功' : '失败'), $ok ? 'INFO' : 'ERROR');
+        // 跳回当前文章；拿不到编辑链接（如已删除）才退回列表页
+        $back = get_edit_post_link($post_id, 'raw');
+        if (!$back) $back = admin_url('edit.php');
+        wp_safe_redirect(add_query_arg('cfse_aligned', $ok ? '1' : '0', $back));
         exit;
     }
 
