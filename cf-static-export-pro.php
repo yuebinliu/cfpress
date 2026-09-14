@@ -227,31 +227,54 @@ public function get_config() {
             if (is_array($decoded)) $value = $decoded;
         }
         if (!is_array($value)) return '';
+        $templates = $this->get_hosting_templates();
+        $raw = $value;   // 归一化前的输入：一致性校验与"自动修正回显"要靠它发现用户显式填的冲突（§12.4）
         $out = array();
         foreach ($value as $t) {
             if (!is_array($t)) continue;
-            // 只接受已实现的类型；未知类型直接丢弃（与运行期 get_hosting_targets 的「跳过」保持一致）
-            $type = isset($t['type']) ? (string) $t['type'] : '';
-            if (!in_array($type, array('cfse-worker', 'local', 's3'), true)) continue;
+            // 1) 模板解析（§C1）：template 优先；仅有旧 type 时按 legacy_type 反查；未知模板丢弃（与运行期跳过一致）
+            $tplId = isset($t['template']) ? (string) $t['template'] : '';
+            $legacy = isset($t['type']) ? (string) $t['type'] : '';
+            if ($tplId === '' && $legacy !== '') {
+                foreach ($templates as $cand => $tp) {
+                    if (isset($tp['legacy_type']) && $tp['legacy_type'] === $legacy) { $tplId = $cand; break; }
+                }
+            }
+            if ($tplId === '' || !isset($templates[$tplId])) continue;
+            $tpl = $templates[$tplId];
             $name = isset($t['name']) ? sanitize_text_field($t['name']) : '';
             $id = isset($t['id']) && $t['id'] !== '' ? sanitize_key($t['id']) : sanitize_title($name);
             if ($id === '') $id = 't' . count($out);
+            // 2) 能力归一化（§12.7）：模板不支持 ⇒ false；未声明 ⇒ 模板默认；已声明 ⇒ 取值（受上限约束）
+            $capsIn = (isset($t['capabilities']) && is_array($t['capabilities'])) ? $t['capabilities'] : array();
+            $defCaps = isset($tpl['defaults']['capabilities']) ? $tpl['defaults']['capabilities'] : array();
+            $caps = array();
+            foreach ($tpl['capabilities'] as $ck => $limit) {
+                $caps[$ck] = $limit
+                    ? (array_key_exists($ck, $capsIn) ? !empty($capsIn[$ck]) : !empty($defCaps[$ck]))
+                    : false;
+            }
+            // 3) 意图归一化：白名单 ∩ 模板可承接（模板不支持的路线不保存）
+            $intentIn = (isset($t['intent']) && is_array($t['intent'])) ? $t['intent'] : $tpl['defaults']['intent'];
+            $intent = array();
+            foreach (array('md', 'static-list', 'static-only', 'backup') as $ik) {
+                if (!empty($intentIn[$ik]) && in_array($ik, $tpl['intents'], true)) $intent[] = $ik;
+            }
             $entry = array(
                 'id' => $id,
                 'name' => $name,
-                'type' => $type,
+                'template' => $tplId,
+                'type' => $tpl['legacy_type'],   // C3 双写：以模板为准重算 ⇒ 正常保存不可能产生不一致
                 'enabled' => !empty($t['enabled']),
+                'intent' => $intent,
                 'path_prefix' => isset($t['path_prefix']) ? sanitize_text_field($t['path_prefix']) : '',
-                'capabilities' => array(
-                    'r2' => !empty($t['capabilities']['r2']),
-                    'd1' => !empty($t['capabilities']['d1']),
-                    'cache' => !empty($t['capabilities']['cache']),
-                ),
+                'capabilities' => $caps,
             );
-            if ($type === 'cfse-worker') {
+            if ($tplId === 'cloudflare') {
                 $entry['endpoint'] = isset($t['endpoint']) ? esc_url_raw(trim($t['endpoint'])) : '';
                 $entry['auth_key'] = isset($t['auth_key']) ? sanitize_text_field($t['auth_key']) : '';
-            } elseif ($type === 's3') {
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
+            } elseif ($tplId === 's3') {
                 $entry['endpoint'] = isset($t['endpoint']) ? esc_url_raw(trim($t['endpoint'])) : '';
                 $entry['bucket'] = isset($t['bucket']) ? sanitize_text_field(trim($t['bucket'])) : '';
                 $entry['region'] = isset($t['region']) && trim($t['region']) !== '' ? sanitize_text_field(trim($t['region'])) : 'auto';
@@ -260,12 +283,21 @@ public function get_config() {
                 $mode = isset($t['path_style']) ? (string) $t['path_style'] : 'auto';
                 $entry['path_style'] = in_array($mode, array('auto', 'path', 'virtual'), true) ? $mode : 'auto';
                 $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
-            } else {
+            } else { // local
                 $entry['dir'] = isset($t['dir']) ? sanitize_text_field(trim($t['dir'])) : '';
                 // local 也可配 public_url（本地目录被 web 服务托管时，日志里就能给出可访问地址）
                 $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
             }
             $out[] = $entry;
+        }
+        // 4) 冷路径校验 + 回显（§12.4：自动修正必须可见；警告就地提示）
+        $vr = $this->validate_hosting_targets(true, $raw);
+        $notice = $this->render_adjustments_notice($vr['adjustments']);
+        if ($notice !== '') {
+            add_settings_error('cf_hosting_targets', 'cfse_adjusted', $notice, 'warning');
+        }
+        foreach ($vr['warnings'] as $w) {
+            add_settings_error('cf_hosting_targets', 'cfse_warn_' . md5($w['key'] . $w['id']), '⚠ ' . $w['message'], 'warning');
         }
         return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
@@ -273,31 +305,51 @@ public function get_config() {
     /** 设置页：托管目标表格（已有目标逐行渲染；新增行由页面内 JS 生成） */
     public function render_hosting_targets_table() {
         $targets = $this->config['hosting_targets'];
+        // 冷路径校验（§12）：行内警告 + 集合级提示
+        $vr = $this->validate_hosting_targets(false);
+        $byId = array(); $global = array();
+        foreach ($vr['warnings'] as $w) {
+            if ($w['id'] === '(全部目标)') $global[] = $w; else $byId[$w['id']][] = $w;
+        }
         ?>
         <div style="overflow-x:auto;">
         <table class="widefat striped" id="cfse-targets" style="max-width:100%;">
             <thead><tr>
                 <th style="width:46px;">启用</th>
-                <th style="width:150px;">名称</th>
-                <th style="width:130px;">类型</th>
-                <th>端点（Worker）/ 目录（local）</th>
-                <th style="width:150px;">Auth Key</th>
-                <th style="width:110px;">路径前缀</th>
+                <th style="width:140px;">名称</th>
+                <th style="width:170px;">模板</th>
+                <th>端点 / 目录（按模板）</th>
+                <th style="width:130px;">Auth Key</th>
+                <th style="width:90px;">路径前缀</th>
                 <th style="width:170px;">能力</th>
+                <th style="width:170px;">意图</th>
                 <th style="width:46px;"></th>
             </tr></thead>
             <tbody id="cfse-targets-body">
-            <?php foreach ($targets as $i => $t) { $this->render_hosting_target_row($i, $t); } ?>
+            <?php foreach ($targets as $i => $t) {
+                $tid = isset($t['id']) ? $t['id'] : '';
+                $this->render_hosting_target_row($i, $t, isset($byId[$tid]) ? $byId[$tid] : array());
+            } ?>
             </tbody>
         </table>
         </div>
-        <?php
+        <?php if (!empty($global)) { ?>
+            <div style="margin-top:8px;background:#fff8e5;border-left:3px solid #dba617;padding:8px 12px;">
+                <?php foreach ($global as $w) { ?>
+                    <div style="margin:2px 0;">⚠ <?php echo esc_html($w['message']); ?></div>
+                <?php } ?>
+            </div>
+        <?php }
     }
 
     /** 单行（字段名 cf_hosting_targets[N][xxx]，与 sanitize 对应） */
-    private function render_hosting_target_row($i, $t) {
-        $type = isset($t['type']) ? $t['type'] : 'cfse-worker';
-        $caps = isset($t['capabilities']) && is_array($t['capabilities']) ? $t['capabilities'] : array('r2' => true, 'd1' => true, 'cache' => true);
+    private function render_hosting_target_row($i, $t, $warns = array()) {
+        $templates = $this->get_hosting_templates();
+        $tplId = isset($t['template']) ? $t['template'] : (isset($t['type']) ? $t['type'] : 'cloudflare');
+        if (!isset($templates[$tplId])) $tplId = 'cloudflare';
+        $tpl = $templates[$tplId];
+        $caps = isset($t['capabilities']) && is_array($t['capabilities']) ? $t['capabilities'] : $tpl['defaults']['capabilities'];
+        $intent = isset($t['intent']) && is_array($t['intent']) ? $t['intent'] : $tpl['defaults']['intent'];
         $n = 'cf_hosting_targets[' . (int) $i . ']';
         ?>
         <tr class="cfse-target-row">
@@ -307,10 +359,10 @@ public function get_config() {
                 <input type="hidden" name="<?php echo esc_attr($n); ?>[id]" value="<?php echo esc_attr(isset($t['id']) ? $t['id'] : ''); ?>" />
             </td>
             <td>
-                <select name="<?php echo esc_attr($n); ?>[type]" class="cfse-target-type" style="width:100%;">
-                    <option value="cfse-worker" <?php selected($type, 'cfse-worker'); ?>>cfse-worker（CF Worker）</option>
-                    <option value="local" <?php selected($type, 'local'); ?>>local（本地目录）</option>
-                    <option value="s3" <?php selected($type, 's3'); ?>>s3（S3 兼容对象存储）</option>
+                <select name="<?php echo esc_attr($n); ?>[template]" class="cfse-target-template" style="width:100%;">
+                    <?php foreach ($templates as $tid => $tp) { ?>
+                        <option value="<?php echo esc_attr($tid); ?>" <?php selected($tplId, $tid); ?>><?php echo esc_html($tp['name']); ?></option>
+                    <?php } ?>
                 </select>
             </td>
             <td>
@@ -332,12 +384,29 @@ public function get_config() {
             <td><input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></td>
             <td><input type="text" name="<?php echo esc_attr($n); ?>[path_prefix]" value="<?php echo esc_attr(isset($t['path_prefix']) ? $t['path_prefix'] : ''); ?>" style="width:100%;" placeholder="（暂未使用）" /></td>
             <td style="white-space:nowrap;font-size:12px;">
-                <label><input type="checkbox" name="<?php echo esc_attr($n); ?>[capabilities][r2]" value="1" <?php checked(!empty($caps['r2'])); ?> /> 静态文件</label><br/>
-                <label><input type="checkbox" name="<?php echo esc_attr($n); ?>[capabilities][d1]" value="1" <?php checked(!empty($caps['d1'])); ?> /> 文章数据</label><br/>
-                <label><input type="checkbox" name="<?php echo esc_attr($n); ?>[capabilities][cache]" value="1" <?php checked(!empty($caps['cache'])); ?> /> 清缓存</label>
+                <?php foreach (array('r2' => '静态文件', 'd1' => '文章数据', 'render' => '渲染(render)', 'cache' => '清缓存') as $ck => $clabel) { ?>
+                    <label<?php if (empty($tpl['capabilities'][$ck])) echo ' style="opacity:.45;" title="该模板不支持此能力"'; ?>>
+                        <input type="checkbox" name="<?php echo esc_attr($n); ?>[capabilities][<?php echo esc_attr($ck); ?>]" value="1" <?php checked(!empty($caps[$ck])); ?><?php disabled(empty($tpl['capabilities'][$ck])); ?> /> <?php echo esc_html($clabel); ?>
+                    </label><br/>
+                <?php } ?>
+            </td>
+            <td style="white-space:nowrap;font-size:12px;">
+                <?php foreach (array('md' => '服务 md', 'static-list' => '动态列表', 'static-only' => '静态 HTML', 'backup' => '备份') as $ik => $ilabel) { ?>
+                    <label><input type="checkbox" name="<?php echo esc_attr($n); ?>[intent][<?php echo esc_attr($ik); ?>]" value="1" <?php checked(in_array($ik, $intent, true)); ?> /> <?php echo esc_html($ilabel); ?></label><br/>
+                <?php } ?>
             </td>
             <td><button type="button" class="button cfse-del-target" title="删除该目标">✕</button></td>
         </tr>
+        <?php if (!empty($warns)) { ?>
+        <tr class="cfse-row-warn"><td colspan="9" style="background:#fff8e5;border-left:3px solid #dba617;padding:8px 12px;">
+            <?php foreach ($warns as $w) { ?>
+                <div style="margin:2px 0;">⚠ <?php echo esc_html($w['message']); ?>
+                <?php if (!empty($w['fix']) && is_array($w['fix'])) { ?>
+                    <button type="button" class="button button-small cfse-fix-btn" data-fix="<?php echo esc_attr(implode(',', $w['fix'])); ?>" style="margin-left:6px;">以模板为准修正 type</button>
+                <?php } ?></div>
+            <?php } ?>
+        </td></tr>
+        <?php } ?>
         <?php
     }
 
@@ -515,10 +584,9 @@ public function get_config() {
                         </table>
                         <div class="cfse-card" style="margin:16px 0 0;background:#fff;border:1px solid #dcdcde;border-radius:4px;padding:16px;">
                             <h2 style="margin-top:0;">🎯 托管目标</h2>
-                            <p class="description">导出时把「<b>静态文件</b> / <b>文章数据</b> / <b>清缓存</b>」按各目标的<b>能力</b>分派出去。
-                                <code>cfse-worker</code> = Cloudflare Worker（走 X-Auth-Key 接口）；<code>local</code> = 只写本地目录（纯静态档，不联网）。
-                                某项目标不勾「静态文件」就完全不参与文件上传/删除；没有任何目标具备「文章数据」能力时（例如只有 local），写库会被跳过而不是报错。
-                                这里留空时，用上面的「站点 URL + Auth Key」当作默认 Worker 目标兜底。</p>
+                            <p class="description">先选<b>模板</b>（= 托管方，决定能力上限：Cloudflare 支持 R2/D1/渲染/清缓存，S3 与本地目录只支持写文件），
+                                再在模板允许范围内勾<b>能力</b>与<b>意图</b>。例如「只想全静态」就选 Cloudflare 模板、只勾「静态文件」——这是完全正常的配置，不会报警告。
+                                没有目标具备「文章数据」能力时写库会被跳过（不报错）。目标列表留空时，用上面的「站点 URL + Auth Key」当作默认 Worker 目标兜底。</p>
                             <?php $this->render_hosting_targets_table(); ?>
                             <p style="margin-top:8px;">
                                 <button type="button" class="button" id="cfse-add-target">＋ 添加目标</button>
@@ -531,23 +599,27 @@ public function get_config() {
                               var body = document.getElementById('cfse-targets-body');
                               if (!body) return;
                               var idx = body.querySelectorAll('tr.cfse-target-row').length;
+                              // 字段联动：按「模板」显隐字段组（B7②）
+                              //   cloudflare ⇒ endpoint + auth_key
+                              //   s3         ⇒ endpoint + s3 组（隐藏 auth_key）
+                              //   local      ⇒ dir（隐藏 endpoint / auth_key / s3）
                               function syncRow(tr){
-                                var type = tr.querySelector('.cfse-target-type');
+                                var tpl = tr.querySelector('.cfse-target-template');
                                 var ep = tr.querySelector('.cfse-f-endpoint');
                                 var dir = tr.querySelector('.cfse-f-dir');
                                 var key = tr.querySelector('.cfse-f-key');
                                 var s3 = tr.querySelector('.cfse-f-s3');
-                                var v = type ? type.value : 'cfse-worker';
+                                var v = tpl ? tpl.value : 'cloudflare';
                                 var isLocal = (v === 'local');
                                 var isS3 = (v === 's3');
                                 if (ep) ep.style.display = isLocal ? 'none' : '';
-                                if (key) key.parentNode.style.display = (isLocal || isS3) ? 'none' : '';
+                                if (key && key.parentNode) key.parentNode.style.display = (isLocal || isS3) ? 'none' : '';
                                 if (dir) dir.style.display = isLocal ? '' : 'none';
                                 if (s3) s3.style.display = isS3 ? '' : 'none';
                               }
                               function bind(tr){
-                                var type = tr.querySelector('.cfse-target-type');
-                                if (type) type.addEventListener('change', function(){ syncRow(tr); });
+                                var tpl = tr.querySelector('.cfse-target-template');
+                                if (tpl) tpl.addEventListener('change', function(){ syncRow(tr); });
                                 var del = tr.querySelector('.cfse-del-target');
                                 if (del) del.addEventListener('click', function(){ tr.parentNode.removeChild(tr); });
                                 syncRow(tr);
@@ -559,7 +631,7 @@ public function get_config() {
                                 tmp.innerHTML = '<tr class="cfse-target-row">' +
                                   '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
                                   '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /><input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /></td>' +
-                                  '<td><select name="cf_hosting_targets[' + idx + '][type]" class="cfse-target-type" style="width:100%;"><option value="cfse-worker">cfse-worker（CF Worker）</option><option value="local">local（本地目录）</option><option value="s3">s3（S3 兼容对象存储）</option></select></td>' +
+                                  '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option><option value="local">本地目录</option></select></td>' +
                                   '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" />' +
                                     '<div class="cfse-f-s3" style="margin-top:4px;display:none;">' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:49%;" placeholder="bucket 名" />' +
@@ -573,8 +645,15 @@ public function get_config() {
                                   '<td><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" /></td>' +
                                   '<td style="white-space:nowrap;font-size:12px;">' +
                                     '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][r2]" value="1" checked /> 静态文件</label><br/>' +
-                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][d1]" value="1" /> 文章数据</label><br/>' +
-                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][cache]" value="1" /> 清缓存</label>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][d1]" value="1" checked /> 文章数据</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][render]" value="1" checked /> 渲染(render)</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][cache]" value="1" checked /> 清缓存</label>' +
+                                  '</td>' +
+                                  '<td style="white-space:nowrap;font-size:12px;">' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][intent][md]" value="1" checked /> 服务 md</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][intent][static-list]" value="1" checked /> 动态列表</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][intent][static-only]" value="1" /> 静态 HTML</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][intent][backup]" value="1" /> 备份</label>' +
                                   '</td>' +
                                   '<td><button type="button" class="button cfse-del-target">✕</button></td>' +
                                 '</tr>';
@@ -1710,10 +1789,14 @@ private function get_post_storage_path($post) {
      * )
      * 日志按 (key, 目标 id) 限流：同一键一次调用只记一条（§12.2）。
      */
-    private function validate_hosting_targets($is_save = false) {
+    private function validate_hosting_targets($is_save = false, $list_override = null) {
         $templates = $this->get_hosting_templates();
-        $saved = get_option('cf_hosting_targets', '');
-        $list = is_string($saved) ? json_decode($saved, true) : array();
+        if (is_array($list_override)) {
+            $list = $list_override;
+        } else {
+            $saved = get_option('cf_hosting_targets', '');
+            $list = is_string($saved) ? json_decode($saved, true) : array();
+        }
         if (!is_array($list) || empty($list)) {
             return array('warnings' => array(), 'adjustments' => array());
         }

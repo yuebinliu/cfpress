@@ -294,7 +294,23 @@ GitHub Pages 与服务端能力**看起来**都只需 `r2`（写静态文件）�
 | 段 | 检查点 | 验证方式 |
 |---|---|---|
 | ① **模板切换** | 每行有模板下拉（`cloudflare` / `s3` / `local`，**只读内置**）；切换只改前端状态，**未保存不写盘**；保存后 option 中该行 `template` 为新值 | 渲染设置页断言下拉存在且选项 = 3 个；保存后检查 JSON |
-| ② **字段联动** | 选 `local` ⇒ 只显示 `dir`（隐藏 endpoint / auth_key / s3 组）；选 `s3` ⇒ 显示 bucket/region/access_key/secret_key/path_style/public_url，隐藏 auth_key；选 `cloudflare` ⇒ 显示 endpoint + auth_key，隐藏 dir / s3 组 | 服务端渲染断言三套字段组都在 DOM 中且带联动标记；**JS 实际显隐 = 人工核对**（无浏览器自动化）|
+| ② **字段联动** | 选 `local` ⇒ 只显示 `dir`（隐藏 endpoint / auth_key / s3 组）；选 `s3` ⇒ 显示 bucket/region/access_key/secret_key/path_style/public_url，隐藏 auth_key；选 `cloudflare` ⇒ 显示 endpoint + auth_key，隐藏 dir / s3 组 | 服务端渲染断言三套字段组都在 DOM 中且带联动标记；**JS 实际显隐 = 人工核对清单见下** |
+
+#### B7② 人工核对清单（JS 显隐，无浏览器自动化 ⇒ 逐项点击确认）
+
+| # | 操作 | 期望结果 |
+|---|---|---|
+| 1 | 打开 设置 → CF静态导出 → 🎯 托管目标 | 每行第 3 列是「**模板**」下拉，恰好 3 个选项：`Cloudflare（Worker + R2 + D1）` / `S3 兼容对象存储` / `本地目录` |
+| 2 | 某行模板选「本地目录」 | 该行端点区**只**显示「目录」输入框；`Endpoint`、`Auth Key`、以及 s3 字段组（bucket/region/access_key/secret_key/path_style/public_url）**全部隐藏** |
+| 3 | 该行模板选「S3 兼容对象存储」 | 显示 bucket/region/access_key/secret_key/path_style/public_url；`Endpoint` 可见；`Auth Key`、`目录` 输入框**隐藏** |
+| 4 | 该行模板选「Cloudflare（Worker + R2 + D1）」 | 显示 `Endpoint` + `Auth Key`；`目录` 与 s3 字段组**隐藏** |
+| 5 | 切换模板后**不保存**，刷新页面 | 该行回到切换前的模板（未保存不写盘）|
+| 6 | 切换模板后保存 | 页面重载后该行保持新模板；若有自动修正，顶部出现「已自动修正 N 处 —— …」提示 |
+| 7 | 点「＋ 添加目标」 | 新行模板下拉有默认值，字段区按该默认值**立即正确显隐**（无需手动触发）|
+| 8 | 某行勾上模板不支持的能力（如 s3 勾「文章数据」）后保存 | **行内**出现提示「模板「s3」不支持能力「d1」，保存后将被关闭」；保存提示（flash）里说明已自动关闭该能力；重新加载后该勾选框为**未勾** |
+| 9 | 构造 type/template 冲突（手改 JSON：`template=s3, type=cfse-worker`） | 该行**行内**提示不匹配，并提供两个动作：「以模板为准修正 type」「以 type 为准修正 template」|
+| 10 | 全部目标都不具备 `d1` 能力、且某目标意图含 `md` | 页面出现集合级提示："有目标声明了需要 D1 的意图…若本站就是纯静态，请把意图改为「服务静态 HTML」" |
+| 11 | 纯静态配置（只勾 `r2`、意图 `static-only`） | **不出现任何警告**（这是合法配置）|
 | ③ **`$adjustments[]` 时机** | 值未变化 ⇒ **不提示**（无噪声）；被修正 ⇒ 提示"已自动修正"；提示出现在**保存之后**（flash），不是保存前 | 构造"需修正"的保存 ⇒ 断言 flash 含"已自动修正"；构造"无需修正"的保存 ⇒ 断言无 flash |
 | ④ **超限警告** | target 声明模板不支持的能力（如 s3 勾 d1）⇒ **行内提示** + 一条日志（限流键 `over_limit:<id>:<cap>`）；保存后能力被裁剪 | 构造超限配置：渲染设置页 ⇒ 断言行内提示；保存 ⇒ 断言日志**只出现一次**且能力已裁剪 |
 
