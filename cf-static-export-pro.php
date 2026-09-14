@@ -1691,6 +1691,33 @@ private function get_post_storage_path($post) {
         );
     }
 
+    /**
+     * 内置兜底目标：目标列表为空时使用（A3：显式默认 > 列表 > 兜底）。
+     * 能力取 cloudflare 模板的默认值（全开，含 render），保持与改造前一致。
+     */
+    private function default_worker_target() {
+        $tpl = $this->get_hosting_templates();
+        $cf = isset($tpl['cloudflare']) ? $tpl['cloudflare'] : null;
+        $caps = $cf ? $cf['defaults']['capabilities'] : array('r2' => true, 'd1' => true, 'render' => true, 'cache' => true);
+        return array(
+            'id' => 'default',
+            'name' => '默认（Cloudflare Worker）',
+            'template' => 'cloudflare',
+            'type' => 'cfse-worker',
+            'enabled' => true,
+            'endpoint' => rtrim(get_option('cf_site_url', get_site_url()), '/'),
+            'auth_key' => get_option('cf_auth_key', ''),
+            'path_prefix' => '',
+            'capabilities' => $caps,
+        );
+    }
+
+    /**
+     * 解析托管目标 —— 【热路径】，见 docs/hosting-templates.md §12.1。
+     * 热路径只做静默归一化（模板解析 / type 归一 / 能力裁剪），不记"每请求都会重复"的诊断；
+     * 但"配置严重错误导致目标被整条跳过"仍记日志（静默跳过比日志噪声更危险）。
+     * 返回结构保持与改造前一致（type / capabilities / endpoint / auth_key / path_prefix），下游零改动。
+     */
     private function get_hosting_targets() {
         $list = array();
         $saved = get_option('cf_hosting_targets', '');
@@ -1698,35 +1725,45 @@ private function get_post_storage_path($post) {
             $decoded = json_decode($saved, true);
             if (is_array($decoded)) $list = $decoded;
         }
+        // A3 兜底优先级：显式默认目标 > 非空列表 > 内置兜底
         if (empty($list)) {
-            return array(array(
-                'id' => 'default',
-                'name' => '默认（Cloudflare Worker）',
-                'type' => 'cfse-worker',
-                'enabled' => true,
-                'endpoint' => rtrim(get_option('cf_site_url', get_site_url()), '/'),
-                'auth_key' => get_option('cf_auth_key', ''),
-                'path_prefix' => '',
-                'capabilities' => array('r2' => true, 'd1' => true, 'cache' => true),
-            ));
+            return array($this->default_worker_target());
         }
+        $templates = $this->get_hosting_templates();
         $out = array();
         foreach ($list as $t) {
             if (!is_array($t)) continue;
             if (isset($t['enabled']) && !$t['enabled']) continue;
-            $type = isset($t['type']) ? (string) $t['type'] : 'cfse-worker';
-            // 已实现的类型白名单：cfse-worker（Worker）/ local（本地目录）/ s3。
-            // 模板层（get_hosting_templates()）是这些类型的声明来源；本函数仍以 type 为准做兼容读。
-            if (!in_array($type, array('cfse-worker', 'local', 's3'), true)) {
-                $this->log('托管目标 ' . (isset($t['id']) ? $t['id'] : '?') . ' 的类型 ' . $type . ' 尚未实现，已跳过', 'WARNING');
+
+            $tid = isset($t['id']) ? $t['id'] : '?';
+            // ① 模板解析：新结构 template 优先；仅有旧 type 时按 legacy_type 反查
+            $tplId = isset($t['template']) ? (string) $t['template'] : '';
+            if ($tplId === '') {
+                $legacy = isset($t['type']) ? (string) $t['type'] : '';
+                foreach ($templates as $cand => $tp) {
+                    if (isset($tp['legacy_type']) && $tp['legacy_type'] === $legacy) { $tplId = $cand; break; }
+                }
+            }
+            if ($tplId === '' || !isset($templates[$tplId])) {
+                $this->log('托管目标 ' . $tid . ' 的模板 ' . ($tplId !== '' ? $tplId : '(未指定)') . ' 不存在，已跳过', 'WARNING');
                 continue;
             }
-            if (!isset($t['capabilities']) || !is_array($t['capabilities'])) {
-                // 缺省能力按类型推导：只有 Worker 目标能写 D1 / 清缓存；
-                // local / s3 只是「文件落点」，凭空给它们 d1 能力会让写库请求发到对象存储端点（必然失败）。
-                $t['capabilities'] = ($type === 'cfse-worker')
-                    ? array('r2' => true, 'd1' => true, 'cache' => true)
-                    : array('r2' => true, 'd1' => false, 'cache' => false);
+            $tpl = $templates[$tplId];
+            // ② 归一化：以模板为准写回 template / type（保存路径同样重算，并回显给用户 —— §12.4）
+            $t['template'] = $tplId;
+            $t['type'] = $tpl['legacy_type'];
+            // ③ 能力归一化（§12.7）：模板不支持 ⇒ false；支持但未声明 ⇒ 跟随模板默认；已声明 ⇒ 取值
+            $caps = (isset($t['capabilities']) && is_array($t['capabilities'])) ? $t['capabilities'] : array();
+            $defCaps = isset($tpl['defaults']['capabilities']) ? $tpl['defaults']['capabilities'] : array();
+            $norm = array();
+            foreach ($tpl['capabilities'] as $k => $limit) {
+                if (!$limit) { $norm[$k] = false; continue; }
+                $norm[$k] = array_key_exists($k, $caps) ? !empty($caps[$k]) : !empty($defCaps[$k]);
+            }
+            $t['capabilities'] = $norm;
+            // ④ 意图：阶段一只解析（供冷路径校验），热路径不消费
+            if (!isset($t['intent']) || !is_array($t['intent'])) {
+                $t['intent'] = isset($tpl['defaults']['intent']) ? $tpl['defaults']['intent'] : array();
             }
             if (!isset($t['path_prefix'])) $t['path_prefix'] = '';
             $out[] = $t;
