@@ -200,6 +200,33 @@ async function pruneStyleVersions(env, id, keep = 5) {
 }
 
 /** 确保 styles 表存在（幂等；WP 端 schema 迁移也会建，这里兜底） */
+/** 核心表结构（与 WP 插件 ensure_d1_schema 的 DDL 保持一致，便于两端混用）。幂等。 */
+async function ensureCoreSchema(env) {
+    const ddl = [
+        "CREATE TABLE IF NOT EXISTS posts (wp_id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, content TEXT, content_format TEXT DEFAULT 'html', excerpt TEXT, date DATETIME NOT NULL, modified DATETIME, status TEXT DEFAULT 'published', categories TEXT, tags TEXT, featured_image TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
+        "CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT)",
+        "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, user_login TEXT UNIQUE NOT NULL, user_pass TEXT NOT NULL, user_nicename TEXT, user_email TEXT, user_url TEXT, user_registered DATETIME DEFAULT CURRENT_TIMESTAMP, display_name TEXT, role TEXT DEFAULT 'admin', avatar_url TEXT, user_status INTEGER DEFAULT 1, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, settings TEXT)",
+        "CREATE TABLE IF NOT EXISTS taxonomies (type TEXT NOT NULL, slug TEXT NOT NULL, name TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (type, slug))",
+        "CREATE TABLE IF NOT EXISTS post_taxonomy (post_id INTEGER NOT NULL, taxonomy_type TEXT NOT NULL, taxonomy_slug TEXT NOT NULL, PRIMARY KEY (post_id, taxonomy_type, taxonomy_slug))",
+        "CREATE INDEX IF NOT EXISTS idx_posts_date ON posts(date DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status)",
+        "CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug)",
+        "CREATE INDEX IF NOT EXISTS idx_pt_post ON post_taxonomy(post_id)",
+        "CREATE INDEX IF NOT EXISTS idx_pt_slug ON post_taxonomy(taxonomy_slug)",
+    ];
+    for (const sql of ddl) {
+        try { await env.D1_DATABASE.prepare(sql).run(); } catch (e) { console.error('ensureCoreSchema:', e); }
+    }
+}
+
+/** 默认缓存策略 + 批量任务配置（与 WP 插件默认值一致） */
+function defaultCacheConfig() {
+    return {
+        ttl_list: 0, ttl_sidebar: 0, ttl_site: 604800, ttl_feed: 14400,
+        feed_count: 20, purge_on_publish: false, task_batch: 20, task_concurrency: 4,
+    };
+}
+
 async function ensureStylesTable(env) {
     try {
         await env.D1_DATABASE.prepare('CREATE TABLE IF NOT EXISTS styles (id TEXT NOT NULL, version INTEGER NOT NULL, name TEXT, tpl_json TEXT, updated_at TEXT, PRIMARY KEY (id, version))').run();
@@ -593,6 +620,67 @@ export async function handleAdminRequest(request, env) {
         if (!row || parseInt(row.user_status, 10) !== 1) return json({ error: '账号不可用' }, 401);
         const access = await signJwt({ sub: row.id, username: row.user_login, role: row.role, typ: 'access' }, secret, ACCESS_TTL);
         return json({ access, user: { id: row.id, username: row.user_login, role: row.role, displayName: row.display_name, email: row.user_email } });
+    }
+
+    // ============================================
+    // 一键初始化（首次部署引导）
+    //   未初始化（users 表为空）时开放；建好第一个管理员后**永久关闭**，避免成为后门。
+    // ============================================
+    if (path === '/api/setup/status' && method === 'GET') {
+        let hasUsers = false; let siteName = '';
+        try {
+            await ensureCoreSchema(env);
+            const c = await env.D1_DATABASE.prepare('SELECT COUNT(*) AS c FROM users').first();
+            hasUsers = parseInt((c && c.c) || 0, 10) > 0;
+            const row = await env.D1_DATABASE.prepare("SELECT v FROM settings WHERE k = 'site'").first();
+            if (row && row.v) { try { siteName = (JSON.parse(row.v) || {}).name || ''; } catch (e) {} }
+        } catch (e) {
+            console.error('setup status:', e);
+        }
+        return json({ initialized: hasUsers, hasUsers: hasUsers, siteName: siteName });
+    }
+    if (path === '/api/setup' && method === 'POST') {
+        const setupIp = request.headers.get('CF-Connecting-IP') || 'unknown';
+        if (await loginRateLimit(env, setupIp)) return json({ error: '尝试过于频繁，请稍后再试' }, 429);
+        await ensureCoreSchema(env);
+        const cnt = await env.D1_DATABASE.prepare('SELECT COUNT(*) AS c FROM users').first();
+        if (parseInt((cnt && cnt.c) || 0, 10) > 0) {
+            return json({ error: '本站已完成初始化（已存在用户），该接口已关闭。请用已有账号登录，或直接改 D1 的 users 表。' }, 403);
+        }
+        let body = {};
+        try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
+        const username = String(body.username || '').trim();
+        const password = String(body.password || '');
+        if (!/^[A-Za-z0-9_.-]{3,40}$/.test(username)) return json({ error: '用户名需 3-40 位字母/数字/_.-' }, 400);
+        if (password.length < 8) return json({ error: '密码至少 8 位' }, 400);
+        const siteName = String(body.siteName || '').trim() || 'My Static Site';
+        const siteUrl = String(body.siteUrl || '').trim().replace(/\/+$/, '');
+        const hash = await hashPassword(password);
+        try {
+            await env.D1_DATABASE.prepare("INSERT INTO users (user_login, user_pass, user_nicename, user_email, display_name, role, user_status) VALUES (?, ?, ?, ?, ?, 'admin', 1)")
+                .bind(username, hash, username, String(body.email || ''), String(body.displayName || username)).run();
+        } catch (e) {
+            console.error('setup create admin:', e);
+            return json({ error: '创建管理员失败：' + String((e && e.message) || e) }, 500);
+        }
+        const site = JSON.stringify({
+            name: siteName,
+            description: String(body.description || ''),
+            url: siteUrl,
+            storagePattern: '{slug}/index.html',
+            timezoneOffset: 0,
+        });
+        await env.D1_DATABASE.prepare("INSERT INTO settings (k, v) VALUES ('site', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(site).run();
+        await env.D1_DATABASE.prepare("INSERT INTO settings (k, v) VALUES ('cache', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(JSON.stringify(defaultCacheConfig())).run();
+        try { await env.KV_CACHE.delete('site:ctx'); } catch (e) {}
+        const u = await env.D1_DATABASE.prepare('SELECT id, user_login FROM users WHERE user_login = ?').bind(username).first();
+        console.log('[setup] initialized with admin=' + username + ' site=' + siteName);
+        return json({
+            ok: true,
+            user: { id: u ? u.id : 0, username: username, role: 'admin' },
+            site: { name: siteName, url: siteUrl },
+            next: ['登录 /admin/ 后台', '到「设置」补站点名/URL', '到「模板」选风格', '在 WP 插件或第三方编辑器中配置端点与 X-Auth-Key'],
+        }, 201);
     }
 
     // ---- 其余需 access 鉴权 ----
@@ -1612,7 +1700,10 @@ export async function handleAdminRequest(request, env) {
         const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
         const rand = Math.random().toString(36).slice(2, 10);
         const safeBase = name.split('.').slice(0, -1).join('.').replace(/[^a-z0-9\u4e00-\u9fa5-]+/g, '-').slice(0, 60) || 'img';
-        const path = 'wp-content/uploads/' + y + '/' + mm + '/' + rand + '-' + safeBase + '.' + ext;
+        // key 里的文件名统一 ASCII：非 ASCII 走小写 percent-encoding（与 WP slug 规则一致）。
+        // 否则 key 含中文、而请求 URL 的 pathname 是 %xx 形态，R2 查找匹配不上 ⇒ 图片 404。
+        const asciiBase = encodeURI(safeBase).toLowerCase();
+        const path = 'wp-content/uploads/' + y + '/' + mm + '/' + rand + '-' + asciiBase + '.' + ext;
         const buf = await file.arrayBuffer();
         // 魔数嗅探：防止伪装扩展名上传非图片（sniff 前若干字节）
         const head = new Uint8Array(buf, 0, 12);
@@ -2233,9 +2324,14 @@ export async function handleWpV2(request, env) {
         const ext = isPng ? 'png' : (isGif ? 'gif' : (isWebp ? 'webp' : 'jpg'));
         const mediaType = isPng ? 'image/png' : (isGif ? 'image/gif' : (isWebp ? 'image/webp' : 'image/jpeg'));
         const base = String(origName).replace(/\.[^.]*$/, '').replace(/[^\w\u4e00-\u9fa5.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'image';
-        const now = new Date();
-        const y = now.getUTCFullYear(), mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-        const key = 'wp-content/uploads/' + y + '/' + mm + '/' + Date.now().toString(36) + '-' + base + '.' + ext;
+        // key 用「内容 SHA-256 前 8 位 + 原名」：同一张图永远落同一个 key ⇒ 重复发布是幂等覆盖，不会堆积副本。
+        // （旧规则是 <时间戳>-<名字>，每次发布都会产生新对象。）
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+        let hashHex = '';
+        for (let i = 0; i < digest.length; i++) hashHex += digest[i].toString(16).padStart(2, '0');
+        // 同上：文件名统一 ASCII（小写 percent-encoding），保证返回的 source_url 可直接访问
+        const asciiBase = encodeURI(base).toLowerCase();
+        const key = 'wp-content/uploads/' + hashHex.slice(0, 8) + '-' + asciiBase + '.' + ext;
         try {
             await env.R2_BUCKET.put(key, buf, { httpMetadata: { contentType: mediaType } });
         } catch (e) {

@@ -210,6 +210,20 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **修 ②（插件可观测性）**：`apiBase()` 兼容带尾斜杠等等写法；发布时汇总弹出「图片：上传 N 张 / 退回前缀 M 张 / 未处理 K 张」，上传失败原因直接可见。
   - **实测（一个脚本内完成）**：建 md 测试文 → 只勾①导出 → 首次访问 `200 + X-CFSE-Render: on-demand`、含「第一版」→ 二次访问无该头（R2 回填）→ 改内容再导出 → 再访问 **200 + on-demand + 含「第二版」、不含「第一版」** → 删除后访问 404。
 
+- **批AF（媒体去重，2026-09-14，已部署验证）**：media key 从 `<base36 时间戳>-<名字>` 改为 **`<内容 SHA-256 前 8 位>-<名字>.<ext>`**（去掉年月目录）—— 同一张图永远落同一个 key，重复发布是幂等覆盖、不再堆积副本。实测：同内容两次上传 → **同一 URL**；访问 200、清理后 404。（取舍：hash 后保留原名以便识别；同内容换文件名会各存一份。）
+- **批AG（一键初始化·后端，2026-09-14，已部署验证）**：空库可跑的基础 ——
+  - `ensureCoreSchema()`：Worker 侧自建**全部核心表**（posts / settings / users / taxonomies / post_taxonomy + 索引，DDL 与 WP 插件的 `ensure_d1_schema` 一致）⇒ **不装 WP 插件也能跑**（此前核心表全靠 WP 插件那边建）。
+  - `GET /api/setup/status` → `{initialized, hasUsers, siteName}`。
+  - `POST /api/setup`：**仅当 users 表为空**时可调用（建表 + 建第一个 admin + 写 site/cache 默认设置 + 清 `site:ctx`），建好管理员后**永久 403**（避免成为后门）；带 IP 限速与用户名/密码校验。
+  - 实测：线上 `status` → `{initialized:true, hasUsers:true, siteName:"yuebin's blog"}`；`POST /api/setup` → **403** 且用户列表未被污染。
+  - **仍缺（下一步）**：`/admin/` 的**初始化引导页**（空库时打开后台应直接进向导，而不是卡在登录页）、`npm run setup`（创建 D1/KV/R2 + 生成 wrangler.toml 引导）与从零部署文档。
+- **批AH（中文文件名图片 404 修复 + schema.sql 更新，2026-09-14，已部署验证）**：
+  - **根因**：media 的 R2 key **保留中文**（如 `6正方形-1.jpg`），而请求 URL 的 pathname 是 `%xx` 形态 ⇒ R2 查找匹配不上 ⇒ 图片 404（ASCII 文件名不受影响）。
+  - **修复**：两处 media 命名（`/api/media`（JWT）与 `/wp/v2/media`（Basic））都把文件名 `encodeURI(...).toLowerCase()` 成**小写 %xx**（与 WP slug 规则一致）⇒ 返回的 `source_url` 可直接访问。
+  - 实测：中文名上传 → `…/uploads/6b7fa434-%e4%b8%ad%e6%96%87%e5%90%8d-%e6%b5%8b%e8%af%95.png` **直接访问 200**；再传一次同 URL（幂等）。
+  - **旧对象提示**：此前用中文原名上传的对象（如 `6正方形-1.jpg`）仍按旧 key 存放 ⇒ **重新发布一次即可生成新 key**，旧对象可清理。
+  - **`schema.sql` 更新到 3.0.0**：补 posts 的 `content_format` 列、新增 settings/users/styles/app_passwords 与索引；文首写明「Worker `ensureCoreSchema` / WP `ensure_d1_schema` / 本文件**三处同步**」，并说明正常**无需手工执行**。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）
