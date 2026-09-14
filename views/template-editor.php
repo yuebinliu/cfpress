@@ -975,7 +975,16 @@ function cfseParseTaxo(raw) {
 function cfsePostUrl(post, site) {
     let p = (site && site.storagePattern) || '';
     const d = String(post.date || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
-    const vals = { year: d ? d[1] : '', month: d ? d[2] : '', day: d ? d[3] : '', hour: '', minute: '', second: '', id: String(post.wp_id || ''), slug: String(post.slug || ''), category: '', author: '' };
+    // {category}：取该文章第一个分类的 slug（posts.categories 是 JSON [{name,slug}]）
+    let catSlug = '';
+    try {
+        const cats = JSON.parse(post.categories || '[]');
+        if (Array.isArray(cats) && cats.length) {
+            const c0 = cats[0];
+            catSlug = String((c0 && (c0.slug || c0.name)) || '');
+        }
+    } catch (e) { /* 忽略解析失败 */ }
+    const vals = { year: d ? d[1] : '', month: d ? d[2] : '', day: d ? d[3] : '', hour: '', minute: '', second: '', id: String(post.wp_id || ''), slug: String(post.slug || ''), category: catSlug, author: '' };
     p = p.replace(/\{(year|month|day|hour|minute|second|id|slug|category|author)\}/g, (m, k) => vals[k] || '');
     p = p.replace(/\/?index\.html$/, '');
     return ((site && site.url) || '') + '/' + p.split('/').filter(Boolean).join('/') + '/';

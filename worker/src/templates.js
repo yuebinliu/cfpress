@@ -100,6 +100,10 @@ function cfseRenderItem(itemTpl, post, site) {
     h = cfseReplace(h, '{{POST_EXCERPT}}', escapeHtml(post.excerpt || ''));
     h = cfseReplace(h, '{{POST_CATEGORIES}}', catLinks);
     h = cfseReplace(h, '{{POST_TAGS}}', tagLinks);
+    // 站点级占位符：条目模板里同样会出现站点链接（如作者归档 /author/<slug>/、站点首页）
+    h = cfseReplace(h, '{{SITE_URL}}', (site && site.url) || '');
+    h = cfseReplace(h, '{{SITE_NAME}}', (site && site.name) || '');
+    h = cfseReplace(h, '{{SITE_DESC}}', (site && site.description) || '');
     return h;
 }
 
