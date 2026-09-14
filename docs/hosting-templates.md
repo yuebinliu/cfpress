@@ -93,6 +93,7 @@ GitHub Pages 与服务端能力**看起来**都只需 `r2`（写静态文件）�
   "id": "cloudflare",                     // 模板标识（= provider）
   "name": "Cloudflare（Worker + R2 + D1）",
   "transport": "worker-api",              // 写入机制：worker-api | fs | s3 | git（provider 三要素之一）
+  "legacy_type": "cfse-worker",           // 回滚兼容：旧代码读的 type 值（双写一致性校验的依据）
   "capabilities": {                       // 能力**上限**：这台 provider 最多能做到什么
     "r2": true,                           // 存静态文件（R2 / 任意对象存储）
     "d1": true,                           // 写结构化数据（文章入库，供列表页/后台读取）
@@ -110,12 +111,12 @@ GitHub Pages 与服务端能力**看起来**都只需 `r2`（写静态文件）�
 
 内置模板（首批）：
 
-| id | transport | 能力上限 | 可承接的意图 | 需要的站点字段 |
-|---|---|---|---|---|
-| `cloudflare` | `worker-api` | `r2 d1 render cache` | 全部（md / static-list / static-only / backup）| `endpoint` `auth_key` `path_prefix` `public_url`（可选）|
-| `s3` | `s3` | `r2` | `static-only` `backup` | `endpoint` `bucket` `region` `access_key` `secret_key` `path_style` `path_prefix` `public_url` |
-| `local` | `fs` | `r2` | `static-only` `backup` | `dir` `path_prefix` `public_url`（可选）|
-| `github`（**预留，暂未实现**）| `git` | `r2` | `static-only`（若实现）| `repo` `branch` `credentials`（deploy key 或 PAT）|
+| id | transport | legacy_type | 能力上限 | 可承接的意图 | 需要的站点字段 |
+|---|---|---|---|---|---|
+| `cloudflare` | `worker-api` | `cfse-worker` | `r2 d1 render cache` | 全部（md / static-list / static-only / backup）| `endpoint` `auth_key` `path_prefix` `public_url`（可选）|
+| `s3` | `s3` | `s3` | `r2` | `static-only` `backup` | `endpoint` `bucket` `region` `access_key` `secret_key` `path_style` `path_prefix` `public_url` |
+| `local` | `fs` | `local` | `r2` | `static-only` `backup` | `dir` `path_prefix` `public_url`（可选）|
+| `github`（**预留，暂未实现**）| `git` | — | `r2` | `static-only`（若实现）| `repo` `branch` `credentials`（deploy key 或 PAT）|
 
 > **`github` 仅为预留记录**：写入形态是 push 到 Git 仓库 + CI 部署，与 `local` / `s3` 都不同，**不实现时不要用它冒充**。
 > 若暂不实现，UI 上就**不出现**该 provider，文档如实写明"该场景需用户手工推" —— 不用 `local` / `s3` 顶替，避免"生成到本地"被误解为"已发布"。
@@ -257,7 +258,9 @@ GitHub Pages 与服务端能力**看起来**都只需 `r2`（写静态文件）�
 
 ---
 
-## 11. 阶段一验收标准（动手前定稿）
+## 11. 阶段一验收标准（**已封板**）
+
+> 三个待确认细节已全部拍板（见本节末），设计基线与验收标准**封板**，进入实施。
 
 **阶段一范围**：target / 模板层（`transport` + 能力上限 + 意图 + 三层校验 + 新旧结构兼容读），**不动**旧 CF option、不动导出链。
 
@@ -291,15 +294,18 @@ GitHub Pages 与服务端能力**看起来**都只需 `r2`（写静态文件）�
 |---|---|---|
 | C1 | 单条 target：有 `template` ⇒ 用模板；仅有旧 `type` ⇒ 映射同名模板（`cfse-worker` → `cloudflare`）；**两者都有且冲突 ⇒ 以 `template` 为准并记日志** | 三种形态各构造一条，断言解析结果 |
 | C2 | 保存时**一律写新结构**（含 `template`）；旧结构**只读兼容**，不回写 | 保存后检查 option JSON 形态 |
-| C3 | **过渡期双写**：保存时同时保留 `type` 字段（旧语义名），便于回滚 | 检查保存后 JSON 同时含 `template` 与 `type` |
+| C3 | **过渡期双写 + 一致性校验**：保存时同时保留 `type`（值 = 模板的 `legacy_type`）；并校验 `type` 与 `template` 是否**匹配**（`cloudflare`→`cfse-worker`、`s3`→`s3`、`local`→`local`）；**不一致 ⇒ 警告 + 记日志**（不自动改，因为无法判断哪个才是当前意图） | ① 正常保存 ⇒ JSON 同时含 `template` 与匹配的 `type`；② 构造不匹配的组合 ⇒ 断言出现警告 + 日志；③ **往返测试**：保存后用**旧结构语义**读取（只用 `type`）⇒ 断言解析结果与新结构一致 |
 | C4 | 迁移幂等：重复读取 / 保存不改变语义与行为 | 连续保存两次，比对 JSON 与行为 |
 | C5 | **禁止"内存覆盖 option"式假通过**：验收必须走真实 `update_option` 入口（反射改内存 config 只能用于辅助定位，不能作为通过依据）| 审查验证脚本：断言其通过 option / 表单入口写入 |
+| C6 | **读时也校验一致性**（不一致可能由手改 JSON、或"回滚再升级"产生 —— 旧代码保存只写 `type`，`template` 会变陈旧）；冲突以 `template` 为准并记日志，**日志需限流**（每进程/每次检查最多一条，避免每次请求刷日志）| 构造三条不一致数据，断言：解析以 `template` 为准、日志只出现一次 |
 
 ### 待确认的三个细节（动手前拍板）
 
 1. **兜底与显式默认并存**（对应 A3）：建议**保留**现有"列表为空 ⇒ 兜底"，同时**新增**显式"默认托管站"；优先级 = 显式 > 列表 > 兜底。
 2. **超出模板上限的处理**（对应 B6）：建议**裁剪 + 警告**，不拒绝保存（与"不阻止不寻常但合法的组合"一致）。
-3. **`type` 双写**（对应 C3）：建议**双写**以保回滚安全。
+3. **`type` 双写 + 一致性校验**（对应 C3/C6）：**已确认** —— 双写，但保存时校验 `type` 与模板的 `legacy_type` 是否匹配，不一致则警告 + 记日志；
+   读时做同样校验（限流）。理由：双写的价值是"回滚时旧代码能跑"，旧代码的依据是 `type` 正确；
+   若两者不一致，回滚后行为与新代码不同 ⇒ 双写反而制造"看起来安全、实际不安全"的假象。
 
 ---
 

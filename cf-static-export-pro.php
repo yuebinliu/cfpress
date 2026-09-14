@@ -1641,6 +1641,56 @@ private function get_post_storage_path($post) {
      *   enabled=false 忽略。
      * 未配置时用旧设置（cf_site_url + cf_auth_key）自动迁移成一条默认 target ⇒ 行为不变。
      */
+    /**
+     * 内置托管模板（provider 级）—— 只读，不接受用户写入。
+     * 定义 provider 的「能力上限 / 写入机制 / 回滚兼容 type / 需要填的站点字段」。
+     * 详见 docs/hosting-templates.md（决策与验收标准）。
+     */
+    private function get_hosting_templates() {
+        return array(
+            'cloudflare' => array(
+                'id' => 'cloudflare',
+                'name' => 'Cloudflare（Worker + R2 + D1）',
+                'transport' => 'worker-api',
+                'legacy_type' => 'cfse-worker',
+                'capabilities' => array('r2' => true, 'd1' => true, 'render' => true, 'cache' => true),
+                'intents' => array('md', 'static-list', 'static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => true, 'render' => true, 'cache' => true),
+                    'intent' => array('md', 'static-list'),
+                ),
+                'fields' => array('endpoint', 'auth_key', 'path_prefix', 'public_url'),
+            ),
+            's3' => array(
+                'id' => 's3',
+                'name' => 'S3 兼容对象存储',
+                'transport' => 's3',
+                'legacy_type' => 's3',
+                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                'intents' => array('static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                    'intent' => array('static-only'),
+                ),
+                'fields' => array('endpoint', 'bucket', 'region', 'access_key', 'secret_key', 'path_style', 'path_prefix', 'public_url'),
+            ),
+            'local' => array(
+                'id' => 'local',
+                'name' => '本地目录',
+                'transport' => 'fs',
+                'legacy_type' => 'local',
+                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                'intents' => array('static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                    'intent' => array('static-only'),
+                ),
+                'fields' => array('dir', 'path_prefix', 'public_url'),
+            ),
+            // 'github' => array(...) 预留（transport: git），暂未实现 —— 见 docs/hosting-templates.md §10
+        );
+    }
+
     private function get_hosting_targets() {
         $list = array();
         $saved = get_option('cf_hosting_targets', '');
@@ -1665,8 +1715,8 @@ private function get_post_storage_path($post) {
             if (!is_array($t)) continue;
             if (isset($t['enabled']) && !$t['enabled']) continue;
             $type = isset($t['type']) ? (string) $t['type'] : 'cfse-worker';
-            // 已实现的类型白名单：cfse-worker（Worker）/ local（本地目录）。
-            // s3 等尚未实现的类型仍然跳过并 WARNING（避免静默失效）。
+            // 已实现的类型白名单：cfse-worker（Worker）/ local（本地目录）/ s3。
+            // 模板层（get_hosting_templates()）是这些类型的声明来源；本函数仍以 type 为准做兼容读。
             if (!in_array($type, array('cfse-worker', 'local', 's3'), true)) {
                 $this->log('托管目标 ' . (isset($t['id']) ? $t['id'] : '?') . ' 的类型 ' . $type . ' 尚未实现，已跳过', 'WARNING');
                 continue;
