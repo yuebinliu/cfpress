@@ -120,7 +120,9 @@ class CF_Static_Export_Pro {
 		add_action('admin_menu', array($this, 'add_admin_menu'));
 		add_action('admin_init', array($this, 'register_settings'));
 		add_action('save_post', array($this, 'export_post'), 10, 3);
-		add_action('add_meta_boxes', array($this, 'add_doc_format_metabox'));
+		add_action('add_meta_boxes', array($this, 'add_doc_format_metabox'), 10, 2);
+		add_action('admin_post_cfse_align_worker', array($this, 'handle_align_worker'));
+		add_action('wp_ajax_cfse_worker_status', array($this, 'ajax_worker_status'));
 		// 优先级 5：必须早于导出钩子（save_post 优先级 10），否则本次导出读到的是旧标记
 		add_action('save_post', array($this, 'save_doc_format_meta'), 5, 3);
 		add_filter('the_content', array($this, 'render_md_content'), 9);
@@ -412,10 +414,14 @@ public function get_config() {
                         </p>
                         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_pull_worker')); ?>" style="margin-top:8px;">
                             <?php wp_nonce_field('cf_pull_worker'); ?>
-                            <button type="submit" class="button" onclick="return confirm('从 Worker 拉取 Worker 端诞生的文章到 WordPress（同 ID 已存在的会跳过），确认继续？')">📥 从 Worker 拉取文章</button>
+                            <label style="display:block;margin-bottom:6px;font-size:12px;">
+                                <input type="checkbox" name="cfse_pull_overwrite" value="1" />
+                                覆盖 WP 中已存在的同 ID 文章（<b>以 Worker 版本为准</b>）—— 用于把 Worker 端的最新改动对齐回来；不勾则只新增、已存在的跳过
+                            </label>
+                            <button type="submit" class="button" onclick="return confirm('从 Worker 拉取 Worker 端诞生的文章到 WordPress，确认继续？')">📥 从 Worker 拉取文章</button>
                         </form>
                         <?php if (isset($_GET['pulled'])): ?>
-                            <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>☁️ 拉取完成：共 <?php echo isset($_GET['pull_total']) ? intval($_GET['pull_total']) : 0; ?> 篇，新增 <?php echo intval($_GET['pulled']); ?> 篇，跳过 <?php echo isset($_GET['pull_skipped']) ? intval($_GET['pull_skipped']) : 0; ?> 篇。</p></div>
+                            <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>☁️ 拉取完成：共 <?php echo isset($_GET['pull_total']) ? intval($_GET['pull_total']) : 0; ?> 篇，新增 <?php echo intval($_GET['pulled']); ?> 篇，对齐更新 <?php echo isset($_GET['pull_updated']) ? intval($_GET['pull_updated']) : 0; ?> 篇，跳过 <?php echo isset($_GET['pull_skipped']) ? intval($_GET['pull_skipped']) : 0; ?> 篇。</p></div>
                         <?php endif; ?>
                     </div>
 
@@ -818,16 +824,52 @@ private function get_post_storage_path($post) {
     // ============================================
     // 文章编辑页「📝 文档格式」面板（Markdown 原稿标记）
     // ============================================
-    public function add_doc_format_metabox() {
+    public function add_doc_format_metabox($post_type = '', $post = null) {
         add_meta_box('cfse_doc_format', '📝 文档格式', array($this, 'render_doc_format_metabox'), 'post', 'side', 'high');
+        // 「Worker 端诞生」的篇（wp_id 为时间戳形态，见 ROADMAP I.1）额外给一个同步面板
+        if ($post && isset($post->ID) && (int) $post->ID >= CFSE_WORKER_ID_MIN) {
+            add_meta_box('cfse_worker_sync', '☁️ Worker 同步', array($this, 'render_worker_sync_metabox'), 'post', 'side', 'default');
+        }
     }
 
     public function render_doc_format_metabox($post) {
         $is_md = ($this->get_content_format($post->ID) === 'md');
         wp_nonce_field('cfse_doc_format_save', 'cfse_doc_format_nonce');
-        echo '<label><input type="checkbox" name="cfse_content_format_md" value="1" ' . checked($is_md, true, false) . ' /> 本文档是 Markdown 原稿</label>';
-        echo '<p class="description" style="margin-top:6px;">勾选后导出时写入 <code>content_format=md</code>：静态站的列表 / feed 用 marked 渲染、单页用 Parsedown 渲染（与 WP 前台一致）。</p>';
-        echo '<p class="description" style="color:#b32d2e;"><strong>注意</strong>：md 原稿请用编辑器的「文本」标签页粘贴/编辑 —— 「可视」模式保存会重排正文。</p>';
+        echo '<label style="display:inline-flex;align-items:center;gap:6px;"><input type="checkbox" name="cfse_content_format_md" value="1" ' . checked($is_md, true, false) . ' /> <span>存为 MD 格式</span></label>';
+        echo '<details style="margin-top:8px;">'
+            . '<summary style="cursor:pointer;color:#2271b1;font-size:12px;">'
+            . '<span class="dashicons dashicons-editor-help" style="font-size:15px;width:15px;height:15px;vertical-align:text-bottom;"></span> 这是什么？</summary>'
+            . '<div class="description" style="margin:6px 0 0;padding-left:8px;border-left:3px solid #c3c4c7;font-size:12px;line-height:1.7;">'
+            . '本文正文是 <b>Markdown 原稿</b>时勾选。勾选后，静态站的列表 / 订阅 / 单页都会按 Markdown 排版渲染。<br/>'
+            . '<b>建议</b>：md 原稿请用编辑器右上角的「文本」标签页粘贴 —— 「可视」模式保存会重排正文。'
+            . '</div></details>';
+    }
+
+    /**
+     * 「☁️ Worker 同步」面板（只对 Worker 端诞生的篇显示）：
+     * 异步查两端版本时间（不拖慢编辑页）+ 一键对齐本篇。
+     */
+    public function render_worker_sync_metabox($post) {
+        $pid = (int) $post->ID;
+        echo '<p class="description">本篇由 <b>Worker 端诞生</b>。可把 Worker 的最新版本对齐过来。</p>';
+        echo '<div id="cfse-worker-status" style="margin:8px 0;padding:8px;background:#f6f7f7;border-radius:3px;font-size:12px;line-height:1.7;">正在查询 Worker…</div>';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        echo '<input type="hidden" name="action" value="cfse_align_worker" />';
+        echo '<input type="hidden" name="post_id" value="' . $pid . '" />';
+        wp_nonce_field('cfse_align_worker_' . $pid);
+        echo '<button type="submit" class="button" onclick="return confirm(\'用 Worker 端最新版本覆盖本篇内容（标题 / 正文 / 别名 / 分类标签）？\')">↻ 从 Worker 对齐本篇</button>';
+        echo '</form>';
+        if (isset($_GET['cfse_aligned'])) {
+            echo $_GET['cfse_aligned'] === '1'
+                ? '<p style="margin:8px 0 0;color:#2271b1;"><b>✅ 已对齐到 Worker 版本</b></p>'
+                : '<p style="margin:8px 0 0;color:#b32d2e;"><b>❌ 对齐失败</b>（未能从 Worker 取到该篇，见日志）</p>';
+        }
+        $ajax_nonce = wp_create_nonce('cfse_worker_status');
+        echo '<script>jQuery(function($){$.post(ajaxurl,{action:"cfse_worker_status",post_id:' . $pid . ',_ajax_nonce:"' . esc_js($ajax_nonce) . '"},function(r){'
+            . 'var el=$("#cfse-worker-status");if(!r||!r.ok){el.html("（未能查询 Worker 状态）");return;}'
+            . 'var h="Worker 版本：" + r.worker_modified + "<br/>本篇版本：" + r.local_modified;'
+            . 'h += r.need_sync ? "<br/><b style=\'color:#b32d2e;\'>⚠︎ Worker 端更新，建议对齐</b>" : "<br/><span style=\'color:#1d6f42;\'>✔ 已是最新</span>";'
+            . 'el.html(h);});});</script>';
     }
 
     /**
@@ -2077,43 +2119,126 @@ public function handle_deploy_worker() {
     }
 
     // ============================================
+    // Worker 单篇对齐（编辑页「☁️ Worker 同步」面板）
+    // ============================================
+    /** 拉取 Worker 单篇（/sync/posts?wp_id=），成功返回该篇数组，否则 null */
+    private function fetch_worker_post($wp_id) {
+        $site = isset($this->config['site_url']) ? rtrim($this->config['site_url'], '/') : '';
+        $key = isset($this->config['auth_key']) ? $this->config['auth_key'] : '';
+        if ($site === '' || $key === '') return null;
+        $resp = wp_remote_get($site . '/sync/posts?wp_id=' . (int) $wp_id, array(
+            'timeout' => 30,
+            'headers' => array('X-Auth-Key' => $key),
+        ));
+        if (is_wp_error($resp) || wp_remote_retrieve_response_code($resp) !== 200) return null;
+        $data = json_decode(wp_remote_retrieve_body($resp), true);
+        if (!is_array($data) || empty($data['posts'][0])) return null;
+        return $data['posts'][0];
+    }
+
+    /**
+     * 用 Worker 版本覆盖 WP 现有篇（对齐）。不触发回写导出（内容本就来自 Worker）。
+     * 返回 true/false。注意 cfse_skip_export 用「保存-恢复」写法，避免与拉取的短路互相干扰。
+     */
+    private function overwrite_post_from_remote($post_id, $remote) {
+        $fmt = (isset($remote['content_format']) && $remote['content_format'] === 'md') ? 'md' : 'html';
+        $args = array(
+            'ID' => (int) $post_id,
+            'post_title' => isset($remote['title']) ? (string) $remote['title'] : '',
+            'post_content' => isset($remote['content']) ? (string) $remote['content'] : '',
+        );
+        if (!empty($remote['slug'])) $args['post_name'] = (string) $remote['slug'];
+        $prev_skip = isset($GLOBALS['cfse_skip_export']) ? $GLOBALS['cfse_skip_export'] : null;
+        $GLOBALS['cfse_skip_export'] = true;
+        $res = wp_update_post($args, true);
+        if (is_wp_error($res)) {
+            if ($prev_skip === null) unset($GLOBALS['cfse_skip_export']); else $GLOBALS['cfse_skip_export'] = $prev_skip;
+            $this->log('对齐失败 wp_id=' . (int) $post_id . ': ' . $res->get_error_message(), 'ERROR');
+            return false;
+        }
+        update_post_meta($post_id, 'content_format', $fmt);
+        $this->apply_worker_terms($post_id, isset($remote['categories']) ? $remote['categories'] : '', 'category');
+        $this->apply_worker_terms($post_id, isset($remote['tags']) ? $remote['tags'] : '', 'post_tag');
+        if ($prev_skip === null) unset($GLOBALS['cfse_skip_export']); else $GLOBALS['cfse_skip_export'] = $prev_skip;
+        return true;
+    }
+
+    /** 「↻ 从 Worker 对齐本篇」 */
+    public function handle_align_worker() {
+        $post_id = isset($_POST['post_id']) ? (int) $_POST['post_id'] : 0;
+        if (!$post_id || !current_user_can('edit_post', $post_id)) wp_die('权限不足');
+        check_admin_referer('cfse_align_worker_' . $post_id);
+        $remote = $this->fetch_worker_post($post_id);
+        $ok = false;
+        if ($remote) {
+            $ok = $this->overwrite_post_from_remote($post_id, $remote);
+        } else {
+            $this->log("对齐失败：未能从 Worker 取到 wp_id={$post_id}", 'ERROR');
+        }
+        $this->log("从 Worker 对齐 wp_id={$post_id}：" . ($ok ? '成功' : '失败'), $ok ? 'INFO' : 'ERROR');
+        wp_safe_redirect(add_query_arg('cfse_aligned', $ok ? '1' : '0', get_edit_post_link($post_id, 'raw')));
+        exit;
+    }
+
+    /** AJAX：查询该篇在 Worker 端与本地的版本时间（编辑页异步调用，不阻塞页面渲染） */
+    public function ajax_worker_status() {
+        check_ajax_referer('cfse_worker_status');
+        $post_id = isset($_POST['post_id']) ? (int) $_POST['post_id'] : 0;
+        if (!$post_id || !current_user_can('edit_post', $post_id)) wp_send_json(array('ok' => false));
+        $post = get_post($post_id);
+        if (!$post) wp_send_json(array('ok' => false));
+        $remote = $this->fetch_worker_post($post_id);
+        if (!$remote) wp_send_json(array('ok' => false));
+        $worker_mod = isset($remote['modified']) ? (string) $remote['modified'] : '';
+        $local_mod = (string) $post->post_modified;
+        $need = ($worker_mod !== '' && strtotime($worker_mod) > strtotime($local_mod));
+        wp_send_json(array('ok' => true, 'worker_modified' => $worker_mod, 'local_modified' => $local_mod, 'need_sync' => $need));
+    }
+
+    // ============================================
     // 从 Worker 拉取文章（WP 主动拉；Worker → WP 不可达，见 ROADMAP I）
     // ============================================
     /**
-     * 拉取 Worker 端诞生的文章（wp_id >= CFSE_WORKER_ID_MIN，即时间戳形态）到 WP。
-     * 幂等：WP 里已存在同 ID 的文章直接跳过（不会重复建文）。
-     * 返回 [新增数, 跳过数, 失败数, Worker 返回总数]。
+     * 拉取 Worker 端诞生的文章（wp_id >= CFSE_WORKER_ID_MIN）。
+     * @param bool $overwrite true 时对 WP 中已存在同 ID 的篇用 Worker 版本覆盖（对齐），否则跳过（幂等保护）。
+     * @return array [新增数, 更新数, 跳过数, 失败数, Worker 返回总数]
      */
-    private function pull_posts_from_worker() {
+    private function pull_posts_from_worker($overwrite = false) {
         $site = isset($this->config['site_url']) ? rtrim($this->config['site_url'], '/') : '';
         $key = isset($this->config['auth_key']) ? $this->config['auth_key'] : '';
         if ($site === '' || $key === '') {
             $this->log('拉取失败：静态站点 URL 或 Worker Auth Key 未配置', 'ERROR');
-            return array(0, 0, 1, 0);
+            return array(0, 0, 0, 1, 0);
         }
         $url = $site . '/sync/posts?limit=1000&min_wp_id=' . CFSE_WORKER_ID_MIN;
         $resp = wp_remote_get($url, array('timeout' => 60, 'headers' => array('X-Auth-Key' => $key)));
         if (is_wp_error($resp)) {
             $this->log('拉取失败：' . $resp->get_error_message(), 'ERROR');
-            return array(0, 0, 1, 0);
+            return array(0, 0, 0, 1, 0);
         }
         $code = wp_remote_retrieve_response_code($resp);
         if ($code !== 200) {
             $this->log("拉取失败：HTTP {$code} " . substr((string) wp_remote_retrieve_body($resp), 0, 200), 'ERROR');
-            return array(0, 0, 1, 0);
+            return array(0, 0, 0, 1, 0);
         }
         $data = json_decode(wp_remote_retrieve_body($resp), true);
         $items = (is_array($data) && isset($data['posts']) && is_array($data['posts'])) ? $data['posts'] : array();
         $total = count($items);
         $imported = 0;
+        $updated = 0;
         $skipped = 0;
         $errors = 0;
 
+        $prev_skip = isset($GLOBALS['cfse_skip_export']) ? $GLOBALS['cfse_skip_export'] : null;
         $GLOBALS['cfse_skip_export'] = true; // 期间不回写 Worker
         foreach ($items as $p) {
             $wid = isset($p['wp_id']) ? (int) $p['wp_id'] : 0;
             if ($wid <= 0) { $errors++; continue; }
-            if (get_post($wid)) { $skipped++; continue; } // 已存在 ⇒ 幂等跳过（不覆盖 WP 现有内容）
+            if (get_post($wid)) {
+                if (!$overwrite) { $skipped++; continue; }
+                if ($this->overwrite_post_from_remote($wid, $p)) { $updated++; } else { $errors++; }
+                continue;
+            }
             $fmt = (isset($p['content_format']) && $p['content_format'] === 'md') ? 'md' : 'html';
             $args = array(
                 'import_id' => $wid,               // 关键：保持两端 wp_id 一致，后续导出 upsert 才能对上
@@ -2136,8 +2261,8 @@ public function handle_deploy_worker() {
             $this->apply_worker_terms($new_id, isset($p['tags']) ? $p['tags'] : '', 'post_tag');
             $imported++;
         }
-        unset($GLOBALS['cfse_skip_export']);
-        return array($imported, $skipped, $errors, $total);
+        if ($prev_skip === null) unset($GLOBALS['cfse_skip_export']); else $GLOBALS['cfse_skip_export'] = $prev_skip;
+        return array($imported, $updated, $skipped, $errors, $total);
     }
 
     /** 把 Worker 的 JSON 分类/标签（[{name,slug}] 或字符串数组）映射到 WP：按 slug/name 找，缺则创建 */
@@ -2173,9 +2298,10 @@ public function handle_deploy_worker() {
         check_admin_referer('cf_pull_worker');
         @set_time_limit(0);
         @ignore_user_abort(true);
-        list($imported, $skipped, $errors, $total) = $this->pull_posts_from_worker();
-        $this->log("从 Worker 拉取完成：共 {$total} 篇，新增 {$imported}，跳过 {$skipped}，失败 {$errors}", 'INFO');
-        wp_redirect(admin_url('options-general.php?page=cf-static-export-pro&pulled=' . $imported . '&pull_skipped=' . $skipped . '&pull_total=' . $total));
+        $overwrite = !empty($_POST['cfse_pull_overwrite']);
+        list($imported, $updated, $skipped, $errors, $total) = $this->pull_posts_from_worker($overwrite);
+        $this->log('从 Worker 拉取完成（overwrite=' . ($overwrite ? '1' : '0') . "）：共 {$total} 篇，新增 {$imported}，对齐更新 {$updated}，跳过 {$skipped}，失败 {$errors}", 'INFO');
+        wp_redirect(admin_url('options-general.php?page=cf-static-export-pro&pulled=' . $imported . '&pull_updated=' . $updated . '&pull_skipped=' . $skipped . '&pull_total=' . $total));
         exit;
     }
 

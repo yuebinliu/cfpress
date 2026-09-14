@@ -135,7 +135,7 @@ export async function handleRequest(request, env) {
     }
 
     // 文章清单（WP 端「从 Worker 拉取文章」用；X-Auth-Key 鉴权，不走登录）
-    //   GET /sync/posts?limit=200&since=YYYY-MM-DD HH:MM:SS&min_wp_id=0
+    //   GET /sync/posts?limit=200&since=YYYY-MM-DD HH:MM:SS&min_wp_id=0&wp_id=0
     //   - since：增量拉取（modified > since）
     //   - min_wp_id：只取 wp_id >= 该值的文章（WP 端用 1e11 过滤「Worker 端诞生」的篇，见 ROADMAP I.1）
     //   返回按 wp_id 升序；WP 端用 get_post(wp_id) 判断是否已存在 ⇒ 天然幂等，不会重复建文。
@@ -153,8 +153,12 @@ export async function handleRequest(request, env) {
         const minId = isNaN(minIdRaw) || minIdRaw < 0 ? 0 : minIdRaw;
 
         const cols = 'wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image';
+        const wpIdRaw = parseInt(url.searchParams.get('wp_id') || '0', 10);
+        const wpId = isNaN(wpIdRaw) || wpIdRaw <= 0 ? 0 : wpIdRaw;
+
         const conds = [];
         const params = [];
+        if (wpId > 0) { conds.push('wp_id = ?'); params.push(wpId); }
         if (since) { conds.push('modified > ?'); params.push(since); }
         if (minId > 0) { conds.push('wp_id >= ?'); params.push(minId); }
         let sql = 'SELECT ' + cols + ' FROM posts';
