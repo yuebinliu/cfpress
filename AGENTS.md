@@ -248,6 +248,14 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **实测**：① **只有 local 目标** → `export=true`、本地文件 `cfse-static/ak-local-test/cfse-al-local/index.html` **29473 字节写入成功**、`D1 无行`，日志「没有启用「D1 数据」能力的托管目标，跳过 2 条 SQL（纯静态档无需写库）」⇒ **全程零联网**；② **local + worker 双目标** → 本地有文件 + D1 有行 + Worker 单页 200；③ 清理干净。
   - **再一个教训（工具链）**：python **非 r-string** 里写 `'/\'` 会变成 PHP 的 `'/'`（转义单引号）⇒ `unexpected token "."`。这次 **lint 门禁生效、没有把坏文件同步上去**（批 AK 的加固管用了）；构造这类字符串要写 `'/\\'` 或用 r-string。
 
+- **批BM（多托管·第 3 步：设置页 targets 管理 UI，2026-09-14，已同步验证）**：
+  - **设置页新增「托管目标」卡片**（位置在「发布行为」之上）：表格逐行展示目标（启用 / 名称 / 类型 / 端点或目录 / Auth Key / 路径前缀 / 能力三勾选 / 删除）；底部「＋ 添加目标」（页面内 JS 动态加行，字段名 `cf_hosting_targets[N][…]`，与 sanitize 对应）与「🔌 测试连通性」；类型下拉含 `cfse-worker` / `local`（`s3` 灰显=未实现），切换类型时 JS 只显示对应字段（worker：端点+Key；local：目录）。
+  - **保存**：注册 `cf_hosting_targets`，`sanitize_hosting_targets()` 把表单数组 → 校验 → **JSON 字符串**；**只接受已实现的类型**（未知类型**丢弃**该条，与运行期 `get_hosting_targets()` 的「跳过 + WARNING」一致）；能力缺省全 false。
+  - **测试连通性**（AJAX `cfse_test_targets`）：worker 目标请求 `{endpoint}/health`（回显状态码与响应体）；local 目标检查目录是否可写（必要时创建）；结果就地显示「✅/❌ 名称：详情」，并提示「测试用的是已保存配置」。
+  - **向后兼容**：卡片留空 ⇒ 存空串 ⇒ 运行期仍用「站点 URL + Auth Key」兜底出一条默认 target（实测 `sanitize("")=""`、当前生效目标 1 条、endpoint 正确）。
+  - **实测**：设置页渲染 34391 字节、10 项检查全 YES（表格容器 / 字段名 / 类型下拉 / 三个能力 / 两个按钮 / 路径前缀 / 说明 / 当前端点值 / 顺序在「发布行为」之前）；`sanitize` 传入 worker+local+未知类型+非数组 → 得 2 条（未知类型丢弃、非数组忽略）；AJAX 实测 → `{"success":true,"data":{"ok":true,"results":[{"name":"默认（Cloudflare Worker）","ok":true,"detail":"HTTP 200 {\"ok\":true,\"db\":\"up\"}"}]}}`。
+  - **说明**：CLI 下探针渲染设置页需要额外 `require ABSPATH.'wp-admin/includes/template.php'`（`submit_button()` 等属后台函数，非 CLI 自动加载）。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

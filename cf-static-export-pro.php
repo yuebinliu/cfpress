@@ -123,6 +123,7 @@ class CF_Static_Export_Pro {
 		add_action('add_meta_boxes', array($this, 'add_doc_format_metabox'), 10, 2);
 		add_action('admin_post_cfse_align_worker', array($this, 'handle_align_worker'));
 		add_action('wp_ajax_cfse_worker_status', array($this, 'ajax_worker_status'));
+		add_action('wp_ajax_cfse_test_targets', array($this, 'ajax_test_targets'));
 		// 优先级 5：必须早于导出钩子（save_post 优先级 10），否则本次导出读到的是旧标记
 		add_action('save_post', array($this, 'save_doc_format_meta'), 5, 3);
 		add_filter('the_content', array($this, 'render_md_content'), 9);
@@ -216,6 +217,105 @@ public function get_config() {
     // ============================================
     // 管理菜单
     // ============================================
+    /**
+     * 校验并序列化「托管目标」表单：cf_hosting_targets[N][field] → JSON 字符串。
+     * 只接受已实现的类型（cfse-worker / local）；旧的 site_url + auth_key 仍作为兜底。
+     */
+    public function sanitize_hosting_targets($value) {
+        if (is_string($value) && $value !== '') {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) $value = $decoded;
+        }
+        if (!is_array($value)) return '';
+        $out = array();
+        foreach ($value as $t) {
+            if (!is_array($t)) continue;
+            // 只接受已实现的类型；未知类型直接丢弃（与运行期 get_hosting_targets 的「跳过」保持一致）
+            $type = isset($t['type']) ? (string) $t['type'] : '';
+            if (!in_array($type, array('cfse-worker', 'local'), true)) continue;
+            $name = isset($t['name']) ? sanitize_text_field($t['name']) : '';
+            $id = isset($t['id']) && $t['id'] !== '' ? sanitize_key($t['id']) : sanitize_title($name);
+            if ($id === '') $id = 't' . count($out);
+            $entry = array(
+                'id' => $id,
+                'name' => $name,
+                'type' => $type,
+                'enabled' => !empty($t['enabled']),
+                'path_prefix' => isset($t['path_prefix']) ? sanitize_text_field($t['path_prefix']) : '',
+                'capabilities' => array(
+                    'r2' => !empty($t['capabilities']['r2']),
+                    'd1' => !empty($t['capabilities']['d1']),
+                    'cache' => !empty($t['capabilities']['cache']),
+                ),
+            );
+            if ($type === 'cfse-worker') {
+                $entry['endpoint'] = isset($t['endpoint']) ? esc_url_raw(trim($t['endpoint'])) : '';
+                $entry['auth_key'] = isset($t['auth_key']) ? sanitize_text_field($t['auth_key']) : '';
+            } else {
+                $entry['dir'] = isset($t['dir']) ? sanitize_text_field(trim($t['dir'])) : '';
+            }
+            $out[] = $entry;
+        }
+        return wp_json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    /** 设置页：托管目标表格（已有目标逐行渲染；新增行由页面内 JS 生成） */
+    public function render_hosting_targets_table() {
+        $targets = $this->config['hosting_targets'];
+        ?>
+        <table class="widefat striped" id="cfse-targets" style="max-width:1150px;">
+            <thead><tr>
+                <th style="width:46px;">启用</th>
+                <th style="width:150px;">名称</th>
+                <th style="width:130px;">类型</th>
+                <th>端点（Worker）/ 目录（local）</th>
+                <th style="width:150px;">Auth Key</th>
+                <th style="width:110px;">路径前缀</th>
+                <th style="width:170px;">能力</th>
+                <th style="width:46px;"></th>
+            </tr></thead>
+            <tbody id="cfse-targets-body">
+            <?php foreach ($targets as $i => $t) { $this->render_hosting_target_row($i, $t); } ?>
+            </tbody>
+        </table>
+        <?php
+    }
+
+    /** 单行（字段名 cf_hosting_targets[N][xxx]，与 sanitize 对应） */
+    private function render_hosting_target_row($i, $t) {
+        $type = isset($t['type']) ? $t['type'] : 'cfse-worker';
+        $caps = isset($t['capabilities']) && is_array($t['capabilities']) ? $t['capabilities'] : array('r2' => true, 'd1' => true, 'cache' => true);
+        $n = 'cf_hosting_targets[' . (int) $i . ']';
+        ?>
+        <tr class="cfse-target-row">
+            <td><input type="checkbox" name="<?php echo esc_attr($n); ?>[enabled]" value="1" <?php checked(!empty($t['enabled'])); ?> /></td>
+            <td>
+                <input type="text" name="<?php echo esc_attr($n); ?>[name]" value="<?php echo esc_attr(isset($t['name']) ? $t['name'] : ''); ?>" style="width:100%;" placeholder="例如：主站" />
+                <input type="hidden" name="<?php echo esc_attr($n); ?>[id]" value="<?php echo esc_attr(isset($t['id']) ? $t['id'] : ''); ?>" />
+            </td>
+            <td>
+                <select name="<?php echo esc_attr($n); ?>[type]" class="cfse-target-type" style="width:100%;">
+                    <option value="cfse-worker" <?php selected($type, 'cfse-worker'); ?>>cfse-worker（CF Worker）</option>
+                    <option value="local" <?php selected($type, 'local'); ?>>local（本地目录）</option>
+                    <option value="s3" disabled>s3（未实现）</option>
+                </select>
+            </td>
+            <td>
+                <input type="text" class="cfse-f-endpoint" name="<?php echo esc_attr($n); ?>[endpoint]" value="<?php echo esc_attr(isset($t['endpoint']) ? $t['endpoint'] : ''); ?>" style="width:100%;" placeholder="https://你的站点" />
+                <input type="text" class="cfse-f-dir" name="<?php echo esc_attr($n); ?>[dir]" value="<?php echo esc_attr(isset($t['dir']) ? $t['dir'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="留空 = <?php echo esc_attr(CFSE_LOCAL_DIR); ?>" />
+            </td>
+            <td><input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></td>
+            <td><input type="text" name="<?php echo esc_attr($n); ?>[path_prefix]" value="<?php echo esc_attr(isset($t['path_prefix']) ? $t['path_prefix'] : ''); ?>" style="width:100%;" placeholder="（暂未使用）" /></td>
+            <td style="white-space:nowrap;font-size:12px;">
+                <label><input type="checkbox" name="<?php echo esc_attr($n); ?>[capabilities][r2]" value="1" <?php checked(!empty($caps['r2'])); ?> /> 静态文件</label><br/>
+                <label><input type="checkbox" name="<?php echo esc_attr($n); ?>[capabilities][d1]" value="1" <?php checked(!empty($caps['d1'])); ?> /> 文章数据</label><br/>
+                <label><input type="checkbox" name="<?php echo esc_attr($n); ?>[capabilities][cache]" value="1" <?php checked(!empty($caps['cache'])); ?> /> 清缓存</label>
+            </td>
+            <td><button type="button" class="button cfse-del-target" title="删除该目标">✕</button></td>
+        </tr>
+        <?php
+    }
+
     public function add_admin_menu() {
         $hook = add_options_page(
             'CF静态导出Pro',
@@ -257,6 +357,8 @@ public function get_config() {
             'cf_posts_per_page' => array('sanitize' => 'intval', 'default' => 10),
             'cf_worker_auto_check' => array('sanitize' => 'boolval', 'default' => true),
             'cf_sync_d1' => array('sanitize' => 'boolval', 'default' => 0),
+            // 多托管目标（JSON 字符串；sanitize 负责把表单数组转成 JSON）
+            'cf_hosting_targets' => array('sanitize' => array($this, 'sanitize_hosting_targets'), 'default' => ''),
             'cf_gen_static' => array('sanitize' => 'boolval', 'default' => 0),
             'cf_publish_remote' => array('sanitize' => 'boolval', 'default' => 0),
         );
@@ -356,6 +458,78 @@ public function get_config() {
                             <tr><th><label for="cf_export_concurrency">全量导出并发数</label></th>
                                 <td><input type="number" id="cf_export_concurrency" name="cf_export_concurrency" value="<?php echo esc_attr($this->config['export_concurrency']); ?>" style="width:100px" min="1" max="8" />
                                     <p class="description">「🔄 全量导出」时并行进程数（1~8，默认 4）。并发越高全量越快，同时占用更多服务器资源；设为 1 即逐篇串行。R2/D1 写入为幂等覆盖，并发安全。</p></td></tr>
+                            <tr><th>托管目标</th>
+                                <td>
+                                    <p class="description">导出时把「<b>静态文件</b> / <b>文章数据</b> / <b>清缓存</b>」按各目标的<b>能力</b>分派出去。
+                                        <code>cfse-worker</code> = Cloudflare Worker（走 X-Auth-Key 接口）；<code>local</code> = 只写本地目录（纯静态档，不联网）。
+                                        某项目标不勾「静态文件」就完全不参与文件上传/删除；没有任何目标具备「文章数据」能力时（例如只有 local），写库会被跳过而不是报错。
+                                        这里留空时，用上面的「站点 URL + Auth Key」当作默认 Worker 目标兜底。</p>
+                                    <?php $this->render_hosting_targets_table(); ?>
+                                    <p style="margin-top:8px;">
+                                        <button type="button" class="button" id="cfse-add-target">＋ 添加目标</button>
+                                        <button type="button" class="button" id="cfse-test-targets">🔌 测试连通性</button>
+                                        <span id="cfse-test-result" class="description" style="margin-left:8px;"></span>
+                                        <span class="description" style="margin-left:8px;">（测试用的是<b>已保存</b>的配置，改动后请先保存）</span>
+                                    </p>
+                                    <script>
+                                    (function(){
+                                      var body = document.getElementById('cfse-targets-body');
+                                      if (!body) return;
+                                      var idx = body.querySelectorAll('tr.cfse-target-row').length;
+                                      function syncRow(tr){
+                                        var type = tr.querySelector('.cfse-target-type');
+                                        var ep = tr.querySelector('.cfse-f-endpoint');
+                                        var dir = tr.querySelector('.cfse-f-dir');
+                                        var key = tr.querySelector('.cfse-f-key');
+                                        var isLocal = type && type.value === 'local';
+                                        if (ep) ep.style.display = isLocal ? 'none' : '';
+                                        if (key) key.parentNode.style.display = isLocal ? 'none' : '';
+                                        if (dir) dir.style.display = isLocal ? '' : 'none';
+                                      }
+                                      function bind(tr){
+                                        var type = tr.querySelector('.cfse-target-type');
+                                        if (type) type.addEventListener('change', function(){ syncRow(tr); });
+                                        var del = tr.querySelector('.cfse-del-target');
+                                        if (del) del.addEventListener('click', function(){ tr.parentNode.removeChild(tr); });
+                                        syncRow(tr);
+                                      }
+                                      Array.prototype.forEach.call(body.querySelectorAll('tr.cfse-target-row'), bind);
+                                      var addBtn = document.getElementById('cfse-add-target');
+                                      if (addBtn) addBtn.addEventListener('click', function(){
+                                        var tmp = document.createElement('tbody');
+                                        tmp.innerHTML = '<tr class="cfse-target-row">' +
+                                          '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
+                                          '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /><input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /></td>' +
+                                          '<td><select name="cf_hosting_targets[' + idx + '][type]" class="cfse-target-type" style="width:100%;"><option value="cfse-worker">cfse-worker（CF Worker）</option><option value="local">local（本地目录）</option></select></td>' +
+                                          '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" /></td>' +
+                                          '<td><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></td>' +
+                                          '<td><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" /></td>' +
+                                          '<td style="white-space:nowrap;font-size:12px;">' +
+                                            '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][r2]" value="1" checked /> 静态文件</label><br/>' +
+                                            '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][d1]" value="1" /> 文章数据</label><br/>' +
+                                            '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][cache]" value="1" /> 清缓存</label>' +
+                                          '</td>' +
+                                          '<td><button type="button" class="button cfse-del-target">✕</button></td>' +
+                                        '</tr>';
+                                        var tr = tmp.firstElementChild;
+                                        body.appendChild(tr);
+                                        bind(tr);
+                                        idx++;
+                                      });
+                                      var testBtn = document.getElementById('cfse-test-targets');
+                                      if (testBtn) testBtn.addEventListener('click', function(){
+                                        var out = document.getElementById('cfse-test-result');
+                                        out.textContent = '测试中…';
+                                        jQuery.post(ajaxurl, { action: 'cfse_test_targets', _ajax_nonce: '<?php echo esc_js(wp_create_nonce('cfse_test_targets')); ?>' }, function(r){
+                                          if (!r || !r.success) { out.textContent = '测试失败'; return; }
+                                          out.innerHTML = (r.data.results || []).map(function(x){
+                                            return (x.ok ? '✅ ' : '❌ ') + x.name + '：' + x.detail;
+                                          }).join('　|　');
+                                        }).fail(function(){ out.textContent = '请求失败'; });
+                                      });
+                                    })();
+                                    </script>
+                                </td></tr>
                             <tr><th>发布行为</th>
                                 <td>
                                     <p class="description">控制「在 WP 侧保存 / 发布文章」时自动做什么。<b>三项独立、默认全不勾</b> —— 都不勾时 WP 侧保存文章不动远端（内容由 Worker 后台或第三方编辑器如 Obsidian 管理）。</p>
@@ -2653,6 +2827,40 @@ public function handle_deploy_worker() {
     }
 
     /** AJAX：查询该篇在 Worker 端与本地的版本时间（编辑页异步调用，不阻塞页面渲染） */
+    /** AJAX：测试各托管目标的连通性（用已保存的配置） */
+    public function ajax_test_targets() {
+        if (!current_user_can('manage_options')) wp_send_json_error(array('error' => '无权限'), 403);
+        check_ajax_referer('cfse_test_targets');
+        $out = array();
+        foreach ($this->get_hosting_targets() as $t) {
+            $name = (isset($t['name']) && $t['name'] !== '') ? $t['name'] : (isset($t['id']) ? $t['id'] : '?');
+            $type = isset($t['type']) ? $t['type'] : 'cfse-worker';
+            if ($type === 'cfse-worker') {
+                $base = rtrim(isset($t['endpoint']) ? (string) $t['endpoint'] : '', '/');
+                if ($base === '') { $out[] = array('name' => $name, 'ok' => false, 'detail' => '未配置端点'); continue; }
+                $resp = wp_remote_get($base . '/health', array('timeout' => 10, 'sslverify' => false));
+                if (is_wp_error($resp)) { $out[] = array('name' => $name, 'ok' => false, 'detail' => '连通失败：' . $resp->get_error_message()); continue; }
+                $code = (int) wp_remote_retrieve_response_code($resp);
+                $body = json_decode(wp_remote_retrieve_body($resp), true);
+                $out[] = array(
+                    'name' => $name, 'ok' => ($code === 200),
+                    'detail' => 'HTTP ' . $code . ($body ? ' ' . wp_json_encode($body) : ''),
+                );
+            } elseif ($type === 'local') {
+                $dir = $this->target_dir($t);
+                if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+                    $out[] = array('name' => $name, 'ok' => false, 'detail' => '目录不存在且无法创建：' . $dir);
+                    continue;
+                }
+                $w = is_writable($dir);
+                $out[] = array('name' => $name, 'ok' => $w, 'detail' => $dir . ($w ? '（可写）' : '（不可写）'));
+            } else {
+                $out[] = array('name' => $name, 'ok' => false, 'detail' => '类型 ' . $type . ' 尚未实现');
+            }
+        }
+        wp_send_json_success(array('ok' => true, 'results' => $out));
+    }
+
     public function ajax_worker_status() {
         check_ajax_referer('cfse_worker_status');
         $post_id = isset($_POST['post_id']) ? (int) $_POST['post_id'] : 0;
