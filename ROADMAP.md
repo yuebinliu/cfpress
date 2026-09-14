@@ -362,6 +362,8 @@ tool/index.php「MD」模式（md 原文直塞 post_content，WP 侧无任何格
 - **WP 侧**：设置页新增「📥 从 Worker 拉取文章」—— 逐篇 `get_post($wp_id)` 判存在 → 不存在则 `wp_insert_post(['import_id'=>$wp_id, 'post_title'=>…, 'post_name'=>slug, 'post_content'=>…, 'post_status'=>…, 'meta_input'=>['content_format'=>…]])` + 分类/标签按 slug 映射（`wp_set_post_terms`，不存在则创建）→ 结束后报告「新增 N 篇 / 跳过 M 篇」；
 - **可选**：给拉取来的篇加一个**仅展示用**的 meta（如 `_cfse_origin=worker`），后台显示"原生于 Worker"，**不参与任何数据流判断**。
 
+**✅ 已实现（2026-09-14，批 J）**：Worker `GET /sync/posts`（deploy `c444bb6c-af61-47b7-b31a-f8d35a67fb13`）+ WP「☁️ 与 Worker 同步（拉取）」卡；`import_id` 保持两端 ID 一致、`get_post($wp_id)` 幂等跳过、分类/标签按 slug 映射、拉取期间短路导出。实测：新增 1 / 跳过 10（复跑 `[0,11,0,11]`）、正文 md5 与 D1 完全一致、格式 `md` 正确、清理后无残留。详见 AGENTS.md「批J」。
+
 
 
 

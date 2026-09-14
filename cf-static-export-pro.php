@@ -32,6 +32,9 @@ define('CFSE_DEBUG_DIR', WP_CONTENT_DIR . '/cf-debug');
 define('CFSE_WORKER_DIR', CFSE_PLUGIN_DIR . 'worker/src/');
 // 本地静态导出目录（「生成到本地」的落盘点；结构与 R2 key 同构）
 define('CFSE_LOCAL_DIR', WP_CONTENT_DIR . '/cfse-static');
+// 「Worker 端诞生」的 wp_id 判据（见 ROADMAP I.1）：WP 侧自增 ID 远小于它，
+// Worker 侧为 Date.now()*100+rand（≈1.7e14）⇒ 用于生成「待拉取清单」/标识来源。
+define('CFSE_WORKER_ID_MIN', 100000000000);
 
 // ============================================
 // PHP版本检测
@@ -129,6 +132,7 @@ class CF_Static_Export_Pro {
 		add_action('admin_post_cf_bulk_export', array($this, 'handle_bulk_export'));
 		add_action('admin_post_cf_generate_local', array($this, 'handle_generate_local'));
 		add_action('admin_post_cf_publish_remote', array($this, 'handle_publish_remote'));
+		add_action('admin_post_cf_pull_worker', array($this, 'handle_pull_worker'));
 		add_action('admin_post_cf_clear_cache', array($this, 'handle_clear_cache'));
 		add_action('admin_post_cf_sync_routes', array($this, 'handle_sync_routes'));
 		add_action('admin_post_cf_sync_templates', array($this, 'handle_sync_templates'));
@@ -399,6 +403,22 @@ public function get_config() {
                         <?php endif; ?>
                     </div>
 
+                    <div class="cfse-card" style="margin-top:16px;background:#fff;border:1px solid #dcdcde;border-radius:4px;padding:12px;">
+                        <h3 style="margin-top:0;">☁️ 与 Worker 同步（拉取）</h3>
+                        <p class="description">
+                            把「Worker 端诞生」的文章（<code>wp_id</code> 为时间戳形态 —— 即 Worker 后台 / 第三方编辑器新建的）拉回 WP 编辑。<br/>
+                            按 <code>wp_id</code> 幂等：WP 里已存在同 ID 的篇会<b>跳过</b>，不会重复建文、也不会覆盖 WP 现有内容。
+                            拉回后该篇即由 <b>WP 托管</b>（此后 Worker 侧的改动会被下次导出覆盖）。分类/标签按 slug 复用或新建。
+                        </p>
+                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_pull_worker')); ?>" style="margin-top:8px;">
+                            <?php wp_nonce_field('cf_pull_worker'); ?>
+                            <button type="submit" class="button" onclick="return confirm('从 Worker 拉取 Worker 端诞生的文章到 WordPress（同 ID 已存在的会跳过），确认继续？')">📥 从 Worker 拉取文章</button>
+                        </form>
+                        <?php if (isset($_GET['pulled'])): ?>
+                            <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>☁️ 拉取完成：共 <?php echo isset($_GET['pull_total']) ? intval($_GET['pull_total']) : 0; ?> 篇，新增 <?php echo intval($_GET['pulled']); ?> 篇，跳过 <?php echo isset($_GET['pull_skipped']) ? intval($_GET['pull_skipped']) : 0; ?> 篇。</p></div>
+                        <?php endif; ?>
+                    </div>
+
         <div style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
             <h3>👤 Worker 后台账号</h3>
             <p class="description">
@@ -556,6 +576,8 @@ private function get_post_storage_path($post) {
     // 核心导出逻辑
     // ============================================
     public function export_post($post_id, $post = null, $update = null) {
+        // 拉取 Worker 文章期间跳过回写（内容本就取自 Worker，回写是无谓开销）
+        if (!empty($GLOBALS['cfse_skip_export'])) return;
         if (!empty($GLOBALS['cfse_in_export'])) {
             $this->log("文章 {$post_id} 跳过：已在导出流程中", 'DEBUG');
             return;
@@ -2052,6 +2074,109 @@ public function handle_deploy_worker() {
             $offset += $chunk;
         } while (count($ids) === $chunk);
         return $all;
+    }
+
+    // ============================================
+    // 从 Worker 拉取文章（WP 主动拉；Worker → WP 不可达，见 ROADMAP I）
+    // ============================================
+    /**
+     * 拉取 Worker 端诞生的文章（wp_id >= CFSE_WORKER_ID_MIN，即时间戳形态）到 WP。
+     * 幂等：WP 里已存在同 ID 的文章直接跳过（不会重复建文）。
+     * 返回 [新增数, 跳过数, 失败数, Worker 返回总数]。
+     */
+    private function pull_posts_from_worker() {
+        $site = isset($this->config['site_url']) ? rtrim($this->config['site_url'], '/') : '';
+        $key = isset($this->config['auth_key']) ? $this->config['auth_key'] : '';
+        if ($site === '' || $key === '') {
+            $this->log('拉取失败：静态站点 URL 或 Worker Auth Key 未配置', 'ERROR');
+            return array(0, 0, 1, 0);
+        }
+        $url = $site . '/sync/posts?limit=1000&min_wp_id=' . CFSE_WORKER_ID_MIN;
+        $resp = wp_remote_get($url, array('timeout' => 60, 'headers' => array('X-Auth-Key' => $key)));
+        if (is_wp_error($resp)) {
+            $this->log('拉取失败：' . $resp->get_error_message(), 'ERROR');
+            return array(0, 0, 1, 0);
+        }
+        $code = wp_remote_retrieve_response_code($resp);
+        if ($code !== 200) {
+            $this->log("拉取失败：HTTP {$code} " . substr((string) wp_remote_retrieve_body($resp), 0, 200), 'ERROR');
+            return array(0, 0, 1, 0);
+        }
+        $data = json_decode(wp_remote_retrieve_body($resp), true);
+        $items = (is_array($data) && isset($data['posts']) && is_array($data['posts'])) ? $data['posts'] : array();
+        $total = count($items);
+        $imported = 0;
+        $skipped = 0;
+        $errors = 0;
+
+        $GLOBALS['cfse_skip_export'] = true; // 期间不回写 Worker
+        foreach ($items as $p) {
+            $wid = isset($p['wp_id']) ? (int) $p['wp_id'] : 0;
+            if ($wid <= 0) { $errors++; continue; }
+            if (get_post($wid)) { $skipped++; continue; } // 已存在 ⇒ 幂等跳过（不覆盖 WP 现有内容）
+            $fmt = (isset($p['content_format']) && $p['content_format'] === 'md') ? 'md' : 'html';
+            $args = array(
+                'import_id' => $wid,               // 关键：保持两端 wp_id 一致，后续导出 upsert 才能对上
+                'post_title' => isset($p['title']) ? (string) $p['title'] : '',
+                'post_content' => isset($p['content']) ? (string) $p['content'] : '',
+                'post_status' => (isset($p['status']) && $p['status'] === 'published') ? 'publish' : 'draft',
+                'post_type' => 'post',
+                'post_author' => get_current_user_id() ? get_current_user_id() : 1,
+                'meta_input' => array('content_format' => $fmt),
+            );
+            if (!empty($p['slug'])) $args['post_name'] = (string) $p['slug'];
+            if (!empty($p['date'])) $args['post_date'] = (string) $p['date'];
+            $new_id = wp_insert_post($args, true);
+            if (is_wp_error($new_id)) {
+                $errors++;
+                $this->log("拉取入库失败 wp_id={$wid}: " . $new_id->get_error_message(), 'ERROR');
+                continue;
+            }
+            $this->apply_worker_terms($new_id, isset($p['categories']) ? $p['categories'] : '', 'category');
+            $this->apply_worker_terms($new_id, isset($p['tags']) ? $p['tags'] : '', 'post_tag');
+            $imported++;
+        }
+        unset($GLOBALS['cfse_skip_export']);
+        return array($imported, $skipped, $errors, $total);
+    }
+
+    /** 把 Worker 的 JSON 分类/标签（[{name,slug}] 或字符串数组）映射到 WP：按 slug/name 找，缺则创建 */
+    private function apply_worker_terms($post_id, $json, $taxonomy) {
+        $terms = json_decode((string) $json, true);
+        if (!is_array($terms)) $terms = array();
+        $ids = array();
+        foreach ($terms as $t) {
+            if (is_array($t)) {
+                $slug = isset($t['slug']) ? (string) $t['slug'] : '';
+                $name = isset($t['name']) ? (string) $t['name'] : $slug;
+            } else {
+                $slug = (string) $t;
+                $name = (string) $t;
+            }
+            if ($slug === '' && $name === '') continue;
+            $term = $slug !== '' ? get_term_by('slug', $slug, $taxonomy) : false;
+            if (!$term && $name !== '') $term = get_term_by('name', $name, $taxonomy);
+            if ($term && !is_wp_error($term)) {
+                $ids[] = (int) $term->term_id;
+                continue;
+            }
+            $ins = wp_insert_term($name !== '' ? $name : $slug, $taxonomy, $slug !== '' ? array('slug' => $slug) : array());
+            if (is_wp_error($ins)) continue;
+            $ids[] = (int) $ins['term_id'];
+        }
+        if (!empty($ids)) wp_set_object_terms($post_id, $ids, $taxonomy, false);
+    }
+
+    /** 设置页「📥 从 Worker 拉取文章」 */
+    public function handle_pull_worker() {
+        if (!current_user_can('manage_options')) wp_die('权限不足');
+        check_admin_referer('cf_pull_worker');
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+        list($imported, $skipped, $errors, $total) = $this->pull_posts_from_worker();
+        $this->log("从 Worker 拉取完成：共 {$total} 篇，新增 {$imported}，跳过 {$skipped}，失败 {$errors}", 'INFO');
+        wp_redirect(admin_url('options-general.php?page=cf-static-export-pro&pulled=' . $imported . '&pull_skipped=' . $skipped . '&pull_total=' . $total));
+        exit;
     }
 
     /** 设置页「📥 生成到本地」：只渲染落盘，不联网 */

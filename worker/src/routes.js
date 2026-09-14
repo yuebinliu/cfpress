@@ -134,6 +134,50 @@ export async function handleRequest(request, env) {
         });
     }
 
+    // 文章清单（WP 端「从 Worker 拉取文章」用；X-Auth-Key 鉴权，不走登录）
+    //   GET /sync/posts?limit=200&since=YYYY-MM-DD HH:MM:SS&min_wp_id=0
+    //   - since：增量拉取（modified > since）
+    //   - min_wp_id：只取 wp_id >= 该值的文章（WP 端用 1e11 过滤「Worker 端诞生」的篇，见 ROADMAP I.1）
+    //   返回按 wp_id 升序；WP 端用 get_post(wp_id) 判断是否已存在 ⇒ 天然幂等，不会重复建文。
+    if (path === '/sync/posts' && request.method === 'GET') {
+        const providedKey = request.headers.get('X-Auth-Key');
+        const validKey = env.AUTH_KEY_SECRET;
+        if (!providedKey || !validKey || providedKey !== validKey) {
+            return new Response('Unauthorized', { status: 401 });
+        }
+        const url = new URL(request.url);
+        const limitRaw = parseInt(url.searchParams.get('limit') || '200', 10);
+        const limit = Math.max(1, Math.min(1000, isNaN(limitRaw) ? 200 : limitRaw));
+        const since = (url.searchParams.get('since') || '').trim();
+        const minIdRaw = parseInt(url.searchParams.get('min_wp_id') || '0', 10);
+        const minId = isNaN(minIdRaw) || minIdRaw < 0 ? 0 : minIdRaw;
+
+        const cols = 'wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image';
+        const conds = [];
+        const params = [];
+        if (since) { conds.push('modified > ?'); params.push(since); }
+        if (minId > 0) { conds.push('wp_id >= ?'); params.push(minId); }
+        let sql = 'SELECT ' + cols + ' FROM posts';
+        if (conds.length) sql += ' WHERE ' + conds.join(' AND ');
+        sql += ' ORDER BY wp_id ASC LIMIT ?';
+        params.push(limit);
+
+        let rows = [];
+        try {
+            const res = await env.D1_DATABASE.prepare(sql).bind(...params).all();
+            rows = (res && res.results) || [];
+        } catch (e) {
+            return new Response(JSON.stringify({ error: 'D1 查询失败: ' + (e && e.message ? e.message : String(e)) }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
+        return new Response(JSON.stringify({ ok: true, total: rows.length, limit: limit, since: since, min_wp_id: minId, posts: rows }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        });
+    }
+
     // 内置风格索引同步（WP 端「快照为新风格」后调用；X-Auth-Key 鉴权，不走登录）
     if (path === '/api/templates/style/builtin-sync' && request.method === 'POST') {
         const providedKey = request.headers.get('X-Auth-Key');
