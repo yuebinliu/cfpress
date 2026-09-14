@@ -323,4 +323,26 @@ tool/index.php「MD」模式（md 原文直塞 post_content，WP 侧无任何格
 
 **未做**：多目标配置、`/d1-batch` 内建自动重建（**S2**）、md 单页渲染归属（G 节 ③ 与 S2 二选一）、列表页生成（F.2 缺口 1/8）。
 
+---
+
+## I. WP ↔ Worker 双向数据流（2026-09-14 澄清，**结论：目前不能，且有个更省事的替代**）
+
+**问题**：WP 后台能否获取 / 编辑「只存在于 Worker 端（D1）」的文章？**答：不能。**
+
+**现状事实（已核实）**
+- 数据流**单向**：WP → Worker（`save_post` → 生成 → `/upload` + `/d1-batch`）。`worker/src/admin.js` 里只有 `GET /api/export`（**JSON 备份**，格式不是 WP 可导入的 WXR）与 `POST /api/import`（**导入到 Worker**，`wp_id` 用 `Date.now()*1000000+i`、按 slug 去重）；WP 插件里**没有任何导入逻辑**（`wp_insert_post(` 在插件中零命中）。
+- Worker 的 X-Auth-Key 接口共 6 处（`/purge-cache`、`/style-list`、`builtin-sync`、`/d1-batch`、`/upload`、`/delete`）—— **没有供 WP 拉取文章的读接口**。
+- 网络方向：WP（内网）→ Worker（公网）**可达**（插件已在用）；Worker → WP **不可达**（内网不可穿透，见 EVOLUTION 第八节）。⇒ 要做只能由 WP 主动拉。
+
+**若要实现「WP 拉取 Worker 文章」，三件事缺一不可**
+1. **新只读接口**（X-Auth-Key 鉴权，放 `routes.js` 非登录区，仿 `/style-list`）：如 `GET /sync/posts?since=…` 返回 `wp_id/slug/title/content/content_format/modified/status`；
+2. **`wp_id` 对齐（关键坑）**：必须 `wp_insert_post(['import_id' => <Worker 侧的 wp_id>])` —— WP 允许指定正整数 ID，两端 ID 才能对上；否则 WP 分配新自增 ID ⇒ 下次导出按 `wp_id` upsert 会把它当**另一篇新文章**写进 D1，**产生重复文章**（Worker 文章的 ID 是时间戳形态，不会撞上 WP 自增序列）；
+3. **归属规则**：拉回来即"两端都有" ⇒ 必须定谁说了算。WP 接管（此后编辑都在 WP、导出覆盖 Worker）自洽；若只想"只读"，就**不要**拉进 WP（否则必被覆盖或重复）。
+
+**更省事的三条替代路径（建议优先考虑）**
+- **A. Worker 后台 `/admin/` 直接编辑**：已支持 md 编辑 + `marked` 预览 —— **零开发**；
+- **B. 第三方编辑器直连 Worker**（A 节写入口：`/wp/v2` 兼容 + 应用密码）—— 解决"外网 / 移动端写作"；
+- **C. 统一诞生地**：md 文章一律在 WP 侧写（`tool/index.php` 或编辑页「📝 文档格式」勾选）→ 自动推送；不在 Worker 端新建 ⇒ **永远不需要"拉回来"**。
+
+
 
