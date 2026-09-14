@@ -231,6 +231,14 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **尚未验证（诚实标注）**：真实**空库**下「向导 → 建管理员 → 登录」的完整链路（生产库已有数据，不能清空 users 表验证）；逻辑已就绪，建议首次部署到**新站点/新库**时走一遍。
   - **建议**：`wrangler.toml` 含真实 D1/KV/R2 ID（私密），可 `git rm --cached worker/wrangler.toml` + 加进 `.gitignore`，本地文件保留、仓库只留 `.example`。
 
+- **批AK（多托管配置·第 1 步：托管 target 抽象层，2026-09-14，已同步验证）**：为「可插拔托管后端」打地基，**行为与改造前完全等价**。
+  - **配置**：`cf_hosting_targets`（JSON 列表），每个 target：`{id, name, type, enabled, endpoint, auth_key, path_prefix, capabilities}`；`capabilities = {r2: 能存静态文件, d1: 能存文章数据, cache: 支持清缓存}`；`enabled=false` 忽略。**未配置时自动用旧设置**（`cf_site_url` + `cf_auth_key`）迁移出一条默认 target ⇒ 老站点零改动。
+  - **实现**：新增 `get_hosting_targets()` / `for_each_target($capability, $send)` / `worker_request($target, $route, $method, $body)` / `target_upload()` / `target_delete()`；`upload_to_r2_via_worker()` 与 `delete_from_r2()` 改为**遍历具备 `r2` 能力的目标**并分派。`site_url` / `auth_key` 改由「首个 cfse-worker target」派生 ⇒ `d1_batch` / `purge_page_caches` 等仍读旧键的代码**零改动**。
+  - **类型**：目前只实现 `cfse-worker`（走 `/upload`、`/delete`、`/d1-batch`、`/purge-cache`，X-Auth-Key）；`local`（纯静态档，只写本地目录）与 `s3`（S3 兼容直传）留作后续，配置里出现时会**跳过并 WARNING**，不会静默失效。
+  - **能力语义**：`for_each_target` 在「没有目标具备该能力」时返回 `ok=true`（例如纯静态档没有 `d1` ⇒ 不执行、也不算失败）；多目标时**任一成功即算成功**（并记录各目标结果）。
+  - **实测**：配置派生 = `site_url=https://doc.yuebin.uk`、`hosting_targets=[1 个 cfse-worker target（r2/d1/cache 全开）]`；默认导出 → `D1=有(published)` + R2 上传成功；**日志**：`文件已上传（1 个目标）：… → {"default":true}`、关掉 r2 能力后 `没有启用「静态文件」能力的托管目标，跳过上传：…`、删除同理 `文件已删除（1 个目标）…`；测试数据已清理。
+  - **教训（顺手记）**：改 PHP 这种大文件时，替换段必须**整段自闭合**再拼接 —— 本次第一版少收一个 `}`，lint 报 `unexpected token "catch"`，而当时的应用脚本**没有校验 lint 就直接同步**，把坏文件推上了服务器（随即 git 回滚 + 重新同步恢复）。现在的应用脚本已改为「**lint 不通过就中止、绝不同步**」。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

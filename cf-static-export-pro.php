@@ -154,12 +154,22 @@ class CF_Static_Export_Pro {
     // 配置加载
     // ============================================
     private function load_config() {
+        // 多托管配置：先算出目标列表，再由「首个 cfse-worker 目标」派生 site_url / auth_key。
+        // 这样 d1_batch / purge 等仍只读 site_url/auth_key 的代码无需改动，行为与之前一致。
+        $targets = $this->get_hosting_targets();
+        $primary = array();
+        foreach ($targets as $t) {
+            if (isset($t['type']) && $t['type'] === 'cfse-worker') { $primary = $t; break; }
+        }
+        $primary_url = !empty($primary['endpoint']) ? $primary['endpoint'] : get_option('cf_site_url', get_site_url());
+        $primary_key = isset($primary['auth_key']) ? $primary['auth_key'] : get_option('cf_auth_key', '');
         $this->config = array(
             'account_id' => get_option('cf_account_id', ''),
             'api_token' => get_option('cf_api_token', ''),
             'r2_bucket' => get_option('cf_r2_bucket', ''),
             'd1_database' => get_option('cf_d1_database', ''),
-            'site_url' => rtrim(get_option('cf_site_url', get_site_url()), '/'),
+            'site_url' => rtrim($primary_url, '/'),
+            'hosting_targets' => $targets,
             'export_mode' => get_option('cf_export_mode', 'auto'),
             'cache_ttl' => max(0, (int) get_option('cf_cache_ttl', 3600)),
             'clean_scripts' => (bool) get_option('cf_clean_dynamic_scripts', true),
@@ -177,7 +187,7 @@ class CF_Static_Export_Pro {
             'cache_ttl_site' => max(0, (int) get_option('cf_cache_ttl_site', 604800)),
             'cache_ttl_feed' => max(0, (int) get_option('cf_cache_ttl_feed', 14400)),
             'feed_count' => min(100, max(1, (int) get_option('cf_feed_count', 20))),
-            'auth_key' => get_option('cf_auth_key', ''),
+            'auth_key' => $primary_key,
             'posts_per_page' => max(1, (int) get_option('cf_posts_per_page', 10)),
             // 编辑页是否自动比对 Worker 版本（默认关；打开后打开编辑页即查询，关则用面板里的「🔍 检查」按钮）
             'worker_auto_check' => (bool) get_option('cf_worker_auto_check', true),
@@ -1411,6 +1421,136 @@ private function get_post_storage_path($post) {
         return $this->upload_to_r2_via_worker($path, $content, $content_type, null);
     }
 
+    /**
+     * 托管目标列表（多托管配置）。
+     *   type：'cfse-worker'（当前唯一实现，走 Worker 的 X-Auth-Key 接口）
+     *         —— 规划中：'local'（只写本地目录，纯静态档）、's3'（S3 兼容对象存储直传）
+     *   capabilities：{ r2: 能存静态文件, d1: 能存文章数据, cache: 支持清缓存 }
+     *   enabled=false 忽略。
+     * 未配置时用旧设置（cf_site_url + cf_auth_key）自动迁移成一条默认 target ⇒ 行为不变。
+     */
+    private function get_hosting_targets() {
+        $list = array();
+        $saved = get_option('cf_hosting_targets', '');
+        if (is_string($saved) && $saved !== '') {
+            $decoded = json_decode($saved, true);
+            if (is_array($decoded)) $list = $decoded;
+        }
+        if (empty($list)) {
+            return array(array(
+                'id' => 'default',
+                'name' => '默认（Cloudflare Worker）',
+                'type' => 'cfse-worker',
+                'enabled' => true,
+                'endpoint' => rtrim(get_option('cf_site_url', get_site_url()), '/'),
+                'auth_key' => get_option('cf_auth_key', ''),
+                'path_prefix' => '',
+                'capabilities' => array('r2' => true, 'd1' => true, 'cache' => true),
+            ));
+        }
+        $out = array();
+        foreach ($list as $t) {
+            if (!is_array($t)) continue;
+            if (isset($t['enabled']) && !$t['enabled']) continue;
+            $type = isset($t['type']) ? (string) $t['type'] : 'cfse-worker';
+            if ($type !== 'cfse-worker') {
+                // local / s3 等尚未实现：跳过并提示，避免静默失效
+                $this->log('托管目标 ' . (isset($t['id']) ? $t['id'] : '?') . ' 的类型 ' . $type . ' 尚未实现，已跳过', 'WARNING');
+                continue;
+            }
+            if (!isset($t['capabilities']) || !is_array($t['capabilities'])) {
+                $t['capabilities'] = array('r2' => true, 'd1' => true, 'cache' => true);
+            }
+            if (!isset($t['path_prefix'])) $t['path_prefix'] = '';
+            $out[] = $t;
+        }
+        return $out;
+    }
+
+    /**
+     * 对「支持 $capability 能力」的目标逐个执行 $send($target)。
+     * @return array{tried:int, results:array, ok:bool}
+     *   tried=0 ⇒ 没有目标具备该能力（例如纯静态档没有 d1）：ok 视为 true（无需执行，不算失败）
+     */
+    private function for_each_target($capability, $send) {
+        $targets = isset($this->config['hosting_targets']) ? $this->config['hosting_targets'] : array();
+        $results = array();
+        foreach ($targets as $t) {
+            if (empty($t['capabilities'][$capability])) continue;
+            $id = isset($t['id']) ? $t['id'] : ('t' . count($results));
+            try {
+                $results[$id] = (bool) call_user_func($send, $t);
+            } catch (Throwable $e) {
+                $this->log('托管目标 ' . $id . ' 调用异常：' . $e->getMessage(), 'ERROR');
+                $results[$id] = false;
+            }
+        }
+        return array(
+            'tried' => count($results),
+            'results' => $results,
+            'ok' => empty($results) ? true : in_array(true, $results, true),
+        );
+    }
+
+    /** 对某个 cfse-worker 目标发一次带 X-Auth-Key 的 JSON 请求（失败返回 null） */
+    private function worker_request($target, $route, $method, $body = null, $timeout = 30) {
+        $base = rtrim(isset($target['endpoint']) ? (string) $target['endpoint'] : '', '/');
+        $key = isset($target['auth_key']) ? (string) $target['auth_key'] : '';
+        $id = isset($target['id']) ? $target['id'] : '?';
+        if ($base === '') {
+            $this->log('托管目标 ' . $id . ' 未配置 endpoint', 'ERROR');
+            return null;
+        }
+        $args = array(
+            'timeout' => $timeout,
+            'sslverify' => false,
+            'method' => $method,
+            'headers' => array('Content-Type' => 'application/json'),
+        );
+        if ($key !== '') $args['headers']['X-Auth-Key'] = $key;
+        if ($body !== null) $args['body'] = wp_json_encode($body);
+        $resp = wp_remote_request($base . $route, $args);
+        if (is_wp_error($resp)) {
+            $this->log('托管目标 ' . $id . ' 请求失败(' . $route . ')：' . $resp->get_error_message(), 'ERROR');
+            return null;
+        }
+        return $resp;
+    }
+
+    /** 按类型分派「上传静态文件」；返回 bool */
+    private function target_upload($target, $path, $content, $content_type, $content_encoding) {
+        if ($target['type'] === 'cfse-worker') {
+            $body = array('path' => $path, 'content' => base64_encode($content), 'contentType' => $content_type, 'md5' => md5($content));
+            if (!empty($content_encoding)) $body['contentEncoding'] = $content_encoding;
+            $resp = $this->worker_request($target, '/upload', 'POST', $body, 30);
+            if ($resp === null) return false;
+            $code = wp_remote_retrieve_response_code($resp);
+            if ($code !== 200) {
+                $this->log('托管目标 ' . $target['id'] . ' 上传失败，HTTP ' . $code . '：' . wp_remote_retrieve_body($resp), 'ERROR');
+                return false;
+            }
+            return true;
+        }
+        $this->log('托管目标 ' . $target['id'] . ' 的类型 ' . $target['type'] . ' 尚未实现上传', 'WARNING');
+        return false;
+    }
+
+    /** 按类型分派「删除静态文件」；返回 bool */
+    private function target_delete($target, $paths) {
+        if ($target['type'] === 'cfse-worker') {
+            $resp = $this->worker_request($target, '/delete', 'DELETE', array('paths' => array_values($paths)), 30);
+            if ($resp === null) return false;
+            $code = wp_remote_retrieve_response_code($resp);
+            if ($code >= 400) {
+                $this->log('托管目标 ' . $target['id'] . ' 删除失败，HTTP ' . $code . '：' . wp_remote_retrieve_body($resp), 'ERROR');
+                return false;
+            }
+            return true;
+        }
+        $this->log('托管目标 ' . $target['id'] . ' 的类型 ' . $target['type'] . ' 尚未实现删除', 'WARNING');
+        return false;
+    }
+
     private function upload_to_r2_via_worker($path, $content, $content_type = 'text/html', $content_encoding = null) {
         try {
             if ($this->config['debug_mode']) {
@@ -1420,30 +1560,16 @@ private function get_post_storage_path($post) {
                 @file_put_contents($debug_path, $content);
                 $this->log("调试文件已保存: {$debug_path} (" . strlen($content) . " 字节)", 'DEBUG');
             }
-            $worker_url = $this->config['site_url'] . '/upload';
-            $auth_key = $this->config['auth_key'];
-            if (empty($auth_key)) {
-                $this->log('Worker Auth Key 未配置', 'ERROR');
+            // 多托管：对所有「具备静态文件能力」的目标上传
+            $res = $this->for_each_target('r2', function ($t) use ($path, $content, $content_type, $content_encoding) {
+                return $this->target_upload($t, $path, $content, $content_type, $content_encoding);
+            });
+            if ($res['tried'] === 0) {
+                $this->log('没有启用「静态文件」能力的托管目标，跳过上传：' . $path, 'DEBUG');
+            } elseif (!$res['ok']) {
                 return false;
-            }
-            $body = array('path' => $path, 'content' => base64_encode($content), 'contentType' => $content_type, 'md5' => md5($content));
-            if (!empty($content_encoding)) $body['contentEncoding'] = $content_encoding;
-            $response = wp_remote_post($worker_url, array('timeout' => 30, 'headers' => array('X-Auth-Key' => $auth_key, 'Content-Type' => 'application/json'), 'body' => wp_json_encode($body)));
-            if (is_wp_error($response)) {
-                $this->log("Worker 上传请求失败: " . $response->get_error_message(), 'ERROR');
-                return false;
-            }
-            $http_code = wp_remote_retrieve_response_code($response);
-            if ($http_code !== 200) {
-                $resp_body = wp_remote_retrieve_body($response);
-                $this->log("Worker 上传失败，HTTP {$http_code}: {$resp_body}", 'ERROR');
-                return false;
-            }
-            $up_resp = json_decode(wp_remote_retrieve_body($response), true);
-            if (!empty($up_resp['skipped'])) {
-                $this->log("Worker 上传跳过（R2 内容一致）: {$path}", 'DEBUG');
             } else {
-                $this->log("Worker 上传成功: {$path}", 'INFO');
+                $this->log('文件已上传（' . $res['tried'] . ' 个目标）：' . $path . ' → ' . wp_json_encode($res['results']), 'INFO');
             }
             return true;
         } catch (Throwable $e) {
@@ -1909,24 +2035,17 @@ private function get_post_storage_path($post) {
         try {
             $paths = array_values(array_filter((array) $paths, 'strlen'));
             if (empty($paths)) return true;
-            $worker_url = $this->config['site_url'] . '/delete';
-            $auth_key = $this->config['auth_key'];
-            if (empty($auth_key)) {
-                $this->log('Worker Auth Key 未配置，无法删除 ' . implode(', ', $paths), 'ERROR');
+            // 多托管：对所有「具备静态文件能力」的目标删除
+            $res = $this->for_each_target('r2', function ($t) use ($paths) {
+                return $this->target_delete($t, $paths);
+            });
+            if ($res['tried'] === 0) {
+                $this->log('没有启用「静态文件」能力的托管目标，跳过删除：' . implode(', ', $paths), 'DEBUG');
+            } elseif (!$res['ok']) {
                 return false;
+            } else {
+                $this->log('文件已删除（' . $res['tried'] . ' 个目标）：' . implode(', ', $paths) . ' → ' . wp_json_encode($res['results']), 'INFO');
             }
-            $response = wp_remote_request($worker_url, array('method' => 'DELETE', 'timeout' => 30, 'headers' => array('X-Auth-Key' => $auth_key, 'Content-Type' => 'application/json'), 'body' => wp_json_encode(array('paths' => $paths))));
-            if (is_wp_error($response)) {
-                $this->log("Worker 删除请求失败: " . $response->get_error_message(), 'ERROR');
-                return false;
-            }
-            $http_code = wp_remote_retrieve_response_code($response);
-            if ($http_code >= 400) {
-                $resp_body = wp_remote_retrieve_body($response);
-                $this->log("Worker 删除失败，HTTP {$http_code}: {$resp_body}", 'ERROR');
-                return false;
-            }
-            $this->log("Worker 删除成功: " . implode(', ', $paths), 'INFO');
             return true;
         } catch (Throwable $e) {
             $this->log("delete_from_r2 内部异常：" . $e->getMessage(), 'ERROR');
