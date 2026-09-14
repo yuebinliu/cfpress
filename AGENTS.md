@@ -82,6 +82,7 @@
 > **处置**：双向补齐，两处现为 **byte-identical**（用"截取函数片段比对"的自检确认）。
 > **规矩**：改渲染函数**必须两处同改**（或只改生成端再重新生成），改完跑一次一致性自检；另注意后台「保存模板」会用生成端**整体覆盖**产物（含内嵌页面模板），产物若被手改会丢失。
 > **验证方式**：`curl -s https://doc.yuebin.uk/ | grep -c "{{"` ⇒ 应为 **0**（列表页由 Worker 渲染，需 `npm run deploy` 后才生效）。
+> **✅ 已部署验证（Version `b6796465-01c1-4b91-b0eb-2830249ccf10`）**：首页 / `category/life-feeling` / `tag/wordpress` / `aboutme` 的 `{{` 计数**全部为 0**，作者链接正确渲染为 `https://doc.yuebin.uk/author/admin/`，单页 HTTP 200。
 >
 > **下一步（压缩后）**
 > 1. 排查上面的设置页布局问题；
