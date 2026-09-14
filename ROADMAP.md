@@ -98,6 +98,10 @@
 
 **未决（需拍板）**：① 落点（Worker / 内网 WP / 两端）；② 首批范围；③ 应用密码是否只给管理员角色。
 
+- **已完成（批 BN，2026-09-14）**：s3 前置验证（`/health` 无需认证 ⇒ 测试连通性改用受保护接口）+ 修 `get_hosting_targets()` 白名单漏放 `local` 的 bug（纯静态档此前实际不可用）。
+- **下一步**：`s3` 适配器 —— 字段 = endpoint / bucket / region / access_key / secret_key / path-style / **public_url**；能力 `{r2:true,d1:false,cache:false}`；`path_prefix` 生效；path-style 自动判断 + 可手工覆盖；适配器带 `testConnection()`（用 `ListObjectsV2` 做 **SigV4 签名自检**）。
+
+
 - **已完成（批 BM，2026-09-14）**：多托管第 3 步 —— 设置页「托管目标」卡片（增删行 / 类型切换 / 能力勾选 / 启用 / 路径前缀）+ JSON 保存 + 「🔌 测试连通性」AJAX。
 - **下一步**：第 2 步 `s3` 适配器（S3 兼容对象存储直传）—— **字段与签名方式待与用户商定**（endpoint/region/bucket/access key/secret/path-style 等）。
 

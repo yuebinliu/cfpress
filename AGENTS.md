@@ -256,6 +256,14 @@ WordPress 插件 + Cloudflare Worker 的静态化方案：WP 文章导出为静�
   - **实测**：设置页渲染 34391 字节、10 项检查全 YES（表格容器 / 字段名 / 类型下拉 / 三个能力 / 两个按钮 / 路径前缀 / 说明 / 当前端点值 / 顺序在「发布行为」之前）；`sanitize` 传入 worker+local+未知类型+非数组 → 得 2 条（未知类型丢弃、非数组忽略）；AJAX 实测 → `{"success":true,"data":{"ok":true,"results":[{"name":"默认（Cloudflare Worker）","ok":true,"detail":"HTTP 200 {\"ok\":true,\"db\":\"up\"}"}]}}`。
   - **说明**：CLI 下探针渲染设置页需要额外 `require ABSPATH.'wp-admin/includes/template.php'`（`submit_button()` 等属后台函数，非 CLI 自动加载）。
 
+- **批BN（s3 前置验证 + 修掉批 AL 遗漏的严重 bug，2026-09-14，已部署验证）**：
+  - **验证 1（`/health` 是否需认证）**：`GET /health` **无需认证**（无 key 也 200，返回 `{ok:true,db:up,ts}`）；而 `/style-list` 无 key / 错 key → **401**、对 key → 200；`/purge-cache`、`/d1-batch` 无 key → 401。
+    ⇒ 结论：**「🔌 测试连通性」应改用受保护接口**（如 `/style-list`）—— 否则只能证明「能连通」，证明不了 **X-Auth-Key 是否正确**。
+  - **验证 2（只留 local 目标）→ 抓到真 bug**：`get_hosting_targets()` 的类型白名单仍写着「只允许 cfse-worker」，**批 AL 只实现了 local 的分派分支、没同步更新配置解析** ⇒ 只配 local 目标时它被**静默丢弃**（返回 0 个）⇒ **纯静态档实际不可用**。
+    · 已修：白名单改为 `['cfse-worker','local']`（s3 等未实现类型仍跳过 + WARNING）。
+    · **为什么 AL 批没发现**：当时的验证是**直接改内存 `config`**（绕过了 option ⇒ 也就绕过了 `get_hosting_targets()`）⇒ **假通过**。**教训：验证一条链路要从「用户实际会改的入口」（option / 表单）进，别从中间层注入。**
+  - **修复后复验**：只留 local ⇒ `config` 目标数 1、`get_hosting_targets()` 返回 `only-local(local)`、**不回落旧配置**；`d1_batch` 返回 `[null,null]` 且**耗时 0ms（未联网）**；文件只写本地（实写位置 `<dir>/<path>`，探针一度因 dir 与 path 叠层而误判，已确认成功并清理）；无 cfse-worker 目标时 `site_url/auth_key` 仍取旧设置（仅供「站点设置同步」等，不参与文件/数据分派）。
+
 - 遗留 backlog：①导出剩余耗时（WP 渲染/R2 固定开销）；②HTML 稳定化（已核查：独立进程渲染确定，无需改造）；③媒体库大批删除较慢（R2 单删 ~1s，分批 20 即可）；④全量重建单页（284 篇中已重建约 70 篇，其余待用户择机一键重建，用于清除旧模板的探针残留）。
 
 ## 六、验证套路（改完怎么测）

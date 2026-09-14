@@ -1625,8 +1625,9 @@ private function get_post_storage_path($post) {
             if (!is_array($t)) continue;
             if (isset($t['enabled']) && !$t['enabled']) continue;
             $type = isset($t['type']) ? (string) $t['type'] : 'cfse-worker';
-            if ($type !== 'cfse-worker') {
-                // local / s3 等尚未实现：跳过并提示，避免静默失效
+            // 已实现的类型白名单：cfse-worker（Worker）/ local（本地目录）。
+            // s3 等尚未实现的类型仍然跳过并 WARNING（避免静默失效）。
+            if (!in_array($type, array('cfse-worker', 'local'), true)) {
                 $this->log('托管目标 ' . (isset($t['id']) ? $t['id'] : '?') . ' 的类型 ' . $type . ' 尚未实现，已跳过', 'WARNING');
                 continue;
             }
