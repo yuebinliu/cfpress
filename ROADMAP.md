@@ -253,7 +253,7 @@ tool/index.php「MD」模式（md 原文直塞 post_content，WP 侧无任何格
 **关键验证（已做）**：`the_content` 过滤器**确实在渲染路径上** —— Twenty Ten 单页模板 `loop-single.php:37` 调 `the_content()`，一级渲染 `render_with_template()`（`:746-757`）就是 `load_template(single.php)`；二级降级 `fetch_from_frontend()` 抓 WP 前台同样过 `the_content`。⇒ **挂一个过滤器即可同时修好单页与 WP 前台显示**，不必逐处改模板。
 
 **候选修法（互斥，待拍板）**
-- **A′ 家在 WP（推荐，改动最小）**：① `tool/index.php` 的 MD 模式加一行 `update_post_meta($post_id,'_cfse_content_format','md')`；② 插件导出读该 meta（去掉 `content_format` 硬编码，`status` 一并改读真实状态）；③ 插件 `add_filter('the_content', …)`，**仅当该篇 meta=md** 时用 `Parsedown->text()`（`setSafeMode(true)`；服务器 `tool/Parsedown.php` 现成）⇒ 单页/WP 前台渲染正确 + D1 存 md 原文带标记 ⇒ 列表/feed/重建也正确。
+- ✅ **A′ 家在 WP —— 已实现（2026-09-14 批2）**：① `tool/index.php`「MD」模式用 `meta_input` 写 `_cfse_content_format=md`；② `build_post_meta()` 读 meta 决定 `content_format` + `write_to_d1()` 参数化（去 `'html'`/`'published'` 硬编码）+ md 摘要纯文本化；③ vendored Parsedown + `the_content` 过滤器（仅 meta=md）。实测与文件改动见 AGENTS.md「批2」。原方案：① `tool/index.php` 的 MD 模式加一行 `update_post_meta($post_id,'_cfse_content_format','md')`；② 插件导出读该 meta（去掉 `content_format` 硬编码，`status` 一并改读真实状态）；③ 插件 `add_filter('the_content', …)`，**仅当该篇 meta=md** 时用 `Parsedown->text()`（`setSafeMode(true)`；服务器 `tool/Parsedown.php` 现成）⇒ 单页/WP 前台渲染正确 + D1 存 md 原文带标记 ⇒ 列表/feed/重建也正确。
   边界：**只统一「格式与渲染」，不是双向同步** —— Worker 端改同一篇（同 wp_id），下次 WP 导出仍会覆盖（那是防覆盖，见 A 节候选 1）。遗留风险：在 WP 后台编辑器保存 md 文章会被 HTML 化（需实测/约定不进后台编辑器）。
 - **内容检测式（不推荐）**：`the_content` 上用正则判断「疑似 md」（他人建议方案）。风险：md 与 HTML 混写的文章会被整篇重渲染；且**不解决 D1 标记**（列表/feed/重建仍错）。
 - **B 家在 Worker**：`tool/index.php` 的 MD 模式改走 MD2HTML（或弃用），**WP 永不出 md**；md 只在 Worker 端新建（现有 3 篇 md 即此形态）。代价：放弃「md 原稿存在 WP、可在 WP 侧编辑」。

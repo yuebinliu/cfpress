@@ -117,6 +117,7 @@ class CF_Static_Export_Pro {
 		add_action('admin_menu', array($this, 'add_admin_menu'));
 		add_action('admin_init', array($this, 'register_settings'));
 		add_action('save_post', array($this, 'export_post'), 10, 3);
+		add_filter('the_content', array($this, 'render_md_content'), 9);
 		add_action('before_delete_post', array($this, 'delete_post'));
 		add_action('trash_post', array($this, 'delete_post'));
 		add_action('untrash_post', array($this, 'export_post'));
@@ -613,12 +614,22 @@ private function get_post_storage_path($post) {
         $categories = $this->get_post_terms($post->ID, 'category');
         $tags = $this->get_post_terms($post->ID, 'post_tag');
 
+        // 内容格式：由写入端留下的 meta 决定（tool/index.php 的「MD」模式会写 _cfse_content_format=md）；
+        // 缺失即 html —— 零误判，且历史文章行为不变。
+        $content_format = (get_post_meta($post->ID, '_cfse_content_format', true) === 'md') ? 'md' : 'html';
+
+        // 摘要：md 原稿先渲染成 HTML 再取纯文本，避免摘要里出现 ## 之类的标记
+        $excerpt = $post->post_excerpt
+            ? ($content_format === 'md' ? $this->md_to_plain($post->post_excerpt) : $post->post_excerpt)
+            : $this->extract_excerpt($content_format === 'md' ? $this->md_to_plain($post->post_content) : $post->post_content, 200);
+
         $post_data = array(
             'wp_id' => $post->ID,
             'slug' => $post->post_name,
             'title' => $post->post_title,
             'content' => $post->post_content,
-            'excerpt' => $post->post_excerpt ?: $this->extract_excerpt($post->post_content, 200),
+            'content_format' => $content_format,
+            'excerpt' => $excerpt,
             'date' => $post->post_date,
             'modified' => $post->post_modified,
             'categories' => wp_json_encode($categories, JSON_UNESCAPED_UNICODE),
@@ -774,6 +785,51 @@ private function get_post_storage_path($post) {
             $this->log("文章 {$post_id} 上传失败: " . $e->getMessage(), 'ERROR');
             return false;
         }
+    }
+
+    // ============================================
+    // Markdown 渲染（md 文章；与 Worker 端 marked 对齐）
+    // ============================================
+    /**
+     * 用 vendored Parsedown 渲染 markdown（safe mode 防 XSS）。
+     * 类名冲突保护：站点其它插件/主题若已加载 Parsedown，则复用其实现（API 相同）。
+     */
+    private function render_markdown($md) {
+        if (!class_exists('Parsedown')) {
+            $file = CFSE_PLUGIN_DIR . 'vendor/parsedown/Parsedown.php';
+            if (file_exists($file)) require_once $file;
+        }
+        if (!class_exists('Parsedown')) {
+            $this->log('未找到 Parsedown，md 内容按原文输出', 'WARNING');
+            return $md;
+        }
+        try {
+            $parsedown = new Parsedown();
+            $parsedown->setSafeMode(true);
+            return $parsedown->text($md);
+        } catch (Throwable $e) {
+            $this->log('Parsedown 渲染失败: ' . $e->getMessage(), 'ERROR');
+            return $md;
+        }
+    }
+
+    /** md → 纯文本（渲染后去标签，供摘要/列表用） */
+    private function md_to_plain($md) {
+        $text = strip_tags($this->render_markdown($md));
+        $text = preg_replace('/\s+/u', ' ', $text);
+        return trim($text);
+    }
+
+    /**
+     * the_content 过滤器：meta=_cfse_content_format 为 md 的文章在渲染时转成 HTML。
+     * 生效范围 = WP 前台 + 主题模板渲染（导出的一级渲染 render_with_template 也走这条），
+     * 于是「生成的单页 HTML」与 Worker 端（marked）渲染结果一致。
+     * 注意：不要用 is_admin() 短路 —— 后台「全量导出 / 生成到本地」正是在 admin 上下文里渲染模板。
+     */
+    public function render_md_content($content) {
+        $id = get_the_ID();
+        if (!$id || get_post_meta($id, '_cfse_content_format', true) !== 'md') return $content;
+        return $this->render_markdown($content);
     }
 
     /**
@@ -1252,15 +1308,17 @@ private function get_post_storage_path($post) {
         // 1. 写入 posts
         $statements[] = array(
             'sql' => "INSERT OR REPLACE INTO posts (wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image)
-                      VALUES (?, ?, ?, ?, 'html', ?, ?, ?, 'published', ?, ?, ?)",
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             'params' => array(
                 $post_data['wp_id'],
                 $post_data['slug'],
                 $post_data['title'],
                 $post_data['content'],
+                isset($post_data['content_format']) ? $post_data['content_format'] : 'html',
                 $post_data['excerpt'],
                 $post_data['date'],
                 $post_data['modified'],
+                isset($post_data['status']) ? $post_data['status'] : 'published',
                 $post_data['categories'],
                 $post_data['tags'],
                 $post_data['featured_image'],
