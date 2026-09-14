@@ -274,7 +274,8 @@ public function get_config() {
     public function render_hosting_targets_table() {
         $targets = $this->config['hosting_targets'];
         ?>
-        <table class="widefat striped" id="cfse-targets" style="max-width:1150px;">
+        <div style="overflow-x:auto;">
+        <table class="widefat striped" id="cfse-targets" style="max-width:100%;">
             <thead><tr>
                 <th style="width:46px;">启用</th>
                 <th style="width:150px;">名称</th>
@@ -289,6 +290,7 @@ public function get_config() {
             <?php foreach ($targets as $i => $t) { $this->render_hosting_target_row($i, $t); } ?>
             </tbody>
         </table>
+        </div>
         <?php
     }
 
@@ -481,90 +483,6 @@ public function get_config() {
                             <tr><th><label for="cf_export_concurrency">全量导出并发数</label></th>
                                 <td><input type="number" id="cf_export_concurrency" name="cf_export_concurrency" value="<?php echo esc_attr($this->config['export_concurrency']); ?>" style="width:100px" min="1" max="8" />
                                     <p class="description">「🔄 全量导出」时并行进程数（1~8，默认 4）。并发越高全量越快，同时占用更多服务器资源；设为 1 即逐篇串行。R2/D1 写入为幂等覆盖，并发安全。</p></td></tr>
-                            <tr><th>托管目标</th>
-                                <td>
-                                    <p class="description">导出时把「<b>静态文件</b> / <b>文章数据</b> / <b>清缓存</b>」按各目标的<b>能力</b>分派出去。
-                                        <code>cfse-worker</code> = Cloudflare Worker（走 X-Auth-Key 接口）；<code>local</code> = 只写本地目录（纯静态档，不联网）。
-                                        某项目标不勾「静态文件」就完全不参与文件上传/删除；没有任何目标具备「文章数据」能力时（例如只有 local），写库会被跳过而不是报错。
-                                        这里留空时，用上面的「站点 URL + Auth Key」当作默认 Worker 目标兜底。</p>
-                                    <?php $this->render_hosting_targets_table(); ?>
-                                    <p style="margin-top:8px;">
-                                        <button type="button" class="button" id="cfse-add-target">＋ 添加目标</button>
-                                        <button type="button" class="button" id="cfse-test-targets">🔌 测试连通性</button>
-                                        <span id="cfse-test-result" class="description" style="margin-left:8px;"></span>
-                                        <span class="description" style="margin-left:8px;">（测试用的是<b>已保存</b>的配置，改动后请先保存）</span>
-                                    </p>
-                                    <script>
-                                    (function(){
-                                      var body = document.getElementById('cfse-targets-body');
-                                      if (!body) return;
-                                      var idx = body.querySelectorAll('tr.cfse-target-row').length;
-                                      function syncRow(tr){
-                                        var type = tr.querySelector('.cfse-target-type');
-                                        var ep = tr.querySelector('.cfse-f-endpoint');
-                                        var dir = tr.querySelector('.cfse-f-dir');
-                                        var key = tr.querySelector('.cfse-f-key');
-                                        var s3 = tr.querySelector('.cfse-f-s3');
-                                        var v = type ? type.value : 'cfse-worker';
-                                        var isLocal = (v === 'local');
-                                        var isS3 = (v === 's3');
-                                        if (ep) ep.style.display = isLocal ? 'none' : '';
-                                        if (key) key.parentNode.style.display = (isLocal || isS3) ? 'none' : '';
-                                        if (dir) dir.style.display = isLocal ? '' : 'none';
-                                        if (s3) s3.style.display = isS3 ? '' : 'none';
-                                      }
-                                      function bind(tr){
-                                        var type = tr.querySelector('.cfse-target-type');
-                                        if (type) type.addEventListener('change', function(){ syncRow(tr); });
-                                        var del = tr.querySelector('.cfse-del-target');
-                                        if (del) del.addEventListener('click', function(){ tr.parentNode.removeChild(tr); });
-                                        syncRow(tr);
-                                      }
-                                      Array.prototype.forEach.call(body.querySelectorAll('tr.cfse-target-row'), bind);
-                                      var addBtn = document.getElementById('cfse-add-target');
-                                      if (addBtn) addBtn.addEventListener('click', function(){
-                                        var tmp = document.createElement('tbody');
-                                        tmp.innerHTML = '<tr class="cfse-target-row">' +
-                                          '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
-                                          '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /><input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /></td>' +
-                                          '<td><select name="cf_hosting_targets[' + idx + '][type]" class="cfse-target-type" style="width:100%;"><option value="cfse-worker">cfse-worker（CF Worker）</option><option value="local">local（本地目录）</option><option value="s3">s3（S3 兼容对象存储）</option></select></td>' +
-                                          '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" />' +
-                                            '<div class="cfse-f-s3" style="margin-top:4px;display:none;">' +
-                                              '<input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:49%;" placeholder="bucket 名" />' +
-                                              '<input type="text" name="cf_hosting_targets[' + idx + '][region]" style="width:49%;" placeholder="region（R2 填 auto）" value="auto" />' +
-                                              '<input type="text" name="cf_hosting_targets[' + idx + '][access_key]" style="width:100%;margin-top:2px;" placeholder="Access Key（R2 为 32 位）" />' +
-                                              '<input type="password" name="cf_hosting_targets[' + idx + '][secret_key]" style="width:100%;margin-top:2px;" placeholder="Secret Key" />' +
-                                              '<input type="text" name="cf_hosting_targets[' + idx + '][public_url]" style="width:100%;margin-top:2px;" placeholder="public_url：站点访问地址" />' +
-                                              '<select name="cf_hosting_targets[' + idx + '][path_style]" style="width:100%;margin-top:2px;"><option value="auto">寻址方式：自动</option><option value="path">path-style</option><option value="virtual">virtual-host</option></select>' +
-                                            '</div></td>' +
-                                          '<td><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></td>' +
-                                          '<td><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" /></td>' +
-                                          '<td style="white-space:nowrap;font-size:12px;">' +
-                                            '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][r2]" value="1" checked /> 静态文件</label><br/>' +
-                                            '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][d1]" value="1" /> 文章数据</label><br/>' +
-                                            '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][cache]" value="1" /> 清缓存</label>' +
-                                          '</td>' +
-                                          '<td><button type="button" class="button cfse-del-target">✕</button></td>' +
-                                        '</tr>';
-                                        var tr = tmp.firstElementChild;
-                                        body.appendChild(tr);
-                                        bind(tr);
-                                        idx++;
-                                      });
-                                      var testBtn = document.getElementById('cfse-test-targets');
-                                      if (testBtn) testBtn.addEventListener('click', function(){
-                                        var out = document.getElementById('cfse-test-result');
-                                        out.textContent = '测试中…';
-                                        jQuery.post(ajaxurl, { action: 'cfse_test_targets', _ajax_nonce: '<?php echo esc_js(wp_create_nonce('cfse_test_targets')); ?>' }, function(r){
-                                          if (!r || !r.success) { out.textContent = '测试失败'; return; }
-                                          out.innerHTML = (r.data.results || []).map(function(x){
-                                            return (x.ok ? '✅ ' : '❌ ') + x.name + '：' + x.detail;
-                                          }).join('　|　');
-                                        }).fail(function(){ out.textContent = '请求失败'; });
-                                      });
-                                    })();
-                                    </script>
-                                </td></tr>
                             <tr><th>发布行为</th>
                                 <td>
                                     <p class="description">控制「在 WP 侧保存 / 发布文章」时自动做什么。<b>三项独立、默认全不勾</b> —— 都不勾时 WP 侧保存文章不动远端（内容由 Worker 后台或第三方编辑器如 Obsidian 管理）。</p>
@@ -595,6 +513,91 @@ public function get_config() {
                                     </div>
                                 </td></tr>
                         </table>
+                        <div class="cfse-card" style="margin:16px 0 0;background:#fff;border:1px solid #dcdcde;border-radius:4px;padding:16px;">
+                            <h2 style="margin-top:0;">🎯 托管目标</h2>
+                            <p class="description">导出时把「<b>静态文件</b> / <b>文章数据</b> / <b>清缓存</b>」按各目标的<b>能力</b>分派出去。
+                                <code>cfse-worker</code> = Cloudflare Worker（走 X-Auth-Key 接口）；<code>local</code> = 只写本地目录（纯静态档，不联网）。
+                                某项目标不勾「静态文件」就完全不参与文件上传/删除；没有任何目标具备「文章数据」能力时（例如只有 local），写库会被跳过而不是报错。
+                                这里留空时，用上面的「站点 URL + Auth Key」当作默认 Worker 目标兜底。</p>
+                            <?php $this->render_hosting_targets_table(); ?>
+                            <p style="margin-top:8px;">
+                                <button type="button" class="button" id="cfse-add-target">＋ 添加目标</button>
+                                <button type="button" class="button" id="cfse-test-targets">🔌 测试连通性</button>
+                                <span id="cfse-test-result" class="description" style="margin-left:8px;"></span>
+                                <span class="description" style="margin-left:8px;">（测试用的是<b>已保存</b>的配置，改动后请先保存）</span>
+                            </p>
+                            <script>
+                            (function(){
+                              var body = document.getElementById('cfse-targets-body');
+                              if (!body) return;
+                              var idx = body.querySelectorAll('tr.cfse-target-row').length;
+                              function syncRow(tr){
+                                var type = tr.querySelector('.cfse-target-type');
+                                var ep = tr.querySelector('.cfse-f-endpoint');
+                                var dir = tr.querySelector('.cfse-f-dir');
+                                var key = tr.querySelector('.cfse-f-key');
+                                var s3 = tr.querySelector('.cfse-f-s3');
+                                var v = type ? type.value : 'cfse-worker';
+                                var isLocal = (v === 'local');
+                                var isS3 = (v === 's3');
+                                if (ep) ep.style.display = isLocal ? 'none' : '';
+                                if (key) key.parentNode.style.display = (isLocal || isS3) ? 'none' : '';
+                                if (dir) dir.style.display = isLocal ? '' : 'none';
+                                if (s3) s3.style.display = isS3 ? '' : 'none';
+                              }
+                              function bind(tr){
+                                var type = tr.querySelector('.cfse-target-type');
+                                if (type) type.addEventListener('change', function(){ syncRow(tr); });
+                                var del = tr.querySelector('.cfse-del-target');
+                                if (del) del.addEventListener('click', function(){ tr.parentNode.removeChild(tr); });
+                                syncRow(tr);
+                              }
+                              Array.prototype.forEach.call(body.querySelectorAll('tr.cfse-target-row'), bind);
+                              var addBtn = document.getElementById('cfse-add-target');
+                              if (addBtn) addBtn.addEventListener('click', function(){
+                                var tmp = document.createElement('tbody');
+                                tmp.innerHTML = '<tr class="cfse-target-row">' +
+                                  '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
+                                  '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /><input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /></td>' +
+                                  '<td><select name="cf_hosting_targets[' + idx + '][type]" class="cfse-target-type" style="width:100%;"><option value="cfse-worker">cfse-worker（CF Worker）</option><option value="local">local（本地目录）</option><option value="s3">s3（S3 兼容对象存储）</option></select></td>' +
+                                  '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" />' +
+                                    '<div class="cfse-f-s3" style="margin-top:4px;display:none;">' +
+                                      '<input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:49%;" placeholder="bucket 名" />' +
+                                      '<input type="text" name="cf_hosting_targets[' + idx + '][region]" style="width:49%;" placeholder="region（R2 填 auto）" value="auto" />' +
+                                      '<input type="text" name="cf_hosting_targets[' + idx + '][access_key]" style="width:100%;margin-top:2px;" placeholder="Access Key（R2 为 32 位）" />' +
+                                      '<input type="password" name="cf_hosting_targets[' + idx + '][secret_key]" style="width:100%;margin-top:2px;" placeholder="Secret Key" />' +
+                                      '<input type="text" name="cf_hosting_targets[' + idx + '][public_url]" style="width:100%;margin-top:2px;" placeholder="public_url：站点访问地址" />' +
+                                      '<select name="cf_hosting_targets[' + idx + '][path_style]" style="width:100%;margin-top:2px;"><option value="auto">寻址方式：自动</option><option value="path">path-style</option><option value="virtual">virtual-host</option></select>' +
+                                    '</div></td>' +
+                                  '<td><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></td>' +
+                                  '<td><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" /></td>' +
+                                  '<td style="white-space:nowrap;font-size:12px;">' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][r2]" value="1" checked /> 静态文件</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][d1]" value="1" /> 文章数据</label><br/>' +
+                                    '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][cache]" value="1" /> 清缓存</label>' +
+                                  '</td>' +
+                                  '<td><button type="button" class="button cfse-del-target">✕</button></td>' +
+                                '</tr>';
+                                var tr = tmp.firstElementChild;
+                                body.appendChild(tr);
+                                bind(tr);
+                                idx++;
+                              });
+                              var testBtn = document.getElementById('cfse-test-targets');
+                              if (testBtn) testBtn.addEventListener('click', function(){
+                                var out = document.getElementById('cfse-test-result');
+                                out.textContent = '测试中…';
+                                jQuery.post(ajaxurl, { action: 'cfse_test_targets', _ajax_nonce: '<?php echo esc_js(wp_create_nonce('cfse_test_targets')); ?>' }, function(r){
+                                  if (!r || !r.success) { out.textContent = '测试失败'; return; }
+                                  out.innerHTML = (r.data.results || []).map(function(x){
+                                    return (x.ok ? '✅ ' : '❌ ') + x.name + '：' + x.detail;
+                                  }).join('　|　');
+                                }).fail(function(){ out.textContent = '请求失败'; });
+                              });
+                            })();
+                            </script>
+
+                        </div>
                         <?php submit_button('💾 保存配置'); ?>
                     </form>
                 </div>

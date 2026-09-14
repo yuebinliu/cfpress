@@ -9,6 +9,41 @@
 > - **已知陷阱（都踩过）**：① `<form>` 不能放进 WP 编辑页（主表单嵌套 ⇒ 被浏览器忽略；用带 nonce 的链接或 AJAX）；② `re.findall(...)` 带 flags 而 `re.sub(...)` 不带 ⇒ **假成功**，改完必须 grep 产物核实；③ 改 >31KB 的大文件用 `write_file` 写 python 脚本 + 同回合 bash 执行（见第七节 harness 说明）；④ 验证中文内容别用 `json_encode(substr(...))`（截断多字节 → 返回 false，看起来像空）；⑤ **先 `php -l` 再同步**；⑥ 删 WP 文章若不想连带删 D1/R2，先 `remove_action('before_delete_post'|'trash_post', ...)`。
 > - **下一步候选**（细节见 `ROADMAP.md`）：多目标托管配置（F.2 缺口 3）／列表页静态生成（F.2 缺口 1/8，纯静态档最大件）／第三方编辑器写入口（A.1）／小项（IP 白名单、HTML 稳定化 15B、首页 `{{SITE_URL}}` 残留、模板 `{{SITE_NAME}}`）。
 > - **第三方写入口（UU 批）**：`/wp-json/wp/v2/*`（或 `/wp/v2/*`）用 **Basic Auth（用户名 + 应用密码，也接受账号密码）**；应用密码在 Worker 后台「用户 → 🔑 应用密码」生成；新建文章一律 `wp_id = Date.now()*100+rand` + `content_format='md'`（归属仍看 wp_id 形态，没加列）；WP 导出对 Worker 托管的文章会跳过（真 upsert 的 `WHERE posts.wp_id < 1e11` + `publish_artifact()` 提前 return）。
+> 
+> **⚠️ 压缩前特别记录：2026-09-14 这轮会话的关键坑（摘要容易丢，务必看这段）**
+>
+> **多托管配置（target 抽象层）现状**
+> - 配置 = `cf_hosting_targets`（JSON 数组；WP 设置页最下方「🎯 托管目标」卡管理）—— 每项 `{id,name,type,enabled,endpoint,auth_key|dir|bucket+region+access_key+secret_key+public_url,path_prefix,capabilities{r2,d1,cache}}`；未配置时用旧 `cf_site_url`+`cf_auth_key` 兜底出一条默认 target。
+> - 分发：`for_each_target($capability,$send)`；`upload`/`delete` 走 `r2` 能力，`d1_batch` 走 `d1` 能力，`purge_page_caches` 走 `cache` 能力。**没有目标具备该能力 ⇒ 跳过且不联网**（纯静态档因此可跑）；多目标**任一成功即成功**（结果记日志）。
+> - 三种类型：`cfse-worker`（Worker，X-Auth-Key）、`local`（写本地目录，零联网）、`s3`（S3 兼容，SigV4）。
+> - **类型白名单有 3 处要同步**：`get_hosting_targets()`、`sanitize_hosting_targets()`、设置页类型下拉。**批 AL 踩过**：只写了 local 的分派分支、忘改白名单 ⇒ local 目标被**静默丢弃**（纯静态档实际不可用）。
+> - `path_prefix` 对 s3 与 local 都要生效（**批 BQ 踩过**：local 写入/删除漏拼前缀 ⇒ 日志报 true 但文件不在预期路径）。
+>
+> **s3 适配器（批 BO/BP/BQ，代码侧已闭环；真机待有效凭证）**
+> - SigV4 已实现（`sigv4_sign` / `sigv4_uri_encode` / `sigv4_canonical_query`），**用 AWS 官方 `get-vanilla` 与 `get-vanilla-empty-query-key` 向量离线自检 11/11 通过**。
+> - **两个必须记住的签名坑**：① 已 percent-encoded 的 `%xx` **不能规范化成大写**（R2 的 key 是小写 `%e4%b8%ad`，转大写必 SignatureDoesNotMatch）；② `x-amz-content-sha256` 是否计入签名头要与向量对齐（官方向量只签 `host;x-amz-date`）—— 该参数已做成 `sigv4_sign(...,$sign_content_sha)`。
+> - **R2 的真实行为（实测）**：未知 access_key ⇒ **401 Unauthorized**（不是 403）；AK 长度不对 ⇒ 400 `InvalidArgument: Credential access key has length N, should be 32`（R2 的 S3 AK 是 32 位，**别用 Global API Token**）；`SignatureDoesNotMatch` 才是 403。
+> - `testConnection()` 用 `ListObjectsV2&max-keys=1`，返回**结构化** `{ok,http,code,hint,detail}`（code 含 config/network/timeout/unauthorized/signature_mismatch/access_denied/no_such_bucket/bad_credential/wrong_region/bad_request/ok），设置页「🔌 测试连通性」直接展示 hint。
+> - **`/health` 不需要认证**（无 key 也 200）⇒ 测试连通性必须用**受保护接口**（如 `/style-list`）才能验证 `X-Auth-Key`（worker 目标的测试已改用它）。
+> - `public_url` 用途：生成该目标上文件的**公开访问地址**（`target_public_url()`；s3 优先 public_url、否则回退 endpoint/bucket；local 优先 public_url、否则 `file://`）；上传成功日志会带上它。
+> - **线上当前目标列表只有一条 s3**（用户配的）⇒ **没有 d1 能力目标 ⇒ 写库会被跳过**（列表页/Worker 后台看不到新文章）。建议保留一条 cfse-worker；s3 只勾「静态文件」。
+>
+> **方法论 / 工具链坑（都实际踩过）**
+> - **验证要从「用户入口」进**：批 AL 用反射直接改内存 `config`（绕过 option、也绕过 `get_hosting_targets()`）⇒ **假通过**。改真实 `update_option` 才暴露 local 被丢弃的 bug。
+> - **改 PHP 必须走 lint 门禁**：批 AK 第一版少收一个 `}`，而当时的应用脚本没校验 lint 就同步 ⇒ 把坏文件推上服务器（已回滚）。现在应用脚本一律「lint 不通过就 exit、绝不同步」。
+> - **python 转义坑**：非 r-string 里写 `'/\'` 会生成 PHP 的 `'/\'`（转义引号）⇒ 语法错误；要写 `'/\\'` 或用 r-string。构造 PHP 代码片段优先 r-string。
+> - **host 的验证口径**：`bash xxx.sh` 这类**不透明命令不算闭环验证**（要用具体命令，如 `node --check`、curl 断言；或如实标 `manual`/`files`）；内联解释器（`node -e`/`python -c`）**后面接 `&&` 段会被拦**，脚本源码放文件里跑。
+> - **`/tmp` 不是同一个地方**：native node/python 看不到 git-bash 的 `/tmp`；node 的 `require("tmp/x.json")` 会被当包名解析 ⇒ 写 `./tmp/x.json`。
+>
+> **设置页 UI 坑（未结）**
+> - 往 WP `<table class="form-table">` 里插宽内容（如 `widefat` 大表）会**撑坏两列布局**（左列被挤窄、横向溢出）。批 BR 已把「托管目标」搬成 `</table>` 之后的独立卡片 + `overflow-x:auto` + `max-width:100%`，
+>   但**用户反馈刷新后仍无明显效果** ⇒ **根因待查**（下次接手请先看：是否 `.cfse-card`/`wrap` 宽度问题、是否浏览器缓存、用户所指的"基础配置栏"是否为其它卡片）。
+>
+> **下一步（压缩后）**
+> 1. 排查上面的设置页布局问题；
+> 2. 等用户填**有效 R2 S3 凭证**跑真机 s3 上传/删除（测试连通性 → 保存一篇 → 看日志的公开地址 → 访问确认）；
+> 3. 之后可选：多托管第 2/3 步的收尾（s3 能力标记与 UI 提示）、或回到大件（列表页静态化）与自用体验项。
+
 > - **新会话开场三件事**：`git log --oneline -10`、`git status --short`、读本文件（其余细节按需查 `ROADMAP.md` / `EVOLUTION.md`）。
 
 ## 一、项目是什么
