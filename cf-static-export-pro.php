@@ -467,6 +467,14 @@ public function get_config() {
             'cf_publish_remote' => array('sanitize' => 'boolval', 'default' => 0),
         );
         foreach ($fields as $key => $args) {
+            // WP 的 register_setting() 第三个参数认的是 sanitize_callback —— 此前误写成 'sanitize'
+            // （未知键被忽略），导致所有 cf_* 的 sanitize 从未生效：cf_hosting_targets 的表单数组
+            // 被直接 maybe_serialize() 存成 PHP 序列化，而读取端只认 JSON 字符串 ⇒ 解析为空 ⇒
+            // 目标列表退回兜底默认值（表现为「保存后消失」）。
+            if (isset($args['sanitize'])) {
+                $args['sanitize_callback'] = $args['sanitize'];
+                unset($args['sanitize']);
+            }
             register_setting('cf_static_export_pro', $key, $args);
         }
         // 任一设置保存后：把站点信息 + 缓存策略同步到 D1 settings（Worker 端读取）
@@ -1911,7 +1919,11 @@ private function get_post_storage_path($post) {
             $list = $list_override;
         } else {
             $saved = get_option('cf_hosting_targets', '');
-            $list = is_string($saved) ? json_decode($saved, true) : array();
+            if (is_array($saved)) {
+                $list = $saved;   // 兼容旧数据（见 get_hosting_targets 的同名处理）
+            } else {
+                $list = is_string($saved) ? json_decode($saved, true) : array();
+            }
         }
         if (!is_array($list) || empty($list)) {
             return array('warnings' => array(), 'adjustments' => array());
@@ -2055,7 +2067,11 @@ private function get_post_storage_path($post) {
     private function get_hosting_targets() {
         $list = array();
         $saved = get_option('cf_hosting_targets', '');
-        if (is_string($saved) && $saved !== '') {
+        // 兼容：旧版本因 sanitize 未注册，保存会把表单数组直接序列化进 option（PHP array）。
+        // 读到数组时直接采用，避免目标列表被误判为空而退回兜底默认目标。
+        if (is_array($saved)) {
+            $list = $saved;
+        } elseif (is_string($saved) && $saved !== '') {
             $decoded = json_decode($saved, true);
             if (is_array($decoded)) $list = $decoded;
         }
