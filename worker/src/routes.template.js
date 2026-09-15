@@ -10,6 +10,7 @@
  * {{CFSE_PER_PAGE}}    - 列表每页文章数（WP 设置页配置）
  */
 import { getFromR2 } from './storage';
+import { r2KeyFromPath } from './r2key';
 import { getPostsByTaxonomy, getTaxonomyInfo, getRecentPosts, getPostsByArchive, getSidebarData, searchPosts } from './database';
 import { renderCategoryPage, renderTagPage, renderHomepage, renderArchivePage } from './templates';
 import { getCache, setCache, deleteCache, purgeCache } from './cache';
@@ -247,7 +248,7 @@ export async function handleRequest(request, env) {
 
     // 静态资源（图片/css/js/字体等）
     if (path.match(/\.(css|js|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|eot)$/)) {
-        const file = await getFromR2(env.R2_BUCKET, path.replace(/^\//, ''));
+        const file = await getFromR2(env.R2_BUCKET, r2KeyFromPath(path));
         if (file) {
             return new Response(file.body, {
                 headers: {
@@ -536,9 +537,10 @@ export async function handleRequest(request, env) {
         storagePath = storagePath.replace('{slug}', slug);
 
         // 单页为 R2 静态文件，直接读 R2，不套 KV 缓存（省 KV 读写且避免旧缓存不同步）
-        let file = await getFromR2(env.R2_BUCKET, storagePath);
-        if (!file && env.ENABLE_COMPRESSION) {
-            file = await getFromR2(env.R2_BUCKET, storagePath + '.gz');
+        const r2StorageKey = r2KeyFromPath(storagePath);
+        let file = r2StorageKey ? await getFromR2(env.R2_BUCKET, r2StorageKey) : null;
+        if (!file && env.ENABLE_COMPRESSION && r2StorageKey) {
+            file = await getFromR2(env.R2_BUCKET, r2StorageKey + '.gz');
             if (file && !file.contentEncoding) file.contentEncoding = 'gzip';
         }
 
@@ -642,7 +644,8 @@ async function handleUpload(request, env) {
     }
     try {
         const uploadData = await request.json();
-        const filePath = uploadData.path;
+        // 存储 key = 解码后的原文（URL 形态 → key）；null = 非法（含穿越段），下方校验会拒掉
+        const filePath = (typeof uploadData.path === 'string') ? r2KeyFromPath(uploadData.path) : null;
         const fileContent = uploadData.content;
         const contentType = uploadData.contentType || 'text/html; charset=utf-8';
         const contentEncoding = uploadData.contentEncoding || null;
@@ -737,8 +740,11 @@ async function handleDelete(request, env) {
         let deleted = 0;
         for (const p of paths) {
             if (typeof p === 'string' && p.trim() !== '') {
-                await env.R2_BUCKET.delete(p);
-                deleted++;
+                const r2DelKey = r2KeyFromPath(p);
+                if (r2DelKey) {
+                    await env.R2_BUCKET.delete(r2DelKey);
+                    deleted++;
+                }
             }
         }
         console.log(`✅ 文件删除成功 ${deleted} 个: ${paths.join(', ')}`);

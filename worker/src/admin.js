@@ -11,6 +11,7 @@ import { getSiteContext } from './site';
 import { getActiveTpl } from './tplstore';
 import { getActiveTplContent } from './tplstore';
 import { getCacheConfig } from './cacheconfig';
+import { r2KeyFromPath, r2UrlPath } from './r2key';
 
 const ACCESS_TTL = 15 * 60;   // 15 min
 const REFRESH_TTL = 7 * 86400; // 7 d
@@ -400,12 +401,15 @@ function postStoragePath(row, pattern) {
     };
     let p = pattern || '{slug}/index.html';
     Object.keys(vals).forEach(function (k) { p = p.split('{' + k + '}').join(vals[k]); });
-    return p;
+    // R2 存储 key 用「解码后的原文」（D1 的 slug 是 %xx 形态）：与读取侧一致，浏览器访问才能命中。
+    // 兜底 || p：极端情况下不返回 null，避免调用方拿到 null 崩掉。
+    return r2KeyFromPath(p) || p;
 }
 
 function postPublicUrl(row, site) {
     const p = postStoragePath(row, site.storagePattern).replace(/\/?index\.html$/, '');
-    return (site.url || '') + '/' + p.split('/').filter(Boolean).join('/') + '/';
+    // key 已是原文 ⇒ URL 需逐段编码（浏览器请求的形态）
+    return (site.url || '') + '/' + r2UrlPath(p.split('/').filter(Boolean).join('/')) + '/';
 }
 
 /** 正文含代码块时给单页注入 highlight.js 资源（/hl/ 由 Worker assets 直出） */
@@ -1591,11 +1595,11 @@ export async function handleAdminRequest(request, env) {
         const ext = rawName.includes('.') ? rawName.split('.').pop().toLowerCase() : '';
         const allowed = ['css', 'js', 'mjs', 'json', 'map', 'svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'txt'];
         if (!allowed.includes(ext)) return json({ error: '不支持的类型：.' + ext }, 400);
-        const safeBase = rawName.split('.').slice(0, -1).join('.').replace(/[^a-zA-Z0-9-]+/g, '-').slice(0, 80) || 'asset';
+        const safeBase = rawName.split('.').slice(0, -1).join('.').replace(/[\/\\:*?"<>|\x00-\x1f]+/g, '-').slice(0, 80) || 'asset';
         const relPath = String(form.get('path') || '');
         let relSafe = '';
         if (relPath) {
-            relSafe = relPath.split('/').map(function (seg) { return seg.replace(/[^a-zA-Z0-9._-]+/g, '-'); }).filter(function (seg) { return seg && seg !== '.' && seg !== '..'; }).join('/').slice(0, 160);
+            relSafe = relPath.split('/').map(function (seg) { return seg.replace(/[\/\\:*?"<>|\x00-\x1f]+/g, '-'); }).filter(function (seg) { return seg && seg !== '.' && seg !== '..'; }).join('/').slice(0, 160);
         }
         if (!relSafe) relSafe = safeBase + '.' + ext;
         // 私人风格资源与内置风格同形：都走 /wp-content/themes/<slug>/（请求链 assets 命中 → 未命中落 R2 同路径）
@@ -1699,10 +1703,9 @@ export async function handleAdminRequest(request, env) {
         const y = now.getUTCFullYear();
         const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
         const rand = Math.random().toString(36).slice(2, 10);
-        const safeBase = name.split('.').slice(0, -1).join('.').replace(/[^a-z0-9\u4e00-\u9fa5-]+/g, '-').slice(0, 60) || 'img';
-        // key 里的文件名统一 ASCII：非 ASCII 走小写 percent-encoding（与 WP slug 规则一致）。
-        // 否则 key 含中文、而请求 URL 的 pathname 是 %xx 形态，R2 查找匹配不上 ⇒ 图片 404。
-        const asciiBase = encodeURI(safeBase).toLowerCase();
+        const safeBase = name.split('.').slice(0, -1).join('.').replace(/[\/\\:*?"<>|\x00-\x1f]+/g, '-').slice(0, 60) || 'img';
+        // 存储 key 用中文原文（与 R2/S3 的解码语义一致）；返回给客户端的 URL 再逐段编码
+        const asciiBase = safeBase;
         const path = 'wp-content/uploads/' + y + '/' + mm + '/' + rand + '-' + asciiBase + '.' + ext;
         const buf = await file.arrayBuffer();
         // 魔数嗅探：防止伪装扩展名上传非图片（sniff 前若干字节）
@@ -1717,12 +1720,12 @@ export async function handleAdminRequest(request, env) {
             await env.R2_BUCKET.put(path, buf, { httpMetadata: { contentType: contentType } });
         } catch (e) { console.error('media put failed:', e); return json({ error: '上传失败' }, 500); }
         const site = await getSiteContext(env);
-        return json({ ok: true, path: path, url: (site.url || '') + '/' + path });
+        return json({ ok: true, path: path, url: (site.url || '') + '/' + r2UrlPath(path) });
     }
 
     // PUT /api/media?key=...（同 key 覆盖替换；正文引用 URL 不变即自动生效）
     if (path === '/api/media' && method === 'PUT') {
-        const key = decodeURIComponent(url.searchParams.get('key') || '');
+        const key = r2KeyFromPath(url.searchParams.get('key') || '');
         if (!key || !key.startsWith('wp-content/uploads/')) return json({ error: '参数错误' }, 400);
         const ext = key.includes('.') ? key.split('.').pop().toLowerCase() : '';
         if (!['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) return json({ error: '仅支持 jpg/png/gif/webp' }, 400);
@@ -2329,8 +2332,8 @@ export async function handleWpV2(request, env) {
         const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
         let hashHex = '';
         for (let i = 0; i < digest.length; i++) hashHex += digest[i].toString(16).padStart(2, '0');
-        // 同上：文件名统一 ASCII（小写 percent-encoding），保证返回的 source_url 可直接访问
-        const asciiBase = encodeURI(base).toLowerCase();
+        // 存储 key 用中文原文（与 R2/S3 解码语义一致）；source_url 再逐段编码返回
+        const asciiBase = base;
         const key = 'wp-content/uploads/' + hashHex.slice(0, 8) + '-' + asciiBase + '.' + ext;
         try {
             await env.R2_BUCKET.put(key, buf, { httpMetadata: { contentType: mediaType } });
@@ -2338,7 +2341,7 @@ export async function handleWpV2(request, env) {
             console.error('wpv2 media put failed:', e);
             return wpErr('rest_upload_error', '上传失败', 500);
         }
-        const mediaUrl = (site.url || '') + '/' + key;
+        const mediaUrl = (site.url || '') + '/' + r2UrlPath(key);
         console.log('[wpv2] media uploaded ' + key + ' (' + buf.byteLength + 'B) by ' + user.username);
         return wpJson({
             id: Date.now(),
