@@ -133,6 +133,7 @@ class CF_Static_Export_Pro {
 		add_action('admin_post_cfse_align_worker', array($this, 'handle_align_worker'));
 		add_action('wp_ajax_cfse_worker_status', array($this, 'ajax_worker_status'));
 		add_action('wp_ajax_cfse_test_targets', array($this, 'ajax_test_targets'));
+		add_action('wp_ajax_cfse_publish_site', array($this, 'ajax_publish_site'));
 		// 优先级 5：必须早于导出钩子（save_post 优先级 10），否则本次导出读到的是旧标记
 		add_action('save_post', array($this, 'save_doc_format_meta'), 5, 3);
 		add_filter('the_content', array($this, 'render_md_content'), 9);
@@ -734,6 +735,87 @@ public function get_config() {
                         <?php elseif (isset($_GET['published'])): ?>
                             <div class="notice notice-success is-dismissible" style="margin:10px 0 0;"><p>🚀 上传到远端完成：成功 <?php echo intval($_GET['published']); ?> / <?php echo isset($_GET['total']) ? intval($_GET['total']) : 0; ?> 篇（本地无产物的篇会被跳过，见日志）。</p></div>
                         <?php endif; ?>
+                    </div>
+
+                    <div class="cfse-card" style="margin-top:16px;background:#fff;border:1px solid #dcdcde;border-radius:4px;padding:12px;">
+                        <h3 style="margin-top:0;">🌐 发布整站到托管商（目录级出口）</h3>
+                        <?php
+                        $cfse_r2_names = array();
+                        foreach ($this->get_hosting_targets() as $cfse_t) {
+                            if (!empty($cfse_t['capabilities']['r2'])) {
+                                $cfse_r2_names[] = (isset($cfse_t['name']) && $cfse_t['name'] !== '')
+                                    ? $cfse_t['name']
+                                    : (isset($cfse_t['id']) ? $cfse_t['id'] : '?');
+                            }
+                        }
+                        ?>
+                        <p class="description">
+                            把一个<b>完整的静态产物目录</b>整体发布到具备「静态文件」能力的目标（首页/列表页/资源/图片一并发布）。<br/>
+                            与上面的「📦 内容发布」的区别：那是<b>逐篇文章</b>的生成/上传；这里是<b>整个目录树</b>——用于把外部生成器的产物直接托管出去。
+                        </p>
+                        <p style="margin:8px 0 4px;">
+                            <label style="font-size:12px;">产物目录：<input type="text" id="cfse-site-dir" class="regular-text" style="width:70%;" value="<?php echo esc_attr(CFSE_LOCAL_DIR); ?>" /></label>
+                        </p>
+                        <p class="description" style="font-size:11px;">
+                            仅允许 <code><?php echo esc_html(CFSE_LOCAL_DIR); ?></code> 与 <code><?php echo esc_html(WP_CONTENT_DIR); ?></code> 下的目录。
+                            Simply Static 的产物通常在 <code>wp-content/uploads/simply-static/temp-files/&lt;最近一次&gt;/</code>。
+                        </p>
+                        <p style="margin:6px 0;font-size:12px;">
+                            当前生效目标（具备静态文件能力）：<b><?php echo $cfse_r2_names ? esc_html(implode('、', $cfse_r2_names)) : '（无，请先在「🎯 托管目标」中配置）'; ?></b>
+                        </p>
+                        <div style="margin-top:10px;">
+                            <button type="button" class="button button-primary" id="cfse-publish-site-btn">🚀 发布整站</button>
+                            <span id="cfse-publish-site-status" style="margin-left:10px;font-size:12px;color:#50575e;"></span>
+                        </div>
+                        <div id="cfse-publish-site-detail" style="margin-top:8px;font-size:12px;color:#50575e;"></div>
+                        <script>
+                        (function(){
+                          var btn = document.getElementById('cfse-publish-site-btn');
+                          if (!btn) return;
+                          var nonce = '<?php echo esc_js(wp_create_nonce('cfse_publish_site')); ?>';
+                          btn.addEventListener('click', function(){
+                            var dirEl = document.getElementById('cfse-site-dir');
+                            var st = document.getElementById('cfse-publish-site-status');
+                            var dt = document.getElementById('cfse-publish-site-detail');
+                            var dir = dirEl ? dirEl.value : '';
+                            if (!dir) { alert('请填写产物目录'); return; }
+                            if (!confirm('将把该目录整体发布到已启用的托管目标（同名文件会被覆盖），确认继续？')) return;
+                            btn.disabled = true;
+                            var offset = 0, okAll = 0, failAll = 0, bytesAll = 0, total = 0, first = true;
+                            function step(){
+                              var body = new URLSearchParams();
+                              body.append('action', 'cfse_publish_site');
+                              body.append('_ajax_nonce', nonce);
+                              body.append('dir', dir);
+                              body.append('offset', String(offset));
+                              body.append('limit', '200');
+                              if (first) body.append('reset', '1');
+                              st.textContent = '发布中… ' + offset + (total ? (' / ' + total) : '');
+                              fetch(ajaxurl, { method: 'POST', credentials: 'same-origin', body: body })
+                                .then(function(r){ return r.json(); })
+                                .then(function(j){
+                                  if (!j || !j.success) {
+                                    btn.disabled = false;
+                                    st.textContent = '❌ ' + ((j && j.data && j.data.error) ? j.data.error : '请求失败');
+                                    return;
+                                  }
+                                  var d = j.data; first = false;
+                                  total = d.total; okAll += d.ok; failAll += d.failed; bytesAll += d.bytes;
+                                  offset = d.next_offset;
+                                  dt.textContent = '目标目录：' + d.dir
+                                    + ((d.errors && d.errors.length) ? (' ｜ 错误示例：' + d.errors.join(' ; ')) : '');
+                                  if (d.done) {
+                                    btn.disabled = false;
+                                    st.textContent = '✅ 完成：' + okAll + ' 成功 / ' + failAll + ' 失败 / 共 ' + total
+                                      + ' 个文件，' + Math.round(bytesAll / 1024) + ' KB';
+                                  } else { step(); }
+                                })
+                                .catch(function(e){ btn.disabled = false; st.textContent = '❌ ' + e; });
+                            }
+                            step();
+                          });
+                        })();
+                        </script>
                     </div>
 
                     <div class="cfse-card" style="margin-top:16px;background:#fff;border:1px solid #dcdcde;border-radius:4px;padding:12px;">
@@ -3702,6 +3784,157 @@ public function handle_deploy_worker() {
         $this->log("上传到远端完成：成功 {$success} / {$total}", 'INFO');
         wp_redirect(admin_url('options-general.php?page=cf-static-export-pro&published=' . $success . '&total=' . $total));
         exit;
+    }
+
+    // ============================================
+    // 整站目录发布（出口层）：把「任意静态产物目录」发到具备「静态文件」能力的目标
+    // 说明：只调用现有 target 分派（for_each_target / target_upload），不改动它们。
+    // 与「📦 内容发布」的区别：那是逐篇文章的生成/上传；这里是整个目录树。
+    // ============================================
+
+    /** 允许发布的目录白名单（realpath 后的前缀） */
+    private function allowed_site_roots() {
+        return array(CFSE_LOCAL_DIR, WP_CONTENT_DIR);
+    }
+
+    /** 解析并校验产物目录：必须在白名单内（防任意目录读取与上传） */
+    private function resolve_site_dir($dir) {
+        $dir = trim((string) $dir);
+        if ($dir === '') return null;
+        $real = realpath($dir);
+        if ($real === false || !is_dir($real)) return null;
+        $real = str_replace('\\', '/', $real);
+        foreach ($this->allowed_site_roots() as $root) {
+            $root_real = realpath($root);
+            if ($root_real === false) continue;
+            $root_real = rtrim(str_replace('\\', '/', $root_real), '/');
+            if ($real === $root_real || strpos($real . '/', $root_real . '/') === 0) {
+                return $real;
+            }
+        }
+        return null;
+    }
+
+    /** 递归收集待发布文件（相对路径，正斜杠）；结果缓存 10 分钟（$reset 时重建） */
+    private function site_file_list($real_dir, $reset = false) {
+        $key = 'cfse_site_files_' . md5($real_dir);
+        if ($reset) delete_transient($key);
+        $cached = get_transient($key);
+        if (is_array($cached)) return $cached;
+
+        if (!class_exists('RecursiveIteratorIterator')) return array();
+        $skip_names = array('.DS_Store', 'Thumbs.db');
+        $files = array();
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($real_dir, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::LEAVES_ONLY
+        );
+        foreach ($it as $f) {
+            if (!$f->isFile()) continue;
+            $name = $f->getFilename();
+            if (in_array($name, $skip_names, true)) continue;
+            $abs = str_replace('\\', '/', $f->getPathname());
+            $rel = ltrim(substr($abs, strlen($real_dir)), '/');
+            if ($rel === '') continue;
+            // 目录守卫文件（插件为保护目录写入的 index.php）不发布
+            if ($name === 'index.php' && $f->getSize() < 200) {
+                $head = (string) @file_get_contents($f->getPathname());
+                if (strpos($head, 'Silence is golden') !== false) continue;
+            }
+            $files[] = $rel;
+        }
+        sort($files);
+        set_transient($key, $files, 600);
+        return $files;
+    }
+
+    /** 扩展名 → Content-Type（未知按二进制，避免把图片当 HTML 发出去） */
+    private function mime_for_path($path) {
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $map = array(
+            'html' => 'text/html; charset=utf-8', 'htm' => 'text/html; charset=utf-8',
+            'css'  => 'text/css; charset=utf-8',  'js'  => 'application/javascript; charset=utf-8',
+            'json' => 'application/json; charset=utf-8', 'xml' => 'application/xml; charset=utf-8',
+            'xsl'  => 'application/xml; charset=utf-8',  'txt' => 'text/plain; charset=utf-8',
+            'svg'  => 'image/svg+xml',
+            'png'  => 'image/png',  'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg',
+            'gif'  => 'image/gif',  'webp' => 'image/webp', 'ico' => 'image/x-icon',
+            'woff' => 'font/woff',  'woff2' => 'font/woff2', 'ttf' => 'font/ttf',
+            'eot'  => 'application/vnd.ms-fontobject',
+            'pdf'  => 'application/pdf', 'zip' => 'application/zip',
+            'mp4'  => 'video/mp4', 'mp3' => 'audio/mpeg',
+        );
+        return isset($map[$ext]) ? $map[$ext] : 'application/octet-stream';
+    }
+
+    /**
+     * 处理一段文件（offset/limit）并返回统计 —— 供后台 AJAX 分段调用（避免单次请求超时）。
+     * public：便于 CLI 探针与后续复用。
+     */
+    public function publish_site_dir_chunk($dir, $offset, $limit = 200, $reset = false) {
+        $real = $this->resolve_site_dir($dir);
+        if ($real === null) {
+            return array('error' => '目录不合法或不在允许范围内（仅允许本插件产物目录 / wp-content 下的目录）');
+        }
+        // 先确认有「静态文件」能力的目标，避免白跑
+        $probe = $this->for_each_target('r2', function ($t) { return true; });
+        if ((int) $probe['tried'] === 0) {
+            return array('error' => '没有启用「静态文件」能力的托管目标，请先在「🎯 托管目标」里配置并勾选');
+        }
+
+        $offset = max(0, (int) $offset);
+        $limit  = max(1, min(500, (int) $limit));
+        $all    = $this->site_file_list($real, $reset);
+        $total  = count($all);
+        $slice  = array_slice($all, $offset, $limit);
+
+        $ok = 0; $failed = 0; $bytes = 0; $errors = array();
+        $max_bytes = 20 * 1024 * 1024;
+        foreach ($slice as $rel) {
+            $path = $real . '/' . $rel;
+            if (!is_readable($path)) { $failed++; $errors[] = $rel . '（不可读）'; continue; }
+            $size = (int) @filesize($path);
+            if ($size > $max_bytes) { $failed++; $errors[] = $rel . '（超过 20MB，已跳过）'; continue; }
+            $content = (string) @file_get_contents($path);
+            if ($content === '' && $size > 0) { $failed++; $errors[] = $rel . '（读取失败）'; continue; }
+            $mime = $this->mime_for_path($rel);
+            $res = $this->for_each_target('r2', function ($t) use ($rel, $content, $mime) {
+                return $this->target_upload($t, $rel, $content, $mime, null);
+            });
+            if (!empty($res['ok'])) { $ok++; $bytes += strlen($content); }
+            else { $failed++; $errors[] = $rel . '（上传失败）'; }
+        }
+
+        $next = $offset + count($slice);
+        $this->log(
+            "整站发布分段：{$real} offset={$offset} 本段=" . count($slice) . " 成功={$ok} 失败={$failed}",
+            $failed > 0 ? 'WARNING' : 'INFO'
+        );
+
+        return array(
+            'dir'         => $real,
+            'total'       => $total,
+            'processed'   => $next,
+            'done'        => ($next >= $total),
+            'next_offset' => $next,
+            'ok'          => $ok,
+            'failed'      => $failed,
+            'bytes'       => $bytes,
+            'errors'      => array_slice($errors, 0, 5),
+        );
+    }
+
+    /** AJAX：整站发布（前端循环调用直到 done） */
+    public function ajax_publish_site() {
+        if (!current_user_can('manage_options')) wp_send_json_error(array('error' => '无权限'), 403);
+        check_ajax_referer('cfse_publish_site');
+        $dir    = isset($_POST['dir']) ? wp_unslash($_POST['dir']) : '';
+        $offset = isset($_POST['offset']) ? intval($_POST['offset']) : 0;
+        $limit  = isset($_POST['limit']) ? intval($_POST['limit']) : 200;
+        $reset  = !empty($_POST['reset']);
+        $res = $this->publish_site_dir_chunk($dir, $offset, $limit, $reset);
+        if (isset($res['error'])) wp_send_json_error($res);
+        wp_send_json_success($res);
     }
 
     public function handle_manual_export() {
