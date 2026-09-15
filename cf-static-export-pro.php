@@ -314,7 +314,8 @@ public function get_config() {
 
     /** 设置页：托管目标表格（已有目标逐行渲染；新增行由页面内 JS 生成） */
     public function render_hosting_targets_table() {
-        $targets = $this->config['hosting_targets'];
+        // 渲染必须包含「未启用」的目标：否则取消勾选后它就从界面上消失，再保存即被删除。
+        $targets = $this->get_hosting_targets(true);
         // 冷路径校验（§12）：行内警告 + 集合级提示
         $vr = $this->validate_hosting_targets(false);
         $byId = array(); $global = array();
@@ -382,7 +383,7 @@ public function get_config() {
                     <input type="text" name="<?php echo esc_attr($n); ?>[bucket]" value="<?php echo esc_attr(isset($t['bucket']) ? $t['bucket'] : ''); ?>" style="width:49%;" placeholder="bucket 名" />
                     <input type="text" name="<?php echo esc_attr($n); ?>[region]" value="<?php echo esc_attr(isset($t['region']) ? $t['region'] : 'auto'); ?>" style="width:49%;" placeholder="region（R2 填 auto）" />
                     <input type="text" name="<?php echo esc_attr($n); ?>[access_key]" value="<?php echo esc_attr(isset($t['access_key']) ? $t['access_key'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="Access Key（R2 为 32 位）" />
-                    <input type="password" name="<?php echo esc_attr($n); ?>[secret_key]" value="<?php echo esc_attr(isset($t['secret_key']) ? $t['secret_key'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="Secret Key" />
+                    <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[secret_key]" value="<?php echo esc_attr(isset($t['secret_key']) ? $t['secret_key'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="Secret Key（不会自动填充）" />
                     <input type="text" name="<?php echo esc_attr($n); ?>[public_url]" value="<?php echo esc_attr(isset($t['public_url']) ? $t['public_url'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="public_url：站点访问地址（如 https://cdn.example.com）" />
                     <select name="<?php echo esc_attr($n); ?>[path_style]" style="width:100%;margin-top:2px;">
                         <option value="auto" <?php selected(isset($t['path_style']) ? $t['path_style'] : 'auto', 'auto'); ?>>寻址方式：自动（按 endpoint 判断）</option>
@@ -655,7 +656,7 @@ public function get_config() {
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:49%;" placeholder="bucket 名" />' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][region]" style="width:49%;" placeholder="region（R2 填 auto）" value="auto" />' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][access_key]" style="width:100%;margin-top:2px;" placeholder="Access Key（R2 为 32 位）" />' +
-                                      '<input type="password" name="cf_hosting_targets[' + idx + '][secret_key]" style="width:100%;margin-top:2px;" placeholder="Secret Key" />' +
+                                      '<input type="password" autocomplete="new-password" spellcheck="false" name="cf_hosting_targets[' + idx + '][secret_key]" style="width:100%;margin-top:2px;" placeholder="Secret Key（不会自动填充）" />' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][public_url]" style="width:100%;margin-top:2px;" placeholder="public_url：站点访问地址" />' +
                                       '<select name="cf_hosting_targets[' + idx + '][path_style]" style="width:100%;margin-top:2px;"><option value="auto">寻址方式：自动</option><option value="path">path-style</option><option value="virtual">virtual-host</option></select>' +
                                     '</div></td>' +
@@ -2064,7 +2065,7 @@ private function get_post_storage_path($post) {
      * 但"配置严重错误导致目标被整条跳过"仍记日志（静默跳过比日志噪声更危险）。
      * 返回结构保持与改造前一致（type / capabilities / endpoint / auth_key / path_prefix），下游零改动。
      */
-    private function get_hosting_targets() {
+    private function get_hosting_targets($include_disabled = false) {
         $list = array();
         $saved = get_option('cf_hosting_targets', '');
         // 兼容：旧版本因 sanitize 未注册，保存会把表单数组直接序列化进 option（PHP array）。
@@ -2083,7 +2084,9 @@ private function get_post_storage_path($post) {
         $out = array();
         foreach ($list as $t) {
             if (!is_array($t)) continue;
-            if (isset($t['enabled']) && !$t['enabled']) continue;
+            // 运行期只取「已启用」的目标；设置页渲染传 $include_disabled = true ——
+            // 否则取消勾选的目标会从界面上消失，用户再保存一次就被真正删除（数据丢失）。
+            if (!$include_disabled && isset($t['enabled']) && !$t['enabled']) continue;
 
             $tid = isset($t['id']) ? $t['id'] : '?';
             // ① 模板解析：新结构 template 优先；仅有旧 type 时按 legacy_type 反查
