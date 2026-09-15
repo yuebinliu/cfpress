@@ -2595,11 +2595,10 @@ private function get_post_storage_path($post) {
                 $out .= $c;
             } elseif ($c === '/') {
                 $out .= $encode_slash ? '%2F' : '/';
-            } elseif ($c === '%' && $i + 2 < $len && ctype_xdigit($s[$i + 1]) && ctype_xdigit($s[$i + 2])) {
-                // 原样保留（含大小写）：R2 key 里的中文/空格就是小写 %xx，转大写会与实际对象名不符
-                $out .= '%' . $s[$i + 1] . $s[$i + 2];
-                $i += 2;
             } else {
+                // 注：`%` 一律编码为 `%25`（RFC 3986）。此前有一版把已编码的 `%xx` 原样保留（批BO 的离线
+                // 推断：以为 R2 对象名就是小写 %xx），但真机实测：含 `%` 的 key 会 403 SignatureDoesNotMatch
+                // （canonical URI 与服务端重算不一致）。真正的对象名用 rawurldecode() 还原，见 s3_request()。
                 $out .= '%' . strtoupper(bin2hex($c));
             }
         }
@@ -2687,6 +2686,9 @@ private function get_post_storage_path($post) {
         if ($c['access_key'] === '' || $c['secret_key'] === '') return array('ok' => false, 'http' => 0, 'code' => 'config', 'hint' => 'access_key / secret_key 未填写', 'detail' => '');
 
         $full_key = $c['path_prefix'] !== '' ? ($c['path_prefix'] . '/' . ltrim((string) $key, '/')) : ltrim((string) $key, '/');
+        // 对象名 = 解码后的原文：本地产物路径是 URL 形态（中文 slug 呈现为小写 %xx），而对象存储里
+        // 真正存的是解码后的字符串。这样 (1) 签名一致、(2) 浏览器访问 /%xx/ 时服务端解码后能命中。
+        $full_key = rawurldecode($full_key);
         $host = $c['path_style'] ? $c['host'] : ($c['bucket'] . '.' . $c['host']);
         $path = $c['path_style']
             ? ('/' . $c['bucket'] . ($full_key !== '' ? '/' . $full_key : ''))
@@ -2725,7 +2727,8 @@ private function get_post_storage_path($post) {
             'http' => $code,
             'code' => $cls['code'],
             'hint' => $cls['hint'],
-            'detail' => mb_substr(preg_replace('/\s+/', ' ', $text), 0, 300),
+            // 成功响应（如 ListObjects 的 XML）原样返回，便于列举/诊断；错误响应压缩空白并截断，避免日志爆炸。
+            'detail' => ($code >= 200 && $code < 300) ? $text : mb_substr(preg_replace('/\s+/', ' ', $text), 0, 300),
         );
     }
 
