@@ -468,13 +468,13 @@ public function get_config() {
                     <input type="text" name="<?php echo esc_attr($n); ?>[user]" value="<?php echo esc_attr(isset($t['user']) ? $t['user'] : ''); ?>" style="width:49%;margin-top:2px;" placeholder="用户名" />
                     <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[pass]" value="<?php echo esc_attr(isset($t['pass']) ? $t['pass'] : ''); ?>" style="width:49%;margin-left:2%;margin-top:2px;" placeholder="密码" />
                     <input type="text" name="<?php echo esc_attr($n); ?>[dir]" value="<?php echo esc_attr(isset($t['dir']) ? $t['dir'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="远端根目录（如 /wwwroot 或 /public_html）" />
-                    <span class="description" style="font-size:11px;">需要 PHP 的 ftp 扩展；只清理「路径前缀」下的旧文件</span>
+                    <span class="description" style="font-size:11px;">需要 PHP 的 ftp 扩展。<b>语义：增量覆盖</b> —— 只上传、<b>不删除</b>远端多余文件（旧文章/改名后的旧文件会残留，旧 URL 仍可访问）；需要严格同步请用 github/gitlab/netlify/vercel。</span>
                 </div>
                 <div class="cfse-f-webdav" style="margin-top:4px;display:none;">
                     <input type="text" name="<?php echo esc_attr($n); ?>[endpoint]" value="<?php echo esc_attr(isset($t['endpoint']) ? $t['endpoint'] : ''); ?>" style="width:100%;" placeholder="WebDAV 地址（如 https://dav.jianguoyun.com/dav/站点目录）" />
                     <input type="text" name="<?php echo esc_attr($n); ?>[user]" value="<?php echo esc_attr(isset($t['user']) ? $t['user'] : ''); ?>" style="width:49%;margin-top:2px;" placeholder="用户名" />
                     <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[pass]" value="<?php echo esc_attr(isset($t['pass']) ? $t['pass'] : ''); ?>" style="width:49%;margin-left:2%;margin-top:2px;" placeholder="密码（坚果云用应用密码）" />
-                    <span class="description" style="font-size:11px;">MKCOL 建目录 + PUT 上传 + PROPFIND 清理；坚果云请用「应用密码」</span>
+                    <span class="description" style="font-size:11px;">MKCOL 建目录 + PUT 上传；坚果云请用「应用密码」。<b>语义：增量覆盖</b> —— 只上传、<b>不删除</b>远端多余文件（清理的 PROPFIND 递归删除尚未实现）。</span>
                 </div>
             </td>
             <td><input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></td>
@@ -4675,8 +4675,9 @@ public function handle_deploy_worker() {
             'total' => count($pre['files']), 'uploaded' => $uploaded, 'failed' => $failed, 'errors' => $errors,
             'public_url' => $this->target_public_url($target, ''),
             'hint' => ($failed === 0)
-                ? ('已上传 ' . $uploaded . ' 个文件（本版不清除远端多余文件）')
+                ? ('已上传 ' . $uploaded . ' 个文件 —— 增量覆盖（未删除远端多余文件；如需严格同步请改用 github/gitlab/netlify/vercel）')
                 : ('失败 ' . $failed . ' 个：' . implode('、', $errors)),
+            'mode' => 'overlay',
         );
     }
 
@@ -4721,8 +4722,9 @@ public function handle_deploy_worker() {
             'uploaded' => $uploaded, 'failed' => $failed, 'errors' => $errors,
             'public_url' => $this->target_public_url($target, ''),
             'hint' => ($failed === 0)
-                ? ('已上传 ' . $uploaded . ' 个文件（本版不清除远端多余文件）')
+                ? ('已上传 ' . $uploaded . ' 个文件 —— 增量覆盖（未删除远端多余文件；如需严格同步请改用 github/gitlab/netlify/vercel）')
                 : ('失败 ' . $failed . ' 个：' . implode('、', $errors)),
+            'mode' => 'overlay',
         );
     }
 
