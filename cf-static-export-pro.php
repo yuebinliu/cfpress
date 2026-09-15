@@ -643,8 +643,12 @@ public function get_config() {
                                         <option value="fetch" <?php selected($this->config['export_mode'], 'fetch'); ?>>前台抓取</option>
                                         <option value="auto" <?php selected($this->config['export_mode'], 'auto'); ?>>自动降级（推荐）</option>
                                     </select></td></tr>
-                            <tr><th><label for="cf_cache_ttl">缓存时间</label></th>
-                                <td><input type="number" id="cf_cache_ttl" name="cf_cache_ttl" value="<?php echo esc_attr($this->config['cache_ttl']); ?>" style="width:100px" /> 秒</td></tr>
+                            <tr><th><label for="cf_cache_ttl">单页缓存头</label></th>
+                                <td><input type="number" id="cf_cache_ttl" name="cf_cache_ttl" value="<?php echo esc_attr($this->config['cache_ttl']); ?>" style="width:100px" min="0" /> 秒
+                                    <p class="description">导出单页时写进 HTML 的 <code>&lt;meta http-equiv="Cache-Control"&gt;</code> —— 表示<b>浏览器 / CDN 可以缓存这一页多久</b>（默认 3600）。
+                                    <b>它不是</b>下面「自托管 CMS 运行时」里的 KV 缓存（那套只管列表/侧边栏/站点信息/Feed）。
+                                    三点注意：① 值写死在 HTML 里，<b>改完必须重新生成/导出单页才生效</b>；② 走 Worker 访问时以 <b>Worker 的响应头</b>为准（HTTP 头优先于 meta，此值基本不起作用）；
+                                    ③ <b>纯静态档</b>（local / s3 / ftp / webdav，没有 Worker 加响应头）才主要依赖它。</p></td></tr>
                             <tr><th><label for="cf_batch_size">批量大小</label></th>
                                 <td><input type="number" id="cf_batch_size" name="cf_batch_size" value="<?php echo esc_attr($this->config['batch_size']); ?>" style="width:100px" min="1" />
                                     <p class="description">每批导出文章数（影响导出耗时，不影响静态站分页）</p></td></tr>
@@ -664,25 +668,34 @@ public function get_config() {
                                     <label><input type="checkbox" name="cf_publish_remote" value="1" id="cf-pub-remote" <?php checked($this->config['publish_remote']); ?> onchange="if(this.checked){var g=document.getElementById('cf-gen-static'); if(g) g.checked=true;}" /> ③ <b>上传到远端</b>（R2 单页 + 清缓存；<b>勾选它等于同时启用 ②</b>）</label>
                                     <p class="description" style="margin-top:4px;">说明：<b>md 文章只写 D1、不上传 R2 单页</b> —— 单页由 Worker 渲染（R2 未命中时按需渲染并回填）。只勾 ③ 而没勾 ① 时，Worker 端列表/后台看不到该篇（列表读 D1）。
                                 </td></tr>
-                            <tr><th>高级选项</th>
+                            <tr><th>导出与渲染</th>
                                 <td>
+                                    <p class="description">这两个用法都有效（无论你发布到自托管 CMS 还是纯静态托管）。</p>
                                     <label><input type="checkbox" name="cf_clean_dynamic_scripts" value="1" <?php checked($this->config['clean_scripts']); ?> /> 移除动态脚本</label><br/>
                                     <label><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 启用日志</label><br/>
                                     <label><input type="checkbox" name="cf_enable_compression" value="1" <?php checked($this->config['enable_compression']); ?> /> 启用Gzip压缩</label><br/>
-                                    <label><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式</label><br/>
+                                    <label><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式</label>
+                                </td></tr>
+                            <tr><th>⚙️ 自托管 CMS 运行时<br/><span style="font-weight:400;font-size:11px;color:#646970;">仅 cfse-worker 目标</span></th>
+                                <td>
+                                    <p class="description" style="background:#f0f6fc;border-left:3px solid #72aee6;padding:6px 8px;">
+                                        下面这些<b>只对「自托管 CMS（cfse-worker 目标）」生效</b> —— 它们控制 Worker 端的 KV 缓存与两端版本比对。
+                                        <b>纯静态档（local / s3 / ftp / webdav）不使用</b>：没有 KV、也没有 Worker 接口可调，配了也不会被执行。
+                                    </p>
                                     <label><input type="checkbox" name="cf_purge_sidebar" value="1" <?php checked($this->config['purge_sidebar']); ?> /> 发布后即时刷新侧边栏（成本极小，建议开启）</label><br/>
                                     <label><input type="checkbox" name="cf_purge_lists" value="1" <?php checked($this->config['purge_lists']); ?> /> 发布后即时刷新列表页第一页缓存（首页/分类/标签/归档；高更新大站建议关闭，靠缓存自然过期）</label><br/>
+                                    <span class="description" style="font-size:11px;margin-left:22px;">↑ 这两项只在<b>对应 TTL &gt; 0</b>（即该部分确实在缓存）时才有意义 —— TTL=0 本就是每请求直查 D1，无需刷新。</span><br/>
                                     <label><input type="checkbox" name="cf_worker_auto_check" value="1" <?php checked($this->config['worker_auto_check']); ?> /> 编辑页自动比对 Worker 版本（默认开：打开编辑页即只读查询两端版本时间，是否需要覆盖由你在面板里决定）</label>
-                                </td></tr>
-                            <tr><th>缓存策略</th>
-                                <td>
-                                    <p class="description">纯 TTL 语义：<b>0 = 直查 D1 不缓存</b>（最省 KV 写入额度，推荐默认）。常见组合：全 D1 = 列表 0 / 侧边栏 0；混合 = 列表 0 / 侧边栏 86400；全 KV = 列表 3600 / 侧边栏 86400（仅高流量建议，注意 KV 免费写额度 1000/天）。<b>运行时调整请在 Worker 后台「设置 → 缓存策略」操作</b>（保存即生效，以最后保存的一侧为准）。</p>
-                                    <div style="margin-top:6px;">
-                                        <label>列表页 TTL <input type="number" name="cf_cache_ttl_list" value="<?php echo esc_attr($this->config['cache_ttl_list']); ?>" style="width:90px" min="0" /> 秒</label>
-                                        <label style="margin-left:12px;">侧边栏 TTL <input type="number" name="cf_cache_ttl_sidebar" value="<?php echo esc_attr($this->config['cache_ttl_sidebar']); ?>" style="width:90px" min="0" /> 秒</label>
-                                        <label style="margin-left:12px;">站点信息 TTL <input type="number" name="cf_cache_ttl_site" value="<?php echo esc_attr($this->config['cache_ttl_site']); ?>" style="width:90px" min="0" /> 秒</label>
-                                        <label style="margin-left:12px;">Feed TTL <input type="number" name="cf_cache_ttl_feed" value="<?php echo esc_attr($this->config['cache_ttl_feed']); ?>" style="width:90px" min="0" /> 秒</label>
-                                        <label style="margin-left:12px;">Feed 条数 <input type="number" name="cf_feed_count" value="<?php echo esc_attr($this->config['feed_count']); ?>" style="width:70px" min="1" max="100" /></label>
+                                    <div style="margin-top:10px;border-top:1px solid #f0f0f1;padding-top:8px;">
+                                        <p class="description"><b>缓存策略</b>（Worker 动态页的 KV 缓存）—— 纯 TTL 语义：<b>0 = 直查 D1 不缓存</b>（最省 KV 写入额度，推荐默认）。常见组合：全 D1 = 列表 0 / 侧边栏 0；混合 = 列表 0 / 侧边栏 86400；全 KV = 列表 3600 / 侧边栏 86400（仅高流量建议，注意 KV 免费写额度 1000/天）。<b>运行时调整请在 Worker 后台「设置 → 缓存策略」操作</b>（保存即生效，以最后保存的一侧为准）。
+                                        注意：<b>单页永远直读 R2、不走这套缓存</b>（单页的浏览器缓存由上面的「单页缓存头」控制）。</p>
+                                        <div style="margin-top:6px;">
+                                            <label>列表页 TTL <input type="number" name="cf_cache_ttl_list" value="<?php echo esc_attr($this->config['cache_ttl_list']); ?>" style="width:90px" min="0" /> 秒</label>
+                                            <label style="margin-left:12px;">侧边栏 TTL <input type="number" name="cf_cache_ttl_sidebar" value="<?php echo esc_attr($this->config['cache_ttl_sidebar']); ?>" style="width:90px" min="0" /> 秒</label>
+                                            <label style="margin-left:12px;">站点信息 TTL <input type="number" name="cf_cache_ttl_site" value="<?php echo esc_attr($this->config['cache_ttl_site']); ?>" style="width:90px" min="0" /> 秒</label>
+                                            <label style="margin-left:12px;">Feed TTL <input type="number" name="cf_cache_ttl_feed" value="<?php echo esc_attr($this->config['cache_ttl_feed']); ?>" style="width:90px" min="0" /> 秒</label>
+                                            <label style="margin-left:12px;">Feed 条数 <input type="number" name="cf_feed_count" value="<?php echo esc_attr($this->config['feed_count']); ?>" style="width:70px" min="1" max="100" /></label>
+                                        </div>
                                     </div>
                                 </td></tr>
                         </table>
