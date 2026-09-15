@@ -300,6 +300,28 @@ public function get_config() {
                 $br = isset($t['branch']) ? sanitize_text_field(trim($t['branch'])) : '';
                 $entry['branch'] = $br !== '' ? $br : 'gh-pages';
                 $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
+            } elseif ($tplId === 'netlify') {
+                $entry['site'] = isset($t['site']) ? sanitize_text_field(trim($t['site'])) : '';
+                $entry['token'] = isset($t['token']) ? sanitize_text_field(trim($t['token'])) : '';
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
+            } elseif ($tplId === 'vercel') {
+                $entry['project'] = isset($t['project']) ? sanitize_text_field(trim($t['project'])) : '';
+                $entry['token'] = isset($t['token']) ? sanitize_text_field(trim($t['token'])) : '';
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
+            } elseif ($tplId === 'git') {
+                $ab = isset($t['api_base']) && trim($t['api_base']) !== '' ? esc_url_raw(trim($t['api_base'])) : 'https://api.github.com';
+                $entry['api_base'] = rtrim($ab, '/');
+                $entry['repo'] = isset($t['repo']) ? sanitize_text_field(trim($t['repo'])) : '';
+                $entry['token'] = isset($t['token']) ? sanitize_text_field(trim($t['token'])) : '';
+                $br = isset($t['branch']) ? sanitize_text_field(trim($t['branch'])) : '';
+                $entry['branch'] = $br !== '' ? $br : 'gh-pages';
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
+            } elseif ($tplId === 'gitlab') {
+                $entry['project'] = isset($t['project']) ? sanitize_text_field(trim($t['project'])) : '';
+                $entry['token'] = isset($t['token']) ? sanitize_text_field(trim($t['token'])) : '';
+                $br = isset($t['branch']) ? sanitize_text_field(trim($t['branch'])) : '';
+                $entry['branch'] = $br !== '' ? $br : 'gh-pages';
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
             } else { // local
                 $entry['dir'] = isset($t['dir']) ? sanitize_text_field(trim($t['dir'])) : '';
                 // local 也可配 public_url（本地目录被 web 服务托管时，日志里就能给出可访问地址）
@@ -403,6 +425,28 @@ public function get_config() {
                     <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[token]" value="<?php echo esc_attr(isset($t['token']) ? $t['token'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="GitHub Token（需 repo 权限；建议细粒度 Contents: RW）" />
                     <input type="text" name="<?php echo esc_attr($n); ?>[branch]" value="<?php echo esc_attr(isset($t['branch']) ? $t['branch'] : 'gh-pages'); ?>" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />
                     <span class="description" style="font-size:11px;">部署时创建/更新该分支（<b>不动默认分支</b>）；路径前缀下的旧文件会被清理</span>
+                </div>
+                <div class="cfse-f-netlify" style="margin-top:4px;display:none;">
+                    <input type="text" name="<?php echo esc_attr($n); ?>[site]" value="<?php echo esc_attr(isset($t['site']) ? $t['site'] : ''); ?>" style="width:100%;" placeholder="Netlify Site ID（或站点名）" />
+                    <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[token]" value="<?php echo esc_attr(isset($t['token']) ? $t['token'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="Netlify Personal Access Token" />
+                    <span class="description" style="font-size:11px;">digest 部署（sha1 增量）；注意 Netlify 部署限速 <b>3/分、100/天</b></span>
+                </div>
+                <div class="cfse-f-vercel" style="margin-top:4px;display:none;">
+                    <input type="text" name="<?php echo esc_attr($n); ?>[project]" value="<?php echo esc_attr(isset($t['project']) ? $t['project'] : ''); ?>" style="width:100%;" placeholder="Vercel 项目名（project）" />
+                    <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[token]" value="<?php echo esc_attr(isset($t['token']) ? $t['token'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="Vercel Token" />
+                    <span class="description" style="font-size:11px;">v13 deployments + v2/files（sha1 增量），部署后轮询至 READY</span>
+                </div>
+                <div class="cfse-f-git" style="margin-top:4px;display:none;">
+                    <input type="text" name="<?php echo esc_attr($n); ?>[api_base]" value="<?php echo esc_attr(isset($t['api_base']) ? $t['api_base'] : 'https://api.github.com'); ?>" style="width:100%;" placeholder="API base（默认 https://api.github.com；Gitee：https://gitee.com/api/v5）" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[repo]" value="<?php echo esc_attr(isset($t['repo']) ? $t['repo'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="仓库 owner/name" />
+                    <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[token]" value="<?php echo esc_attr(isset($t['token']) ? $t['token'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="Token" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[branch]" value="<?php echo esc_attr(isset($t['branch']) ? $t['branch'] : 'gh-pages'); ?>" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />
+                </div>
+                <div class="cfse-f-gitlab" style="margin-top:4px;display:none;">
+                    <input type="text" name="<?php echo esc_attr($n); ?>[project]" value="<?php echo esc_attr(isset($t['project']) ? $t['project'] : ''); ?>" style="width:100%;" placeholder="GitLab 项目（group/project 或数字 ID）" />
+                    <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[token]" value="<?php echo esc_attr(isset($t['token']) ? $t['token'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="GitLab Token（api 权限）" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[branch]" value="<?php echo esc_attr(isset($t['branch']) ? $t['branch'] : 'gh-pages'); ?>" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />
+                    <span class="description" style="font-size:11px;">commits API 的 actions[] <b>一次提交多文件</b>；Pages 需在项目里开启</span>
                 </div>
             </td>
             <td><input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></td>
@@ -651,6 +695,11 @@ public function get_config() {
                                 if (s3) s3.style.display = isS3 ? '' : 'none';
                                 var gh = tr.querySelector('.cfse-f-github');
                                 if (gh) gh.style.display = isGithub ? '' : 'none';
+                                var deployKinds = { 'netlify': '.cfse-f-netlify', 'vercel': '.cfse-f-vercel', 'git': '.cfse-f-git', 'gitlab': '.cfse-f-gitlab' };
+                                Object.keys(deployKinds).forEach(function (k) {
+                                  var el = tr.querySelector(deployKinds[k]);
+                                  if (el) el.style.display = (v === k) ? '' : 'none';
+                                });
                               }
                               function bind(tr){
                                 var tpl = tr.querySelector('.cfse-target-template');
@@ -666,7 +715,7 @@ public function get_config() {
                                 tmp.innerHTML = '<tr class="cfse-target-row">' +
                                   '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
                                   '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /><input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /></td>' +
-                                  '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option><option value="local">本地目录</option><option value="github">GitHub Pages（git 推送）</option></select></td>' +
+                                  '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option><option value="local">本地目录</option><option value="github">GitHub Pages（git 推送）</option><option value="git">通用 git（Gitee/Gitea）</option><option value="gitlab">GitLab Pages</option><option value="netlify">Netlify</option><option value="vercel">Vercel</option></select></td>' +
                                   '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" />' +
                                     '<div class="cfse-f-s3" style="margin-top:4px;display:none;">' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:49%;" placeholder="bucket 名" />' +
@@ -679,6 +728,25 @@ public function get_config() {
                                   '<span class="cfse-f-github" style="display:none;">' +
                                     '<input type="text" name="cf_hosting_targets[' + idx + '][repo]" style="width:100%;margin-top:2px;" placeholder="仓库 owner/name" />' +
                                     '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][token]" style="width:100%;margin-top:2px;" placeholder="GitHub Token（需 repo 权限）" />' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][branch]" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />' +
+                                  '</span>' +
+                                  '<span class="cfse-f-netlify" style="display:none;margin-top:2px;">' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][site]" style="width:100%;" placeholder="Netlify Site ID（或站点名）" />' +
+                                    '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][token]" style="width:100%;margin-top:2px;" placeholder="Netlify Token" />' +
+                                  '</span>' +
+                                  '<span class="cfse-f-vercel" style="display:none;margin-top:2px;">' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][project]" style="width:100%;" placeholder="Vercel 项目名" />' +
+                                    '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][token]" style="width:100%;margin-top:2px;" placeholder="Vercel Token" />' +
+                                  '</span>' +
+                                  '<span class="cfse-f-git" style="display:none;margin-top:2px;">' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][api_base]" style="width:100%;" placeholder="API base（默认 https://api.github.com）" />' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][repo]" style="width:100%;margin-top:2px;" placeholder="仓库 owner/name" />' +
+                                    '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][token]" style="width:100%;margin-top:2px;" placeholder="Token" />' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][branch]" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />' +
+                                  '</span>' +
+                                  '<span class="cfse-f-gitlab" style="display:none;margin-top:2px;">' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][project]" style="width:100%;" placeholder="GitLab 项目（group/project）" />' +
+                                    '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][token]" style="width:100%;margin-top:2px;" placeholder="GitLab Token" />' +
                                     '<input type="text" name="cf_hosting_targets[' + idx + '][branch]" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />' +
                                   '</span>' +
                                   '<td><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></td>' +
@@ -1910,6 +1978,58 @@ private function get_post_storage_path($post) {
                     'intent' => array('static-only'),
                 ),
                 'fields' => array('repo', 'token', 'branch', 'path_prefix', 'public_url'),
+            ),
+            'netlify' => array(
+                'id' => 'netlify',
+                'name' => 'Netlify（deploy API）',
+                'transport' => 'netlify',
+                'legacy_type' => 'netlify',
+                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                'intents' => array('static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                    'intent' => array('static-only'),
+                ),
+                'fields' => array('site', 'token', 'public_url'),
+            ),
+            'vercel' => array(
+                'id' => 'vercel',
+                'name' => 'Vercel（deploy API）',
+                'transport' => 'vercel',
+                'legacy_type' => 'vercel',
+                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                'intents' => array('static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                    'intent' => array('static-only'),
+                ),
+                'fields' => array('project', 'token', 'public_url'),
+            ),
+            'git' => array(
+                'id' => 'git',
+                'name' => '通用 git（GitHub 兼容：Gitee / Gitea / 自建）',
+                'transport' => 'git',
+                'legacy_type' => 'git',
+                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                'intents' => array('static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                    'intent' => array('static-only'),
+                ),
+                'fields' => array('api_base', 'repo', 'token', 'branch', 'path_prefix', 'public_url'),
+            ),
+            'gitlab' => array(
+                'id' => 'gitlab',
+                'name' => 'GitLab Pages（commits API）',
+                'transport' => 'gitlab',
+                'legacy_type' => 'gitlab',
+                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                'intents' => array('static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                    'intent' => array('static-only'),
+                ),
+                'fields' => array('project', 'token', 'branch', 'path_prefix', 'public_url'),
             ),
         );
     }
