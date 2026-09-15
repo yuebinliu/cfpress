@@ -71,7 +71,9 @@ class CF_Static_Export_Pro {
 
     private static $instance = null;
     private static $deleted_post_ids = array();
-    private $config = array();
+    // 默认值：内部抓取请求会在 load_config() 之前早退，而 log() 会读这两个键，
+    // 先给上默认值可避免 PHP8 的 undefined array key warning（行为仍是"不写日志"）。
+    private $config = array('enable_logging' => false, 'debug_mode' => false);
 
 
     public static function get_instance() {
@@ -82,7 +84,14 @@ class CF_Static_Export_Pro {
     }
 
     private function __construct() {
-        if (isset($_GET['_cfse_internal']) && $_GET['_cfse_internal'] === '1') {
+        // 内部抓取请求（插件自己抓自己的前台）：早退 —— 不挂后台/导出钩子、不读配置、不写文件。
+        // 判据优先用请求头：URL 上不再带参数，避免参数被 WP 用「当前 URL」构造的链接回显进静态产物。
+        // 保留 query 形态兼容（views/ 里的风格抓取仍在用 query）。
+        $cfse_internal_req = (isset($_SERVER['HTTP_X_CF_EXPORT_INTERNAL']) && $_SERVER['HTTP_X_CF_EXPORT_INTERNAL'] === '1')
+            || (isset($_GET['_cfse_internal']) && $_GET['_cfse_internal'] === '1');
+        if ($cfse_internal_req) {
+            // 抓取请求同样要渲染 md：否则「前台抓取」路径落盘的 md 文章是未渲染的原稿。
+            add_filter('the_content', array($this, 'render_md_content'), 9);
             return;
         }
         $this->init_hooks();
@@ -1543,7 +1552,10 @@ private function get_post_storage_path($post) {
     }
 
     private function fetch_from_frontend($post) {
-        $post_url = add_query_arg('_cfse_internal', '1', get_permalink($post));
+        // 开关走请求头（见 __construct 的早退判据），URL 不带参数 —— 否则该参数会被
+        // WP 用「当前 URL」构造的链接（如评论区的 cancel-comment-reply-link）回显进静态产物。
+        $post_url = get_permalink($post);
+        if (!$post_url) return null;
         $response = wp_remote_get($post_url, array('timeout' => 30, 'sslverify' => false, 'headers' => array('User-Agent' => 'CF-Static-Export/2.1', 'X-CF-Export-Internal' => '1')));
         if (is_wp_error($response)) {
             $this->log('前台抓取失败：' . $response->get_error_message() . '（' . $post_url . '）', 'WARNING');
@@ -1645,6 +1657,9 @@ private function get_post_storage_path($post) {
         $cache_ttl = $this->config['cache_ttl'];
         $html = str_replace('</head>', '<meta http-equiv="Cache-Control" content="public, max-age=' . (int) $cache_ttl . '"></head>', $html);
         $html = str_replace('</head>', '<meta name="x-static-export" content="true"></head>', $html);
+        // 清理内部抓取标记（与 views/template-editor.php 既有做法一致）：WP 会用「当前 URL」
+        // 构造部分链接，把内部参数回显进产物（多见于隐藏的评论表单）。
+        $html = str_replace(array('?_cfse_internal=1', '&_cfse_internal=1', '_cfse_internal=1'), '', $html);
         return $html;
     }
 
