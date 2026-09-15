@@ -4119,7 +4119,13 @@ public function handle_deploy_worker() {
             $abs = $real . '/' . $rel;
             $content = (string) @file_get_contents($abs);
             if ($content === '' && (int) @filesize($abs) > 0) { $failed++; continue; }
-            $ghPath = ($prefix !== '' ? $prefix . '/' : '') . $rel;
+            // GitHub Pages 是文件系统：URL 会被解码后按「真实文件名」查找 ⇒ 路径必须解码成原文
+            // （本地产物路径是 URL 形态，例如 dewplayer-%e6%9c%80%e6%bc%82.../index.html）
+            $ghPath = rawurldecode(($prefix !== '' ? $prefix . '/' : '') . $rel);
+            if ($ghPath === '' || strpos($ghPath, '..') !== false || strpos($ghPath, "\0") !== false) {
+                $failed++;
+                continue;
+            }
             $wanted[$ghPath] = true;
             $sha = $this->github_blob_sha($content);
             if (isset($existing[$ghPath]) && $existing[$ghPath] === $sha) { $unchanged++; continue; }
