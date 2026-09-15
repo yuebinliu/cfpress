@@ -866,7 +866,7 @@ public function get_config() {
                             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cfse_deploy_git')); ?>" style="display:inline;margin-left:8px;">
                                 <?php wp_nonce_field('cfse_deploy_git'); ?>
                                 <input type="hidden" name="cfse_git_dir" value="<?php echo esc_attr(CFSE_LOCAL_DIR); ?>" />
-                                <button type="submit" class="button" onclick="return confirm('把该项目录作为一次提交部署到所有 git 型目标（GitHub Pages 等）？不动默认分支。')">📦 部署到 git 型托管</button>
+                                <button type="submit" class="button" onclick="return confirm('把该目录部署到所有启用中的「部署型」目标（GitHub Pages / GitLab / Netlify / Vercel / 通用 git）？仓库类目标不动默认分支。')">📦 部署到托管商</button>
                             </form>
                             <span id="cfse-publish-site-status" style="margin-left:10px;font-size:12px;color:#50575e;"></span>
                         </div>
@@ -2007,7 +2007,7 @@ private function get_post_storage_path($post) {
             ),
             'git' => array(
                 'id' => 'git',
-                'name' => '通用 git（GitHub 兼容：Gitee / Gitea / 自建）',
+                'name' => '通用 git（GitHub API 兼容：Gitea / 自建）',
                 'transport' => 'git',
                 'legacy_type' => 'git',
                 'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
@@ -4162,7 +4162,8 @@ public function handle_deploy_worker() {
             ),
         );
         if ($body !== null) $args['body'] = wp_json_encode($body);
-        $resp = wp_remote_request('https://api.github.com' . $path, $args);
+        $base = (isset($target['api_base']) && $target['api_base'] !== '') ? rtrim((string) $target['api_base'], '/') : 'https://api.github.com';
+        $resp = wp_remote_request($base . $path, $args);
         if (is_wp_error($resp)) {
             return array('ok' => false, 'http' => 0, 'code' => 'network', 'hint' => '网络不可达：' . $resp->get_error_message(), 'json' => null, 'detail' => '');
         }
@@ -4307,16 +4308,290 @@ public function handle_deploy_worker() {
         );
     }
 
-    /** 部署型 transport 分派（github / netlify …） */
+    /** 部署型 transport 分派 */
     private function target_deploy($target, $dir) {
         $type = $this->target_type($target);
-        if ($type === 'github') return $this->github_deploy($target, $dir);
+        if ($type === 'github' || $type === 'git') return $this->github_deploy($target, $dir);
+        if ($type === 'netlify') return $this->netlify_deploy($target, $dir);
+        if ($type === 'vercel') return $this->vercel_deploy($target, $dir);
+        if ($type === 'gitlab') return $this->gitlab_deploy($target, $dir);
         return array('ok' => false, 'hint' => '该类型尚不支持站点级部署：' . $type);
     }
 
-    /** 目标是否属于「部署型」（一次提交 = 一次部署，不参与逐文件上传） */
+    /** 部署型目标的公共前置：白名单校验 + 文件清单 + 规模上限 */
+    private function deploy_prepare($target, $dir, $maxFiles = 500) {
+        $real = $this->resolve_site_dir($dir);
+        if ($real === null) return array('error' => '目录不合法或不在允许范围内');
+        $files = $this->site_file_list($real, true);
+        if (empty($files)) return array('error' => '目录中没有文件');
+        if (count($files) > $maxFiles) {
+            return array('error' => '目录含 ' . count($files) . ' 个文件，超过上限 ' . $maxFiles . '（本批仅支持中小目录）');
+        }
+        return array('real' => $real, 'files' => $files);
+    }
+
+    // ---------- Netlify（digest 部署）----------
+    private function netlify_deploy($target, $dir) {
+        $pre = $this->deploy_prepare($target, $dir);
+        if (isset($pre['error'])) return array('ok' => false, 'hint' => $pre['error']);
+        $site = isset($target['site']) ? trim((string) $target['site']) : '';
+        $token = isset($target['token']) ? (string) $target['token'] : '';
+        if ($site === '') return array('ok' => false, 'hint' => 'site 未填（Netlify Site ID 或站点名）');
+        if ($token === '') return array('ok' => false, 'hint' => 'token 未填');
+
+        // 1) 建 deploy（body = 路径 → sha1）
+        $digest = array(); $raw = array();
+        foreach ($pre['files'] as $rel) {
+            $content = (string) @file_get_contents($pre['real'] . '/' . $rel);
+            $key = '/' . $rel;
+            $digest[$key] = sha1($content);
+            $raw[$key] = $content;
+        }
+        $r = $this->netlify_api($target, 'POST', "/sites/{$site}/deploys", array('files' => $digest, 'draft' => false));
+        if (!$r['ok']) return array('ok' => false, 'hint' => '创建 deploy 失败：' . $r['hint']);
+        $deployId = isset($r['json']['id']) ? (string) $r['json']['id'] : '';
+        if ($deployId === '') return array('ok' => false, 'hint' => 'deploy 响应缺少 id');
+        $required = (isset($r['json']['required']) && is_array($r['json']['required'])) ? $r['json']['required'] : array();
+
+        // 2) 只上传 required 里的文件（sha1 已存在的会被跳过）
+        $uploaded = 0; $failed = 0;
+        foreach ($required as $p) {
+            $p = (string) $p;
+            $lookup = (strpos($p, '/') === 0) ? $p : ('/' . $p);
+            if (!isset($raw[$lookup])) { $failed++; continue; }
+            $url = 'https://api.netlify.com/api/v1/deploys/' . rawurlencode($deployId) . '/files/' . ltrim($p, '/');
+            $resp = wp_remote_request($url, array(
+                'method' => 'PUT', 'timeout' => 60, 'sslverify' => false,
+                'headers' => array('Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/octet-stream'),
+                'body' => $raw[$lookup],
+            ));
+            if (is_wp_error($resp) || wp_remote_retrieve_response_code($resp) >= 400) $failed++;
+            else $uploaded++;
+        }
+        return array(
+            'ok' => ($failed === 0), 'site' => $site, 'deploy_id' => $deployId,
+            'total' => count($pre['files']), 'uploaded' => $uploaded, 'unchanged' => count($pre['files']) - count($required),
+            'failed' => $failed, 'public_url' => $this->target_public_url($target, ''),
+            'hint' => $failed === 0 ? ('deploy ' . substr($deployId, 0, 8) . ' 已提交') : ($failed . ' 个文件上传失败'),
+        );
+    }
+
+    private function netlify_api($target, $method, $path, $body = null) {
+        $token = isset($target['token']) ? (string) $target['token'] : '';
+        $args = array(
+            'method' => $method, 'timeout' => 60, 'sslverify' => false,
+            'headers' => array('Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json', 'User-Agent' => 'CF-Static-Export-Pro'),
+        );
+        if ($body !== null) $args['body'] = wp_json_encode($body);
+        $resp = wp_remote_request('https://api.netlify.com/api/v1' . $path, $args);
+        if (is_wp_error($resp)) return array('ok' => false, 'http' => 0, 'hint' => '网络不可达：' . $resp->get_error_message(), 'json' => null);
+        $code = (int) wp_remote_retrieve_response_code($resp);
+        $json = json_decode((string) wp_remote_retrieve_body($resp), true);
+        $msg = (is_array($json) && isset($json['message'])) ? (string) $json['message'] : '';
+        $hint = '';
+        if ($code === 401) $hint = 'Token 无效';
+        elseif ($code === 404) $hint = 'site 不存在（检查 Site ID / 站点名）';
+        elseif ($code === 422) $hint = '请求被拒：' . $msg;
+        elseif ($code === 429) $hint = '触发限速（Netlify 部署限速 3/分、100/天）';
+        elseif ($code >= 400) $hint = ($msg !== '' ? $msg : ('HTTP ' . $code));
+        return array('ok' => ($code >= 200 && $code < 300), 'http' => $code, 'hint' => $hint, 'json' => $json);
+    }
+
+    // ---------- Vercel（deployment + files）----------
+    private function vercel_deploy($target, $dir) {
+        $pre = $this->deploy_prepare($target, $dir);
+        if (isset($pre['error'])) return array('ok' => false, 'hint' => $pre['error']);
+        $project = isset($target['project']) ? trim((string) $target['project']) : '';
+        $token = isset($target['token']) ? (string) $target['token'] : '';
+        if ($project === '') return array('ok' => false, 'hint' => 'project 未填（Vercel 项目名）');
+        if ($token === '') return array('ok' => false, 'hint' => 'token 未填');
+
+        // 1) manifest
+        $manifest = array(); $raw = array();
+        foreach ($pre['files'] as $rel) {
+            $content = (string) @file_get_contents($pre['real'] . '/' . $rel);
+            $sha = sha1($content);
+            $manifest[] = array('file' => $rel, 'sha' => $sha, 'size' => strlen($content));
+            $raw[$sha] = $content;
+        }
+        $body = array('name' => $project, 'project' => $project, 'target' => 'production', 'files' => $manifest);
+        $r = $this->vercel_api($target, 'POST', '/v13/deployments', $body);
+        if (!$r['ok']) return array('ok' => false, 'hint' => '创建 deployment 失败：' . $r['hint']);
+        $id = isset($r['json']['id']) ? (string) $r['json']['id'] : '';
+        if ($id === '') return array('ok' => false, 'hint' => 'deployment 响应缺少 id');
+        $missing = (isset($r['json']['missing']) && is_array($r['json']['missing'])) ? $r['json']['missing'] : array();
+
+        // 2) 上传 missing（x-vercel-digest）
+        $uploaded = 0; $failed = 0;
+        foreach ($missing as $sha) {
+            $sha = (string) $sha;
+            if (!isset($raw[$sha])) { $failed++; continue; }
+            $resp = wp_remote_request('https://api.vercel.com/v2/files', array(
+                'method' => 'POST', 'timeout' => 60, 'sslverify' => false,
+                'headers' => array('Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/octet-stream', 'x-vercel-digest' => $sha, 'User-Agent' => 'CF-Static-Export-Pro'),
+                'body' => $raw[$sha],
+            ));
+            $code = is_wp_error($resp) ? 0 : (int) wp_remote_retrieve_response_code($resp);
+            if ($code === 405) {   // 少数实现只接受 PUT
+                $resp = wp_remote_request('https://api.vercel.com/v2/files', array(
+                    'method' => 'PUT', 'timeout' => 60, 'sslverify' => false,
+                    'headers' => array('Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/octet-stream', 'x-vercel-digest' => $sha, 'User-Agent' => 'CF-Static-Export-Pro'),
+                    'body' => $raw[$sha],
+                ));
+                $code = is_wp_error($resp) ? 0 : (int) wp_remote_retrieve_response_code($resp);
+            }
+            if ($code >= 200 && $code < 300) $uploaded++; else $failed++;
+        }
+
+        // 3) 轮询（最多 ~40s，避免长时间阻塞）
+        $state = '';
+        for ($i = 0; $i < 10; $i++) {
+            sleep(3);
+            $g = $this->vercel_api($target, 'GET', '/v13/deployments/' . rawurlencode($id));
+            if (!$g['ok']) break;
+            $state = isset($g['json']['readyState']) ? (string) $g['json']['readyState'] : (isset($g['json']['state']) ? (string) $g['json']['state'] : '');
+            if ($state === 'READY' || $state === 'ERROR' || $state === 'CANCELED') break;
+        }
+        $url = isset($r['json']['url']) ? ('https://' . ltrim((string) $r['json']['url'], '/')) : '';
+        return array(
+            'ok' => ($failed === 0), 'project' => $project, 'deployment' => $id, 'state' => $state,
+            'total' => count($pre['files']), 'uploaded' => $uploaded, 'unchanged' => count($pre['files']) - count($missing),
+            'failed' => $failed, 'url' => $url, 'public_url' => $url !== '' ? $url : $this->target_public_url($target, ''),
+            'hint' => ($failed === 0 ? 'deployment 已提交' : ($failed . ' 个文件上传失败')) . ($state !== '' ? ('，state=' . $state) : ''),
+        );
+    }
+
+    private function vercel_api($target, $method, $path, $body = null) {
+        $token = isset($target['token']) ? (string) $target['token'] : '';
+        $args = array(
+            'method' => $method, 'timeout' => 60, 'sslverify' => false,
+            'headers' => array('Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json', 'User-Agent' => 'CF-Static-Export-Pro'),
+        );
+        if ($body !== null) $args['body'] = wp_json_encode($body);
+        $resp = wp_remote_request('https://api.vercel.com' . $path, $args);
+        if (is_wp_error($resp)) return array('ok' => false, 'http' => 0, 'hint' => '网络不可达：' . $resp->get_error_message(), 'json' => null);
+        $code = (int) wp_remote_retrieve_response_code($resp);
+        $json = json_decode((string) wp_remote_retrieve_body($resp), true);
+        $msg = (is_array($json) && isset($json['error']['message'])) ? (string) $json['error']['message'] : '';
+        $hint = '';
+        if ($code === 401) $hint = 'Token 无效';
+        elseif ($code === 403) $hint = '无权限：' . $msg;
+        elseif ($code === 404) $hint = '项目不存在（先在 Vercel 建好项目）';
+        elseif ($code === 400) $hint = '请求无效：' . $msg;
+        elseif ($code >= 400) $hint = ($msg !== '' ? $msg : ('HTTP ' . $code));
+        return array('ok' => ($code >= 200 && $code < 300), 'http' => $code, 'hint' => $hint, 'json' => $json);
+    }
+
+    // ---------- GitLab（commits API + actions[]）----------
+    private function gitlab_deploy($target, $dir) {
+        $pre = $this->deploy_prepare($target, $dir);
+        if (isset($pre['error'])) return array('ok' => false, 'hint' => $pre['error']);
+        $projectRaw = isset($target['project']) ? trim((string) $target['project']) : '';
+        $token = isset($target['token']) ? (string) $target['token'] : '';
+        if ($projectRaw === '') return array('ok' => false, 'hint' => 'project 未填（group/project 或数字 ID）');
+        if ($token === '') return array('ok' => false, 'hint' => 'token 未填');
+        $project = rawurlencode($projectRaw);
+        $branch = !empty($target['branch']) ? (string) $target['branch'] : 'gh-pages';
+        // GitLab Pages 只发布 CI 产物 public/ ⇒ 默认把产物放在 public/ 下
+        $prefix = isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/ ') : '';
+        if ($prefix === '') $prefix = 'public';
+
+        // 1) 默认分支（用于首次创建目标分支）
+        $proj = $this->gitlab_api($target, 'GET', "/projects/{$project}");
+        if (!$proj['ok']) return array('ok' => false, 'hint' => '取项目失败：' . $proj['hint']);
+        $def = !empty($proj['json']['default_branch']) ? (string) $proj['json']['default_branch'] : 'main';
+        $brInfo = $this->gitlab_api($target, 'GET', "/projects/{$project}/repository/branches/" . rawurlencode($branch));
+        $branchExists = $brInfo['ok'];
+
+        // 2) 现有文件（prefix 下，分页）
+        $existing = array();
+        for ($page = 1; $page <= 20; $page++) {
+            $t = $this->gitlab_api($target, 'GET', "/projects/{$project}/repository/tree?recursive=true&per_page=100&page={$page}&path=" . rawurlencode($prefix));
+            if (!$t['ok'] || !is_array($t['json'])) break;
+            foreach ($t['json'] as $e) {
+                if (isset($e['type'], $e['path']) && $e['type'] === 'blob') $existing[$e['path']] = true;
+            }
+            if (count($t['json']) < 100) break;
+        }
+
+        // 3) actions：新增/更新 + 删除
+        $actions = array(); $wanted = array(); $uploaded = 0;
+        foreach ($pre['files'] as $rel) {
+            $path = rawurldecode($prefix . '/' . $rel);
+            if ($path === '' || strpos($path, '..') !== false) continue;
+            $wanted[$path] = true;
+            $content = (string) @file_get_contents($pre['real'] . '/' . $rel);
+            $isBinary = (strpos($content, "\0") !== false) || !preg_match('//u', $content);
+            $a = array(
+                'action' => isset($existing[$path]) ? 'update' : 'create',
+                'file_path' => $path,
+                'content' => $isBinary ? base64_encode($content) : $content,
+            );
+            if ($isBinary) $a['encoding'] = 'base64';
+            $actions[] = $a;
+            $uploaded++;
+        }
+        // Pages 需要 CI 产物 public/ ⇒ 带一个最小 .gitlab-ci.yml
+        if (!isset($wanted['.gitlab-ci.yml'])) {
+            $yml = "pages:\n  stage: deploy\n  script:\n    - echo 'static site'\n  artifacts:\n    paths:\n      - public\n";
+            $actions[] = array('action' => isset($existing['.gitlab-ci.yml']) ? 'update' : 'create', 'file_path' => '.gitlab-ci.yml', 'content' => $yml);
+            $wanted['.gitlab-ci.yml'] = true;
+        }
+        $deleted = 0;
+        foreach ($existing as $p => $_) {
+            if (isset($wanted[$p])) continue;
+            $actions[] = array('action' => 'delete', 'file_path' => $p);
+            $deleted++;
+        }
+
+        // 4) 一次提交
+        $body = array(
+            'branch' => $branch,
+            'commit_message' => 'Deploy static site — ' . $uploaded . ' files (' . gmdate('Y-m-d H:i:s') . ' UTC)',
+            'actions' => $actions,
+        );
+        if (!$branchExists) $body['start_branch'] = $def;
+        $c = $this->gitlab_api($target, 'POST', "/projects/{$project}/repository/commits", $body);
+        if (!$c['ok']) return array('ok' => false, 'hint' => '提交失败：' . $c['hint']);
+
+        return array(
+            'ok' => true, 'project' => $projectRaw, 'branch' => $branch, 'prefix' => $prefix,
+            'total' => count($pre['files']), 'uploaded' => $uploaded, 'deleted' => $deleted,
+            'commit' => isset($c['json']['id']) ? $c['json']['id'] : '',
+            'public_url' => $this->target_public_url($target, ''),
+            'hint' => '已提交 ' . $uploaded . ' 个文件' . ($deleted ? ('，删除 ' . $deleted . ' 个') : '') . '；Pages 由 CI（.gitlab-ci.yml）发布 public/',
+        );
+    }
+
+    private function gitlab_api($target, $method, $path, $body = null) {
+        $token = isset($target['token']) ? (string) $target['token'] : '';
+        $base = (isset($target['api_base']) && $target['api_base'] !== '') ? rtrim((string) $target['api_base'], '/') : 'https://gitlab.com/api/v4';
+        $args = array(
+            'method' => $method, 'timeout' => 60, 'sslverify' => false,
+            'headers' => array('PRIVATE-TOKEN' => $token, 'Content-Type' => 'application/json', 'User-Agent' => 'CF-Static-Export-Pro'),
+        );
+        if ($body !== null) $args['body'] = wp_json_encode($body);
+        $resp = wp_remote_request($base . $path, $args);
+        if (is_wp_error($resp)) return array('ok' => false, 'http' => 0, 'hint' => '网络不可达：' . $resp->get_error_message(), 'json' => null);
+        $code = (int) wp_remote_retrieve_response_code($resp);
+        $json = json_decode((string) wp_remote_retrieve_body($resp), true);
+        $msg = '';
+        if (is_array($json)) {
+            if (isset($json['message'])) $msg = is_array($json['message']) ? implode('; ', $json['message']) : (string) $json['message'];
+            elseif (isset($json['error'])) $msg = (string) $json['error'];
+        }
+        $hint = '';
+        if ($code === 401) $hint = 'Token 无效';
+        elseif ($code === 403) $hint = '无权限（需 api 权限）';
+        elseif ($code === 404) $hint = '项目/分支不存在（检查 project 与权限）';
+        elseif ($code === 400) $hint = '请求被拒：' . $msg;
+        elseif ($code >= 400) $hint = ($msg !== '' ? $msg : ('HTTP ' . $code));
+        return array('ok' => ($code >= 200 && $code < 300), 'http' => $code, 'hint' => $hint, 'json' => $json);
+    }
+
+    /** 目标是否属于「部署型」（站点级事务，不参与逐文件上传） */
     private function is_deploy_target($target) {
-        return in_array($this->target_type($target), array('github', 'netlify'), true);
+        return in_array($this->target_type($target), array('github', 'git', 'netlify', 'vercel', 'gitlab'), true);
     }
 
     /** 把目录部署到所有「部署型」目标 */
