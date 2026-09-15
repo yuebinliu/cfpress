@@ -134,6 +134,7 @@ class CF_Static_Export_Pro {
 		add_action('wp_ajax_cfse_worker_status', array($this, 'ajax_worker_status'));
 		add_action('wp_ajax_cfse_test_targets', array($this, 'ajax_test_targets'));
 		add_action('wp_ajax_cfse_publish_site', array($this, 'ajax_publish_site'));
+		add_action('admin_post_cfse_deploy_git', array($this, 'handle_deploy_git'));
 		// 优先级 5：必须早于导出钩子（save_post 优先级 10），否则本次导出读到的是旧标记
 		add_action('save_post', array($this, 'save_doc_format_meta'), 5, 3);
 		add_filter('the_content', array($this, 'render_md_content'), 9);
@@ -293,6 +294,12 @@ public function get_config() {
                 $mode = isset($t['path_style']) ? (string) $t['path_style'] : 'auto';
                 $entry['path_style'] = in_array($mode, array('auto', 'path', 'virtual'), true) ? $mode : 'auto';
                 $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
+            } elseif ($tplId === 'github') {
+                $entry['repo'] = isset($t['repo']) ? sanitize_text_field(trim($t['repo'])) : '';
+                $entry['token'] = isset($t['token']) ? sanitize_text_field(trim($t['token'])) : '';
+                $br = isset($t['branch']) ? sanitize_text_field(trim($t['branch'])) : '';
+                $entry['branch'] = $br !== '' ? $br : 'gh-pages';
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
             } else { // local
                 $entry['dir'] = isset($t['dir']) ? sanitize_text_field(trim($t['dir'])) : '';
                 // local 也可配 public_url（本地目录被 web 服务托管时，日志里就能给出可访问地址）
@@ -390,6 +397,12 @@ public function get_config() {
                         <option value="path" <?php selected(isset($t['path_style']) ? $t['path_style'] : 'auto', 'path'); ?>>path-style（/bucket/key）</option>
                         <option value="virtual" <?php selected(isset($t['path_style']) ? $t['path_style'] : 'auto', 'virtual'); ?>>virtual-host（bucket.host/key）</option>
                     </select>
+                </div>
+                <div class="cfse-f-github" style="margin-top:4px;display:none;">
+                    <input type="text" name="<?php echo esc_attr($n); ?>[repo]" value="<?php echo esc_attr(isset($t['repo']) ? $t['repo'] : ''); ?>" style="width:100%;" placeholder="仓库 owner/name（如 yuebinliu/cfse-pages-test）" />
+                    <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[token]" value="<?php echo esc_attr(isset($t['token']) ? $t['token'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="GitHub Token（需 repo 权限；建议细粒度 Contents: RW）" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[branch]" value="<?php echo esc_attr(isset($t['branch']) ? $t['branch'] : 'gh-pages'); ?>" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />
+                    <span class="description" style="font-size:11px;">部署时创建/更新该分支（<b>不动默认分支</b>）；路径前缀下的旧文件会被清理</span>
                 </div>
             </td>
             <td><input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></td>
@@ -631,10 +644,13 @@ public function get_config() {
                                 var v = tpl ? tpl.value : 'cloudflare';
                                 var isLocal = (v === 'local');
                                 var isS3 = (v === 's3');
-                                if (ep) ep.style.display = isLocal ? 'none' : '';
-                                if (key && key.parentNode) key.parentNode.style.display = (isLocal || isS3) ? 'none' : '';
+                                var isGithub = (v === 'github');
+                                if (ep) ep.style.display = (isLocal || isGithub) ? 'none' : '';
+                                if (key && key.parentNode) key.parentNode.style.display = (isLocal || isS3 || isGithub) ? 'none' : '';
                                 if (dir) dir.style.display = isLocal ? '' : 'none';
                                 if (s3) s3.style.display = isS3 ? '' : 'none';
+                                var gh = tr.querySelector('.cfse-f-github');
+                                if (gh) gh.style.display = isGithub ? '' : 'none';
                               }
                               function bind(tr){
                                 var tpl = tr.querySelector('.cfse-target-template');
@@ -650,7 +666,7 @@ public function get_config() {
                                 tmp.innerHTML = '<tr class="cfse-target-row">' +
                                   '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
                                   '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /><input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /></td>' +
-                                  '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option><option value="local">本地目录</option></select></td>' +
+                                  '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option><option value="local">本地目录</option><option value="github">GitHub Pages（git 推送）</option></select></td>' +
                                   '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" />' +
                                     '<div class="cfse-f-s3" style="margin-top:4px;display:none;">' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:49%;" placeholder="bucket 名" />' +
@@ -660,6 +676,11 @@ public function get_config() {
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][public_url]" style="width:100%;margin-top:2px;" placeholder="public_url：站点访问地址" />' +
                                       '<select name="cf_hosting_targets[' + idx + '][path_style]" style="width:100%;margin-top:2px;"><option value="auto">寻址方式：自动</option><option value="path">path-style</option><option value="virtual">virtual-host</option></select>' +
                                     '</div></td>' +
+                                  '<span class="cfse-f-github" style="display:none;">' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][repo]" style="width:100%;margin-top:2px;" placeholder="仓库 owner/name" />' +
+                                    '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][token]" style="width:100%;margin-top:2px;" placeholder="GitHub Token（需 repo 权限）" />' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][branch]" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />' +
+                                  '</span>' +
                                   '<td><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></td>' +
                                   '<td><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" /></td>' +
                                   '<td style="white-space:nowrap;font-size:12px;">' +
@@ -774,6 +795,11 @@ public function get_config() {
                         </p>
                         <div style="margin-top:10px;">
                             <button type="button" class="button button-primary" id="cfse-publish-site-btn">🚀 发布整站</button>
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cfse_deploy_git')); ?>" style="display:inline;margin-left:8px;">
+                                <?php wp_nonce_field('cfse_deploy_git'); ?>
+                                <input type="hidden" name="cfse_git_dir" value="<?php echo esc_attr(CFSE_LOCAL_DIR); ?>" />
+                                <button type="submit" class="button" onclick="return confirm('把该项目录作为一次提交部署到所有 git 型目标（GitHub Pages 等）？不动默认分支。')">📦 部署到 git 型托管</button>
+                            </form>
                             <span id="cfse-publish-site-status" style="margin-left:10px;font-size:12px;color:#50575e;"></span>
                         </div>
                         <div id="cfse-publish-site-detail" style="margin-top:8px;font-size:12px;color:#50575e;"></div>
@@ -1872,7 +1898,19 @@ private function get_post_storage_path($post) {
                 ),
                 'fields' => array('dir', 'path_prefix', 'public_url'),
             ),
-            // 'github' => array(...) 预留（transport: git），暂未实现 —— 见 docs/hosting-templates.md §10
+            'github' => array(
+                'id' => 'github',
+                'name' => 'GitHub Pages（git 推送）',
+                'transport' => 'git',
+                'legacy_type' => 'github',
+                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                'intents' => array('static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                    'intent' => array('static-only'),
+                ),
+                'fields' => array('repo', 'token', 'branch', 'path_prefix', 'public_url'),
+            ),
         );
     }
 
@@ -2119,6 +2157,7 @@ private function get_post_storage_path($post) {
                 $t['intent'] = isset($tpl['defaults']['intent']) ? $tpl['defaults']['intent'] : array();
             }
             if (!isset($t['path_prefix'])) $t['path_prefix'] = '';
+            if (isset($t['template']) && $t['template'] === 'github' && empty($t['branch'])) $t['branch'] = 'gh-pages';
             $out[] = $t;
         }
         return $out;
@@ -3935,6 +3974,8 @@ public function handle_deploy_worker() {
             if ($content === '' && $size > 0) { $failed++; $errors[] = $rel . '（读取失败）'; continue; }
             $mime = $this->mime_for_path($rel);
             $res = $this->for_each_target('r2', function ($t) use ($rel, $content, $mime) {
+                // 部署型目标（github / netlify）不走逐文件上传 —— 由「📦 部署到 git 型托管」一次性提交
+                if ($this->is_deploy_target($t)) return true;
                 return $this->target_upload($t, $rel, $content, $mime, null);
             });
             if (!empty($res['ok'])) { $ok++; $bytes += strlen($content); }
@@ -3971,6 +4012,217 @@ public function handle_deploy_worker() {
         $res = $this->publish_site_dir_chunk($dir, $offset, $limit, $reset);
         if (isset($res['error'])) wp_send_json_error($res);
         wp_send_json_success($res);
+    }
+
+    // ============================================
+    // git 型托管（GitHub Pages）—— 部署型 transport
+    // 与逐文件上传（worker/local/s3）不同：这里是「一次提交 = 一次部署」的站点级事务。
+    // ============================================
+
+    /** GitHub API 调用（返回结构化结果，便于 UI / 日志直接展示） */
+    private function github_api($target, $method, $path, $body = null) {
+        $repo = isset($target['repo']) ? trim((string) $target['repo'], '/ ') : '';
+        $token = isset($target['token']) ? (string) $target['token'] : '';
+        if ($repo === '' || strpos($repo, '/') === false) {
+            return array('ok' => false, 'http' => 0, 'code' => 'config', 'hint' => 'repo 未填（应为 owner/name）', 'json' => null, 'detail' => '');
+        }
+        if ($token === '') {
+            return array('ok' => false, 'http' => 0, 'code' => 'config', 'hint' => 'token 未填', 'json' => null, 'detail' => '');
+        }
+        $args = array(
+            'method' => $method,
+            'timeout' => 60,
+            'sslverify' => false,
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $token,
+                'Accept' => 'application/vnd.github+json',
+                'X-GitHub-Api-Version' => '2022-11-28',
+                'User-Agent' => 'CF-Static-Export-Pro',
+                'Content-Type' => 'application/json',
+            ),
+        );
+        if ($body !== null) $args['body'] = wp_json_encode($body);
+        $resp = wp_remote_request('https://api.github.com' . $path, $args);
+        if (is_wp_error($resp)) {
+            return array('ok' => false, 'http' => 0, 'code' => 'network', 'hint' => '网络不可达：' . $resp->get_error_message(), 'json' => null, 'detail' => '');
+        }
+        $code = (int) wp_remote_retrieve_response_code($resp);
+        $text = (string) wp_remote_retrieve_body($resp);
+        $json = json_decode($text, true);
+        $msg = (is_array($json) && isset($json['message'])) ? (string) $json['message'] : '';
+        $hint = '';
+        if ($code === 401) $hint = 'Token 无效或已过期';
+        elseif ($code === 403) $hint = '权限不足或触发限速' . ($msg !== '' ? '：' . $msg : '');
+        elseif ($code === 404) $hint = '仓库或分支不存在（检查 repo 名与 token 权限）';
+        elseif ($code === 409) $hint = '冲突（ref 已变化，重试即可）';
+        elseif ($code === 422) $hint = '请求被拒：' . $msg;
+        elseif ($code >= 400) $hint = ($msg !== '' ? $msg : ('HTTP ' . $code));
+        return array('ok' => ($code >= 200 && $code < 300), 'http' => $code, 'code' => ($hint === '' ? 'ok' : 'error'), 'hint' => $hint, 'json' => $json, 'detail' => $text);
+    }
+
+    /** GitHub blob sha（本地可算 ⇒ 增量对比零额外 API 成本） */
+    private function github_blob_sha($content) {
+        return sha1('blob ' . strlen($content) . "\0" . $content);
+    }
+
+    /** 部署一个目录到 GitHub Pages 分支（一次提交 = 一次部署） */
+    private function github_deploy($target, $dir) {
+        $real = $this->resolve_site_dir($dir);
+        if ($real === null) return array('ok' => false, 'hint' => '目录不合法或不在允许范围内');
+
+        $repo = isset($target['repo']) ? trim((string) $target['repo'], '/ ') : '';
+        $branch = !empty($target['branch']) ? (string) $target['branch'] : 'gh-pages';
+        $prefix = isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/ ') : '';
+
+        $files = $this->site_file_list($real, true);
+        if (empty($files)) return array('ok' => false, 'hint' => '目录中没有文件');
+        $maxFiles = 500;
+        if (count($files) > $maxFiles) {
+            return array('ok' => false, 'hint' => '目录含 ' . count($files) . ' 个文件，超过当前上限 ' . $maxFiles . '（本批仅支持中小目录）');
+        }
+
+        // 1) 目标分支 ref；不存在则基于默认分支创建
+        $ref = $this->github_api($target, 'GET', "/repos/{$repo}/git/ref/heads/{$branch}");
+        if (!$ref['ok']) {
+            if ($ref['http'] !== 404) return array('ok' => false, 'hint' => '取 ref 失败：' . $ref['hint']);
+            $info = $this->github_api($target, 'GET', "/repos/{$repo}");
+            if (!$info['ok']) return array('ok' => false, 'hint' => '取仓库信息失败：' . $info['hint']);
+            $def = !empty($info['json']['default_branch']) ? $info['json']['default_branch'] : 'main';
+            $baseRef = $this->github_api($target, 'GET', "/repos/{$repo}/git/ref/heads/{$def}");
+            if (!$baseRef['ok']) return array('ok' => false, 'hint' => '取默认分支失败：' . $baseRef['hint']);
+            $headSha = $baseRef['json']['object']['sha'];
+            $mk = $this->github_api($target, 'POST', "/repos/{$repo}/git/refs", array('ref' => 'refs/heads/' . $branch, 'sha' => $headSha));
+            if (!$mk['ok']) return array('ok' => false, 'hint' => '创建分支失败：' . $mk['hint']);
+            $this->log("github 目标 {$target['id']}：新建分支 {$branch}（基于 {$def}）", 'INFO');
+        } else {
+            $headSha = $ref['json']['object']['sha'];
+        }
+
+        // 2) head commit → base tree（保留分支上现有文件）
+        $commit = $this->github_api($target, 'GET', "/repos/{$repo}/git/commits/{$headSha}");
+        if (!$commit['ok']) return array('ok' => false, 'hint' => '取 commit 失败：' . $commit['hint']);
+        $baseTree = $commit['json']['tree']['sha'];
+
+        // 3) 现有文件 sha 表（增量 + 清理判断）
+        $tree = $this->github_api($target, 'GET', "/repos/{$repo}/git/trees/{$baseTree}?recursive=1");
+        $existing = array();
+        if ($tree['ok'] && !empty($tree['json']['tree'])) {
+            foreach ($tree['json']['tree'] as $e) {
+                if (isset($e['type']) && $e['type'] === 'blob') $existing[$e['path']] = $e['sha'];
+            }
+        }
+
+        // 4) 本地文件 → 只上传变化的 blob
+        $entries = array(); $wanted = array();
+        $uploaded = 0; $unchanged = 0; $failed = 0;
+        foreach ($files as $rel) {
+            $abs = $real . '/' . $rel;
+            $content = (string) @file_get_contents($abs);
+            if ($content === '' && (int) @filesize($abs) > 0) { $failed++; continue; }
+            $ghPath = ($prefix !== '' ? $prefix . '/' : '') . $rel;
+            $wanted[$ghPath] = true;
+            $sha = $this->github_blob_sha($content);
+            if (isset($existing[$ghPath]) && $existing[$ghPath] === $sha) { $unchanged++; continue; }
+            $blob = $this->github_api($target, 'POST', "/repos/{$repo}/git/blobs", array('content' => base64_encode($content), 'encoding' => 'base64'));
+            if (!$blob['ok']) return array('ok' => false, 'hint' => '上传 blob 失败（' . $rel . '）：' . $blob['hint']);
+            $entries[] = array('path' => $ghPath, 'mode' => '100644', 'type' => 'blob', 'sha' => $blob['json']['sha']);
+            $uploaded++;
+        }
+
+        // 5) .nojekyll（Pages 必需；放分支根）
+        $nj = "cfse\r\n";
+        $njSha = $this->github_blob_sha($nj);
+        if (!isset($wanted['.nojekyll']) && (!isset($existing['.nojekyll']) || $existing['.nojekyll'] !== $njSha)) {
+            $b = $this->github_api($target, 'POST', "/repos/{$repo}/git/blobs", array('content' => base64_encode($nj), 'encoding' => 'base64'));
+            if ($b['ok']) $entries[] = array('path' => '.nojekyll', 'mode' => '100644', 'type' => 'blob', 'sha' => $b['json']['sha']);
+        }
+
+        // 6) 删除：仅限 path_prefix 之下、且不在本次产物里的文件
+        $deleted = 0;
+        foreach ($existing as $p => $sha) {
+            if ($prefix !== '' && strpos($p, $prefix . '/') !== 0) continue;
+            if ($prefix === '' && $p === '.nojekyll') continue;
+            if (isset($wanted[$p])) continue;
+            $entries[] = array('path' => $p, 'mode' => '100644', 'type' => 'blob', 'sha' => null);
+            $deleted++;
+        }
+
+        if (empty($entries)) {
+            return array('ok' => true, 'repo' => $repo, 'branch' => $branch, 'uploaded' => 0, 'unchanged' => $unchanged, 'deleted' => 0, 'failed' => $failed, 'total' => count($files), 'commit' => $headSha, 'hint' => '内容无变化，无需提交');
+        }
+
+        // 7) tree（带 base_tree ⇒ 保留本次未涉及的文件）
+        $newTree = $this->github_api($target, 'POST', "/repos/{$repo}/git/trees", array('base_tree' => $baseTree, 'tree' => $entries));
+        if (!$newTree['ok']) return array('ok' => false, 'hint' => '建 tree 失败：' . $newTree['hint']);
+
+        // 8) commit
+        $newCommit = $this->github_api($target, 'POST', "/repos/{$repo}/git/commits", array(
+            'message' => 'Deploy static site — ' . $uploaded . ' updated, ' . $deleted . ' deleted (' . gmdate('Y-m-d H:i:s') . ' UTC)',
+            'tree' => $newTree['json']['sha'],
+            'parents' => array($headSha),
+        ));
+        if (!$newCommit['ok']) return array('ok' => false, 'hint' => '建 commit 失败：' . $newCommit['hint']);
+
+        // 9) 更新 ref
+        $upd = $this->github_api($target, 'PATCH', "/repos/{$repo}/git/refs/heads/{$branch}", array('sha' => $newCommit['json']['sha'], 'force' => false));
+        if (!$upd['ok']) return array('ok' => false, 'hint' => '更新 ref 失败：' . $upd['hint']);
+
+        // 10) 启用 Pages（幂等：已启用时 POST 返回 409，改用 PUT）
+        $pages = $this->github_api($target, 'POST', "/repos/{$repo}/pages", array('source' => array('branch' => $branch, 'path' => '/')));
+        if (!$pages['ok'] && in_array($pages['http'], array(409, 422), true)) {
+            $this->github_api($target, 'PUT', "/repos/{$repo}/pages", array('source' => array('branch' => $branch, 'path' => '/')));
+        }
+
+        return array(
+            'ok' => true, 'repo' => $repo, 'branch' => $branch,
+            'uploaded' => $uploaded, 'unchanged' => $unchanged, 'deleted' => $deleted, 'failed' => $failed,
+            'total' => count($files), 'commit' => $newCommit['json']['sha'],
+            'public_url' => $this->target_public_url($target, ''),
+        );
+    }
+
+    /** 部署型 transport 分派（github / netlify …） */
+    private function target_deploy($target, $dir) {
+        $type = $this->target_type($target);
+        if ($type === 'github') return $this->github_deploy($target, $dir);
+        return array('ok' => false, 'hint' => '该类型尚不支持站点级部署：' . $type);
+    }
+
+    /** 目标是否属于「部署型」（一次提交 = 一次部署，不参与逐文件上传） */
+    private function is_deploy_target($target) {
+        return in_array($this->target_type($target), array('github', 'netlify'), true);
+    }
+
+    /** 把目录部署到所有「部署型」目标 */
+    private function deploy_site_to_deploy_targets($dir) {
+        $results = array(); $okCount = 0;
+        foreach ($this->get_hosting_targets() as $t) {
+            if (!$this->is_deploy_target($t)) continue;
+            $r = $this->target_deploy($t, $dir);
+            $results[$t['id']] = $r;
+            if (!empty($r['ok'])) $okCount++;
+            $this->log('部署到 ' . $t['id'] . '（' . $this->target_type($t) . '）：' . (!empty($r['ok']) ? '成功' : ('失败 - ' . (isset($r['hint']) ? $r['hint'] : '?'))), !empty($r['ok']) ? 'INFO' : 'ERROR');
+        }
+        return array('total' => count($results), 'ok_count' => $okCount, 'results' => $results);
+    }
+
+    /** 设置页「📦 部署到 git 型托管」 */
+    public function handle_deploy_git() {
+        if (!current_user_can('manage_options')) wp_die('权限不足');
+        check_admin_referer('cfse_deploy_git');
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+        $dir = isset($_POST['cfse_git_dir']) ? wp_unslash($_POST['cfse_git_dir']) : '';
+        $res = $this->deploy_site_to_deploy_targets($dir);
+        $detail = '';
+        foreach ($res['results'] as $id => $r) {
+            $detail .= $id . ':' . (!empty($r['ok'])
+                ? ('OK(' . (isset($r['uploaded']) ? $r['uploaded'] : 0) . ' 更新/' . (isset($r['deleted']) ? $r['deleted'] : 0) . ' 删除)')
+                : ('FAIL ' . (isset($r['hint']) ? $r['hint'] : ''))) . '；';
+        }
+        if ($detail === '') $detail = '没有启用中的部署型目标（github / netlify）';
+        wp_redirect(admin_url('options-general.php?page=cf-static-export-pro&git_ok=' . (int) $res['ok_count'] . '&git_total=' . (int) $res['total'] . '&git_detail=' . rawurlencode($detail)));
+        exit;
     }
 
     public function handle_manual_export() {
