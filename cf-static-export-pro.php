@@ -757,7 +757,7 @@ public function get_config() {
                             <label style="font-size:12px;">产物目录：<input type="text" id="cfse-site-dir" class="regular-text" style="width:70%;" value="<?php echo esc_attr(CFSE_LOCAL_DIR); ?>" /></label>
                         </p>
                         <p class="description" style="font-size:11px;">
-                            仅允许 <code><?php echo esc_html(CFSE_LOCAL_DIR); ?></code> 与 <code><?php echo esc_html(WP_CONTENT_DIR); ?></code> 下的目录。
+                            仅允许 <code><?php echo esc_html(CFSE_LOCAL_DIR); ?></code> 与 <code><?php echo esc_html(WP_CONTENT_DIR); ?></code> 下的子目录（<b>不含 plugins / themes / mu-plugins 源码目录</b>）。
                             Simply Static 的产物通常在 <code>wp-content/uploads/simply-static/temp-files/&lt;最近一次&gt;/</code>。
                         </p>
                         <p style="margin:6px 0;font-size:12px;">
@@ -3797,13 +3797,27 @@ public function handle_deploy_worker() {
         return array(CFSE_LOCAL_DIR, WP_CONTENT_DIR);
     }
 
-    /** 解析并校验产物目录：必须在白名单内（防任意目录读取与上传） */
+    /** 禁止发布的目录：源码类目录与 wp-content 根（避免把 PHP 源码推到公开静态站） */
+    private function is_forbidden_site_dir($real) {
+        $wc = realpath(WP_CONTENT_DIR);
+        if ($wc === false) return false;
+        $wc = rtrim(str_replace('\\', '/', $wc), '/');
+        if ($real === $wc) return true;  // wp-content 根：会连带 plugins/themes
+        foreach (array('plugins', 'themes', 'mu-plugins') as $sub) {
+            $f = $wc . '/' . $sub;
+            if ($real === $f || strpos($real . '/', $f . '/') === 0) return true;
+        }
+        return false;
+    }
+
+    /** 解析并校验产物目录：必须在白名单内且不在禁止目录中（防任意目录读取与源码外泄） */
     private function resolve_site_dir($dir) {
         $dir = trim((string) $dir);
         if ($dir === '') return null;
         $real = realpath($dir);
         if ($real === false || !is_dir($real)) return null;
-        $real = str_replace('\\', '/', $real);
+        $real = rtrim(str_replace('\\', '/', $real), '/');
+        if ($this->is_forbidden_site_dir($real)) return null;
         foreach ($this->allowed_site_roots() as $root) {
             $root_real = realpath($root);
             if ($root_real === false) continue;
