@@ -906,7 +906,7 @@ public function get_config() {
                             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cfse_deploy_git')); ?>" style="display:inline;margin-left:8px;">
                                 <?php wp_nonce_field('cfse_deploy_git'); ?>
                                 <input type="hidden" name="cfse_git_dir" value="<?php echo esc_attr(CFSE_LOCAL_DIR); ?>" />
-                                <button type="submit" class="button" onclick="return confirm('把该目录部署到所有启用中的「部署型」目标（GitHub Pages / GitLab / Netlify / Vercel / 通用 git）？仓库类目标不动默认分支。')">📦 部署到托管商</button>
+                                <button type="submit" class="button" onclick="return confirm('把该目录部署到所有启用中的「部署型」目标（GitHub Pages / GitLab / Netlify / Vercel / 通用 git / FTP / WebDAV）？仓库类目标不动默认分支。')">📦 部署到托管商</button>
                             </form>
                             <span id="cfse-publish-site-status" style="margin-left:10px;font-size:12px;color:#50575e;"></span>
                         </div>
@@ -4381,6 +4381,8 @@ public function handle_deploy_worker() {
         if ($type === 'netlify') return $this->netlify_deploy($target, $dir);
         if ($type === 'vercel') return $this->vercel_deploy($target, $dir);
         if ($type === 'gitlab') return $this->gitlab_deploy($target, $dir);
+        if ($type === 'ftp') return $this->ftp_deploy($target, $dir);
+        if ($type === 'webdav') return $this->webdav_deploy($target, $dir);
         return array('ok' => false, 'hint' => '该类型尚不支持站点级部署：' . $type);
     }
 
@@ -4629,6 +4631,140 @@ public function handle_deploy_worker() {
         );
     }
 
+    // ---------- FTP / FTPS（虚拟主机）----------
+    private function ftp_deploy($target, $dir) {
+        $pre = $this->deploy_prepare($target, $dir);
+        if (isset($pre['error'])) return array('ok' => false, 'hint' => $pre['error']);
+        if (!function_exists('ftp_connect')) {
+            return array('ok' => false, 'hint' => 'PHP 缺少 ftp 扩展（请在 php.ini 启用 extension=ftp）');
+        }
+        $host = isset($target['host']) ? trim((string) $target['host']) : '';
+        $port = !empty($target['port']) ? (int) $target['port'] : 21;
+        if ($host === '') return array('ok' => false, 'hint' => 'host 未填');
+        $useFtps = !empty($target['ftps']);
+        $conn = $useFtps ? @ftp_ssl_connect($host, $port, 20) : @ftp_connect($host, $port, 20);
+        if (!$conn) return array('ok' => false, 'hint' => ($useFtps ? 'FTPS' : 'FTP') . ' 连接失败：' . $host . ':' . $port . '（检查主机/端口/防火墙；FTPS 需服务器支持显式 TLS）');
+        if (!@ftp_login($conn, isset($target['user']) ? (string) $target['user'] : '', isset($target['pass']) ? (string) $target['pass'] : '')) {
+            @ftp_close($conn);
+            return array('ok' => false, 'hint' => 'FTP 登录失败（用户名/密码）');
+        }
+        @ftp_pasv($conn, true);
+
+        $root = isset($target['dir']) ? trim((string) $target['dir'], '/ ') : '';
+        $prefix = isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/ ') : '';
+        $base = trim($root . '/' . $prefix, '/');
+        if ($base !== '') $this->ftp_mkdirs($conn, $base);
+
+        $uploaded = 0; $failed = 0; $errors = array();
+        foreach ($pre['files'] as $rel) {
+            $relPath = rawurldecode($rel);              // FTP 是文件系统 ⇒ 用解码后的原文
+            if ($relPath === '' || strpos($relPath, '..') !== false) { $failed++; continue; }
+            $remote = '/' . trim($base . '/' . $relPath, '/');
+            $sub = dirname($relPath);
+            if ($sub !== '.' && $sub !== '') $this->ftp_mkdirs($conn, trim($base . '/' . $sub, '/'));
+            if (@ftp_put($conn, $remote, $pre['real'] . '/' . $rel, FTP_BINARY)) {
+                $uploaded++;
+            } else {
+                $failed++;
+                if (count($errors) < 3) $errors[] = $relPath;
+            }
+        }
+        @ftp_close($conn);
+        return array(
+            'ok' => ($failed === 0), 'host' => $host, 'port' => $port, 'ftps' => $useFtps,
+            'total' => count($pre['files']), 'uploaded' => $uploaded, 'failed' => $failed, 'errors' => $errors,
+            'public_url' => $this->target_public_url($target, ''),
+            'hint' => ($failed === 0)
+                ? ('已上传 ' . $uploaded . ' 个文件（本版不清除远端多余文件）')
+                : ('失败 ' . $failed . ' 个：' . implode('、', $errors)),
+        );
+    }
+
+    private function ftp_mkdirs($conn, $dir) {
+        $dir = trim((string) $dir, '/');
+        if ($dir === '') return;
+        $cur = '';
+        foreach (explode('/', $dir) as $seg) {
+            if ($seg === '' || $seg === '.') continue;
+            $cur .= '/' . $seg;
+            @ftp_mkdir($conn, $cur);          // 已存在会失败，忽略
+        }
+    }
+
+    // ---------- WebDAV（坚果云 / Nextcloud 等）----------
+    private function webdav_deploy($target, $dir) {
+        $pre = $this->deploy_prepare($target, $dir);
+        if (isset($pre['error'])) return array('ok' => false, 'hint' => $pre['error']);
+        $base = isset($target['endpoint']) ? rtrim((string) $target['endpoint'], '/') : '';
+        if ($base === '') return array('ok' => false, 'hint' => 'endpoint 未填（如 https://dav.jianguoyun.com/dav/站点目录）');
+        $prefix = isset($target['path_prefix']) ? trim((string) $target['path_prefix'], '/ ') : '';
+        if ($prefix !== '') $this->webdav_mkdirs($target, $base, $prefix);
+
+        $uploaded = 0; $failed = 0; $errors = array();
+        foreach ($pre['files'] as $rel) {
+            $relPath = rawurldecode($rel);              // WebDAV 也是文件系统 ⇒ 用原文
+            if ($relPath === '' || strpos($relPath, '..') !== false) { $failed++; continue; }
+            $full = trim($prefix . '/' . $relPath, '/');
+            $sub = dirname($full);
+            if ($sub !== '.' && $sub !== '' && $sub !== '') $this->webdav_mkdirs($target, $base, $sub);
+            $content = (string) @file_get_contents($pre['real'] . '/' . $rel);
+            $r = $this->webdav_request($target, 'PUT', $base . '/' . $this->webdav_encode($full), $content, $this->mime_for_path($rel));
+            if (!empty($r['ok'])) {
+                $uploaded++;
+            } else {
+                $failed++;
+                if (count($errors) < 3) $errors[] = $relPath . '（HTTP ' . $r['http'] . ($r['hint'] !== '' ? '：' . $r['hint'] : '') . '）';
+            }
+        }
+        return array(
+            'ok' => ($failed === 0), 'endpoint' => $base, 'total' => count($pre['files']),
+            'uploaded' => $uploaded, 'failed' => $failed, 'errors' => $errors,
+            'public_url' => $this->target_public_url($target, ''),
+            'hint' => ($failed === 0)
+                ? ('已上传 ' . $uploaded . ' 个文件（本版不清除远端多余文件）')
+                : ('失败 ' . $failed . ' 个：' . implode('、', $errors)),
+        );
+    }
+
+    /** 逐级 MKCOL（405/301 = 已存在，忽略） */
+    private function webdav_mkdirs($target, $base, $dir) {
+        $dir = trim((string) $dir, '/');
+        if ($dir === '') return;
+        $acc = '';
+        foreach (explode('/', $dir) as $seg) {
+            if ($seg === '' || $seg === '.') continue;
+            $acc .= ($acc === '' ? '' : '/') . $seg;
+            $this->webdav_request($target, 'MKCOL', $base . '/' . $this->webdav_encode($acc) . '/', '', '');
+        }
+    }
+
+    /** URL 路径逐段编码（保留 /） */
+    private function webdav_encode($path) {
+        return implode('/', array_map('rawurlencode', explode('/', (string) $path)));
+    }
+
+    private function webdav_request($target, $method, $url, $body, $contentType) {
+        $user = isset($target['user']) ? (string) $target['user'] : '';
+        $pass = isset($target['pass']) ? (string) $target['pass'] : '';
+        $headers = array('User-Agent' => 'CF-Static-Export-Pro');
+        if ($user !== '') $headers['Authorization'] = 'Basic ' . base64_encode($user . ':' . $pass);
+        if ($contentType !== '') $headers['Content-Type'] = $contentType;
+        $args = array('method' => $method, 'timeout' => 60, 'sslverify' => false, 'headers' => $headers);
+        if ($body !== '') $args['body'] = $body;
+        $resp = wp_remote_request($url, $args);
+        if (is_wp_error($resp)) return array('ok' => false, 'http' => 0, 'hint' => '网络不可达：' . $resp->get_error_message());
+        $code = (int) wp_remote_retrieve_response_code($resp);
+        $hint = '';
+        if ($code === 401) $hint = '认证失败（用户名/密码；坚果云请用应用密码）';
+        elseif ($code === 403) $hint = '无权限';
+        elseif ($code === 404) $hint = '路径不存在（父目录创建失败？）';
+        elseif ($code === 405) $hint = '已存在';
+        elseif ($code === 409) $hint = '父目录不存在或冲突';
+        elseif ($code === 507) $hint = '配额不足';
+        elseif ($code >= 400) $hint = 'HTTP ' . $code;
+        return array('ok' => ($code >= 200 && $code < 300), 'http' => $code, 'hint' => ($code === 405 || $code === 301) ? '' : $hint);
+    }
+
     private function gitlab_api($target, $method, $path, $body = null) {
         $token = isset($target['token']) ? (string) $target['token'] : '';
         $base = (isset($target['api_base']) && $target['api_base'] !== '') ? rtrim((string) $target['api_base'], '/') : 'https://gitlab.com/api/v4';
@@ -4657,7 +4793,7 @@ public function handle_deploy_worker() {
 
     /** 目标是否属于「部署型」（站点级事务，不参与逐文件上传） */
     private function is_deploy_target($target) {
-        return in_array($this->target_type($target), array('github', 'git', 'netlify', 'vercel', 'gitlab'), true);
+        return in_array($this->target_type($target), array('github', 'git', 'netlify', 'vercel', 'gitlab', 'ftp', 'webdav'), true);
     }
 
     /** 把目录部署到所有「部署型」目标 */
