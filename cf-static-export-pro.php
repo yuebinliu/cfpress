@@ -322,6 +322,19 @@ public function get_config() {
                 $br = isset($t['branch']) ? sanitize_text_field(trim($t['branch'])) : '';
                 $entry['branch'] = $br !== '' ? $br : 'gh-pages';
                 $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
+            } elseif ($tplId === 'ftp') {
+                $entry['host'] = isset($t['host']) ? sanitize_text_field(trim($t['host'])) : '';
+                $entry['port'] = isset($t['port']) && intval($t['port']) > 0 ? intval($t['port']) : 21;
+                $entry['user'] = isset($t['user']) ? sanitize_text_field(trim($t['user'])) : '';
+                $entry['pass'] = isset($t['pass']) ? (string) $t['pass'] : '';
+                $entry['dir'] = isset($t['dir']) ? trim((string) $t['dir']) : '';
+                $entry['ftps'] = !empty($t['ftps']);
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
+            } elseif ($tplId === 'webdav') {
+                $entry['endpoint'] = isset($t['endpoint']) ? esc_url_raw(trim($t['endpoint'])) : '';
+                $entry['user'] = isset($t['user']) ? sanitize_text_field(trim($t['user'])) : '';
+                $entry['pass'] = isset($t['pass']) ? (string) $t['pass'] : '';
+                $entry['public_url'] = isset($t['public_url']) ? esc_url_raw(trim($t['public_url'])) : '';
             } else { // local
                 $entry['dir'] = isset($t['dir']) ? sanitize_text_field(trim($t['dir'])) : '';
                 // local 也可配 public_url（本地目录被 web 服务托管时，日志里就能给出可访问地址）
@@ -447,6 +460,21 @@ public function get_config() {
                     <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[token]" value="<?php echo esc_attr(isset($t['token']) ? $t['token'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="GitLab Token（api 权限）" />
                     <input type="text" name="<?php echo esc_attr($n); ?>[branch]" value="<?php echo esc_attr(isset($t['branch']) ? $t['branch'] : 'gh-pages'); ?>" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />
                     <span class="description" style="font-size:11px;">commits API 的 actions[] <b>一次提交多文件</b>；Pages 需在项目里开启</span>
+                </div>
+                <div class="cfse-f-ftp" style="margin-top:4px;display:none;">
+                    <input type="text" name="<?php echo esc_attr($n); ?>[host]" value="<?php echo esc_attr(isset($t['host']) ? $t['host'] : ''); ?>" style="width:49%;" placeholder="FTP 主机" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[port]" value="<?php echo esc_attr(isset($t['port']) ? $t['port'] : 21); ?>" style="width:22%;margin-left:2%;" placeholder="端口(21)" />
+                    <label style="margin-left:6px;font-size:12px;"><input type="checkbox" name="<?php echo esc_attr($n); ?>[ftps]" value="1" <?php checked(!empty($t['ftps'])); ?> /> FTPS(显式 TLS)</label>
+                    <input type="text" name="<?php echo esc_attr($n); ?>[user]" value="<?php echo esc_attr(isset($t['user']) ? $t['user'] : ''); ?>" style="width:49%;margin-top:2px;" placeholder="用户名" />
+                    <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[pass]" value="<?php echo esc_attr(isset($t['pass']) ? $t['pass'] : ''); ?>" style="width:49%;margin-left:2%;margin-top:2px;" placeholder="密码" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[dir]" value="<?php echo esc_attr(isset($t['dir']) ? $t['dir'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="远端根目录（如 /wwwroot 或 /public_html）" />
+                    <span class="description" style="font-size:11px;">需要 PHP 的 ftp 扩展；只清理「路径前缀」下的旧文件</span>
+                </div>
+                <div class="cfse-f-webdav" style="margin-top:4px;display:none;">
+                    <input type="text" name="<?php echo esc_attr($n); ?>[endpoint]" value="<?php echo esc_attr(isset($t['endpoint']) ? $t['endpoint'] : ''); ?>" style="width:100%;" placeholder="WebDAV 地址（如 https://dav.jianguoyun.com/dav/站点目录）" />
+                    <input type="text" name="<?php echo esc_attr($n); ?>[user]" value="<?php echo esc_attr(isset($t['user']) ? $t['user'] : ''); ?>" style="width:49%;margin-top:2px;" placeholder="用户名" />
+                    <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[pass]" value="<?php echo esc_attr(isset($t['pass']) ? $t['pass'] : ''); ?>" style="width:49%;margin-left:2%;margin-top:2px;" placeholder="密码（坚果云用应用密码）" />
+                    <span class="description" style="font-size:11px;">MKCOL 建目录 + PUT 上传 + PROPFIND 清理；坚果云请用「应用密码」</span>
                 </div>
             </td>
             <td><input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></td>
@@ -695,7 +723,7 @@ public function get_config() {
                                 if (s3) s3.style.display = isS3 ? '' : 'none';
                                 var gh = tr.querySelector('.cfse-f-github');
                                 if (gh) gh.style.display = isGithub ? '' : 'none';
-                                var deployKinds = { 'netlify': '.cfse-f-netlify', 'vercel': '.cfse-f-vercel', 'git': '.cfse-f-git', 'gitlab': '.cfse-f-gitlab' };
+                                var deployKinds = { 'netlify': '.cfse-f-netlify', 'vercel': '.cfse-f-vercel', 'git': '.cfse-f-git', 'gitlab': '.cfse-f-gitlab', 'ftp': '.cfse-f-ftp', 'webdav': '.cfse-f-webdav' };
                                 Object.keys(deployKinds).forEach(function (k) {
                                   var el = tr.querySelector(deployKinds[k]);
                                   if (el) el.style.display = (v === k) ? '' : 'none';
@@ -715,7 +743,7 @@ public function get_config() {
                                 tmp.innerHTML = '<tr class="cfse-target-row">' +
                                   '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
                                   '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /><input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /></td>' +
-                                  '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option><option value="local">本地目录</option><option value="github">GitHub Pages（git 推送）</option><option value="git">通用 git（Gitee/Gitea）</option><option value="gitlab">GitLab Pages</option><option value="netlify">Netlify</option><option value="vercel">Vercel</option></select></td>' +
+                                  '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option><option value="local">本地目录</option><option value="github">GitHub Pages（git 推送）</option><option value="git">通用 git（Gitee/Gitea）</option><option value="gitlab">GitLab Pages</option><option value="netlify">Netlify</option><option value="vercel">Vercel</option><option value="ftp">FTP / FTPS</option><option value="webdav">WebDAV（坚果云等）</option></select></td>' +
                                   '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" />' +
                                     '<div class="cfse-f-s3" style="margin-top:4px;display:none;">' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:49%;" placeholder="bucket 名" />' +
@@ -748,6 +776,18 @@ public function get_config() {
                                     '<input type="text" name="cf_hosting_targets[' + idx + '][project]" style="width:100%;" placeholder="GitLab 项目（group/project）" />' +
                                     '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][token]" style="width:100%;margin-top:2px;" placeholder="GitLab Token" />' +
                                     '<input type="text" name="cf_hosting_targets[' + idx + '][branch]" style="width:49%;margin-top:2px;" placeholder="分支（默认 gh-pages）" />' +
+                                  '</span>' +
+                                  '<span class="cfse-f-ftp" style="display:none;margin-top:2px;">' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][host]" style="width:49%;" placeholder="FTP 主机" />' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][port]" style="width:22%;margin-left:2%;" placeholder="端口 21" value="21" />' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][user]" style="width:49%;margin-top:2px;" placeholder="用户名" />' +
+                                    '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][pass]" style="width:49%;margin-left:2%;margin-top:2px;" placeholder="密码" />' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="远端根目录（如 /wwwroot）" />' +
+                                  '</span>' +
+                                  '<span class="cfse-f-webdav" style="display:none;margin-top:2px;">' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="WebDAV 地址" />' +
+                                    '<input type="text" name="cf_hosting_targets[' + idx + '][user]" style="width:49%;margin-top:2px;" placeholder="用户名" />' +
+                                    '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][pass]" style="width:49%;margin-left:2%;margin-top:2px;" placeholder="密码" />' +
                                   '</span>' +
                                   '<td><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></td>' +
                                   '<td><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" /></td>' +
@@ -2030,6 +2070,32 @@ private function get_post_storage_path($post) {
                     'intent' => array('static-only'),
                 ),
                 'fields' => array('project', 'token', 'branch', 'path_prefix', 'public_url'),
+            ),
+            'ftp' => array(
+                'id' => 'ftp',
+                'name' => 'FTP / FTPS（虚拟主机）',
+                'transport' => 'ftp',
+                'legacy_type' => 'ftp',
+                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                'intents' => array('static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                    'intent' => array('static-only'),
+                ),
+                'fields' => array('host', 'port', 'user', 'pass', 'dir', 'ftps', 'path_prefix', 'public_url'),
+            ),
+            'webdav' => array(
+                'id' => 'webdav',
+                'name' => 'WebDAV（坚果云 / Nextcloud 等）',
+                'transport' => 'webdav',
+                'legacy_type' => 'webdav',
+                'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                'intents' => array('static-only', 'backup'),
+                'defaults' => array(
+                    'capabilities' => array('r2' => true, 'd1' => false, 'render' => false, 'cache' => false),
+                    'intent' => array('static-only'),
+                ),
+                'fields' => array('endpoint', 'user', 'pass', 'path_prefix', 'public_url'),
             ),
         );
     }
