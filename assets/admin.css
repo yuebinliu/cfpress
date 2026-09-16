@@ -6,7 +6,7 @@
 /* 设置页面网格布局 */
 .cfse-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 460px);
     gap: 20px;
     margin-top: 20px;
     align-items: start;

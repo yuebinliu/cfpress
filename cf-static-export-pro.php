@@ -619,6 +619,10 @@ public function get_config() {
                     <form method="post" action="options.php">
                         <?php settings_fields('cf_static_export_pro'); ?>
                         <table class="form-table">
+                            <tr><th style="padding-bottom:0;"><span style="font-size:13px;">☁️ 自托管 CMS 连接</span></th>
+                                <td style="padding-bottom:0;"><p class="description" style="background:#f0f6fc;border-left:3px solid #72aee6;padding:6px 8px;margin:0 0 4px;">
+                                    Cloudflare / Worker（自托管 CMS）的账号与站点信息。<b>纯静态档（local / s3 / ftp / webdav）不需要填</b> —— 各自的凭证在下面的「🎯 托管目标」里配。<br/>
+                                    「静态站点URL + Worker Auth Key」在<b>托管目标列表为空</b>时，会被当作默认 Worker 目标兜底。</p></td></tr>
                             <tr><th><label for="cf_account_id">Account ID</label></th>
                                 <td><input type="text" id="cf_account_id" name="cf_account_id" value="<?php echo esc_attr($this->config['account_id']); ?>" class="regular-text" />
                                     <p class="description">Cloudflare仪表盘右侧获取</p></td></tr>
@@ -877,7 +881,7 @@ public function get_config() {
                         </form>
                         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=cf_clear_cache')); ?>" style="display:inline;">
                             <?php wp_nonce_field('cf_clear_cache'); ?>
-                            <button type="submit" class="button" onclick="return confirm('确认清除所有缓存？')">🗑️ 清除缓存</button>
+                            <button type="submit" class="button" onclick="return confirm('将重置「已导出」标记与计数（不删除任何文件、不清除远端内容），确认继续？')">♻️ 重置导出标记</button>
                         </form>
                     </div>
 
@@ -1011,7 +1015,9 @@ public function get_config() {
                     </div>
 
         <div style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
-            <h3>👤 Worker 后台账号</h3>
+            <h3 style="margin-bottom:4px;">☁️ Worker 端管理</h3>
+            <p class="description" style="font-size:12px;color:#646970;margin-top:0;">仅「自托管 CMS（cfse-worker 目标）」相关；纯静态档（local / s3 / ftp / webdav）用不到这三块。</p>
+            <h4 style="margin-bottom:0;">👤 后台账号</h4>
             <p class="description">
                 为 Worker 管理后台创建登录用户（PBKDF2-SHA256 存入 D1 <code>users</code> 表）。用户名默认取本站第一个管理员；
                 密码仅本次提交时使用、不落 WordPress。可在 Worker 后台登录后修改。
@@ -1033,8 +1039,8 @@ public function get_config() {
             <?php endif; ?>
         </div>
 
-        <div style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
-                        <h3>🔧 Worker 代码管理</h3>
+        <div style="margin-top: 4px;">
+                        <h4 style="margin-bottom:0;">🔧 代码管理（路由 / 模板 / 资源 / 部署）</h4>
                         <p class="description">
                             本地 Worker 代码位于 <code><?php echo esc_html(CFSE_WORKER_DIR); ?></code>
                             <?php if ($routes_exists): ?>✅ routes.js<?php else: ?>❌ routes.js<?php endif; ?>
@@ -1069,14 +1075,14 @@ public function get_config() {
                     </div>
 
                     <div class="cfse-logs">
-                        <h3>📋 最近日志</h3>
+                        <h4 style="margin-bottom:0;">📋 最近日志</h4>
                         <pre><?php echo esc_html($this->get_recent_logs(10)); ?></pre>
                     </div>
                 </div>
             </div>
         </div>
         <style>
-        .cfse-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 20px; margin-top: 20px; align-items: start; }
+        .cfse-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 460px); gap: 20px; margin-top: 20px; align-items: start; }
         .cfse-grid > .cfse-card { min-width: 0; }
         .cfse-grid .cfse-card code, .cfse-grid .stat-value { overflow-wrap: anywhere; word-break: break-word; }
         .cfse-card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
