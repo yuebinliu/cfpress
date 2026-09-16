@@ -127,45 +127,14 @@ export async function handleRequest(request, env) {
         if (!providedKey || !validKey || providedKey !== validKey) {
             return new Response('Unauthorized', { status: 401 });
         }
-        // ?prefix=（诊断用：可列任意前缀，默认 style/ 保持原行为）；?limit= 1~1000（默认 100）
-        const prefixParam = url.searchParams.get('prefix');
-        const prefix = (prefixParam === null || prefixParam === '') ? 'style/' : prefixParam;
-        const limRaw = parseInt(url.searchParams.get('limit') || '100', 10);
-        const lim = (limRaw > 0 && limRaw <= 1000) ? limRaw : 100;
-        const list = await env.R2_BUCKET.list({ prefix: prefix, limit: lim });
+        const list = await env.R2_BUCKET.list({ prefix: 'style/' });
         const items = (list.objects || []).map(function (o) { return { key: o.key, size: o.size }; });
-        return new Response(JSON.stringify({ prefix: prefix, truncated: !!list.truncated, items: items }), {
+        return new Response(JSON.stringify({ items: items }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
         });
     }
 
-    // 目录占位清理（历史遗留）：POST /clean-dir-markers?limit=500&cursor=...
-    //   删掉所有「以 / 结尾」的 0 字节对象（此前占位方案的残留）；分批，done=false 时带 cursor 继续。
-    if (path === '/clean-dir-markers' && request.method === 'POST') {
-        const providedKey = request.headers.get('X-Auth-Key');
-        const validKey = env.AUTH_KEY_SECRET;
-        if (!providedKey || !validKey || providedKey !== validKey) {
-            return new Response('Unauthorized', { status: 401 });
-        }
-        const limRaw = parseInt(url.searchParams.get('limit') || '500', 10);
-        const lim = (limRaw > 0 && limRaw <= 500) ? limRaw : 500;
-        const cursor = url.searchParams.get('cursor') || undefined;
-        const page = await env.R2_BUCKET.list({ limit: lim, cursor: cursor });
-        const objs = page.objects || [];
-        let removed = 0;
-        for (const o of objs) {
-            const k = String(o.key || '');
-            if (k.endsWith('/') && (o.size || 0) === 0) {
-                await env.R2_BUCKET.delete(k);
-                removed++;
-            }
-        }
-        return new Response(JSON.stringify({
-            ok: true, scanned: objs.length, removed: removed,
-            cursor: page.truncated ? page.cursor : null, done: !page.truncated,
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    }
 
     // 文章清单（WP 端「从 Worker 拉取文章」用；X-Auth-Key 鉴权，不走登录）
     //   GET /sync/posts?limit=200&since=YYYY-MM-DD HH:MM:SS&min_wp_id=0&wp_id=0
