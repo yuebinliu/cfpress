@@ -662,11 +662,10 @@ public function get_config() {
                                     <p class="description">「🔄 全量导出」时并行进程数（1~8，默认 4）。并发越高全量越快，同时占用更多服务器资源；设为 1 即逐篇串行。R2/D1 写入为幂等覆盖，并发安全。</p></td></tr>
                             <tr><th>发布行为</th>
                                 <td>
-                                    <p class="description">控制「在 WP 侧保存 / 发布文章」时自动做什么。<b>三项独立、默认全不勾</b> —— 都不勾时 WP 侧保存文章不动远端（内容由 Worker 后台或第三方编辑器如 Obsidian 管理）。</p>
-                                    <label><input type="checkbox" name="cf_sync_d1" value="1" <?php checked($this->config['sync_d1']); ?> /> ① <b>同步到 D1</b>（<b>文章和草稿</b>都写入云端数据库；列表页实时渲染与 Worker 后台读它。草稿只写 <code>status=draft</code>，不产单页）</label><br/>
-                                    <label><input type="checkbox" name="cf_gen_static" value="1" id="cf-gen-static" <?php checked($this->config['gen_static']); ?> /> ② <b>生成静态文件</b>（渲染落盘到 <code>cfse-static/</code>，结构与 R2 同构；「纯静态托管」用它 —— 整目录搬到任意对象存储即成站）</label><br/>
-                                    <label><input type="checkbox" name="cf_publish_remote" value="1" id="cf-pub-remote" <?php checked($this->config['publish_remote']); ?> onchange="if(this.checked){var g=document.getElementById('cf-gen-static'); if(g) g.checked=true;}" /> ③ <b>上传到远端</b>（R2 单页 + 清缓存；<b>勾选它等于同时启用 ②</b>）</label>
-                                    <p class="description" style="margin-top:4px;">说明：<b>md 文章只写 D1、不上传 R2 单页</b> —— 单页由 Worker 渲染（R2 未命中时按需渲染并回填）。只勾 ③ 而没勾 ① 时，Worker 端列表/后台看不到该篇（列表读 D1）。
+                                    <p class="description">控制「在 WP 侧保存 / 发布文章」时自动做什么。<b>两项独立、默认都不勾</b> —— 都不勾时 WP 侧保存文章不动远端（内容由 Worker 后台或第三方编辑器如 Obsidian 管理）。<b>「同步到 D1」已移到下面的「☁️ 自托管 CMS 运行时」</b>（那属于 Worker 侧行为）。</p>
+                                    <label><input type="checkbox" name="cf_gen_static" value="1" id="cf-gen-static" <?php checked($this->config['gen_static']); ?> /> ① <b>生成静态文件</b>（渲染落盘到 <code>cfse-static/</code>，结构与 R2 同构；「纯静态托管」用它 —— 整目录搬到任意对象存储即成站）</label><br/>
+                                    <label><input type="checkbox" name="cf_publish_remote" value="1" id="cf-pub-remote" <?php checked($this->config['publish_remote']); ?> onchange="if(this.checked){var g=document.getElementById('cf-gen-static'); if(g) g.checked=true;}" /> ② <b>上传到远端</b>（R2 单页 + 清缓存；<b>勾选它等于同时启用 ②</b>）</label>
+                                    <p class="description" style="margin-top:4px;">说明：<b>md 文章只写 D1、不上传 R2 单页</b> —— 单页由 Worker 渲染（R2 未命中时按需渲染并回填）。只勾「上传到远端」而没勾「同步到 D1」时，Worker 端列表/后台看不到该篇（列表读 D1）。
                                 </td></tr>
                             <tr><th>导出与渲染</th>
                                 <td>
@@ -682,6 +681,7 @@ public function get_config() {
                                         下面这些<b>只对「自托管 CMS（cfse-worker 目标）」生效</b> —— 它们控制 Worker 端的 KV 缓存与两端版本比对。
                                         <b>纯静态档（local / s3 / ftp / webdav）不使用</b>：没有 KV、也没有 Worker 接口可调，配了也不会被执行。
                                     </p>
+                                    <label><input type="checkbox" name="cf_sync_d1" value="1" <?php checked($this->config['sync_d1']); ?> /> <b>保存文章时同步到 D1</b>（<b>文章和草稿</b>都写入云端数据库；列表页实时渲染与 Worker 后台读它。草稿只写 <code>status=draft</code>，不产单页）</label><br/>
                                     <label><input type="checkbox" name="cf_purge_sidebar" value="1" <?php checked($this->config['purge_sidebar']); ?> /> 发布后即时刷新侧边栏（成本极小，建议开启）</label><br/>
                                     <label><input type="checkbox" name="cf_purge_lists" value="1" <?php checked($this->config['purge_lists']); ?> /> 发布后即时刷新列表页第一页缓存（首页/分类/标签/归档；高更新大站建议关闭，靠缓存自然过期）</label><br/>
                                     <span class="description" style="font-size:11px;margin-left:22px;">↑ 这两项只在<b>对应 TTL &gt; 0</b>（即该部分确实在缓存）时才有意义 —— TTL=0 本就是每请求直查 D1，无需刷新。</span><br/>
@@ -690,12 +690,28 @@ public function get_config() {
                                         <p class="description"><b>缓存策略</b>（Worker 动态页的 KV 缓存）—— 纯 TTL 语义：<b>0 = 直查 D1 不缓存</b>（最省 KV 写入额度，推荐默认）。常见组合：全 D1 = 列表 0 / 侧边栏 0；混合 = 列表 0 / 侧边栏 86400；全 KV = 列表 3600 / 侧边栏 86400（仅高流量建议，注意 KV 免费写额度 1000/天）。<b>运行时调整请在 Worker 后台「设置 → 缓存策略」操作</b>（保存即生效，以最后保存的一侧为准）。
                                         注意：<b>单页永远直读 R2、不走这套缓存</b>（单页的浏览器缓存由上面的「单页缓存头」控制）。</p>
                                         <div style="margin-top:6px;">
-                                            <label>列表页 TTL <input type="number" name="cf_cache_ttl_list" value="<?php echo esc_attr($this->config['cache_ttl_list']); ?>" style="width:90px" min="0" /> 秒</label>
-                                            <label style="margin-left:12px;">侧边栏 TTL <input type="number" name="cf_cache_ttl_sidebar" value="<?php echo esc_attr($this->config['cache_ttl_sidebar']); ?>" style="width:90px" min="0" /> 秒</label>
-                                            <label style="margin-left:12px;">站点信息 TTL <input type="number" name="cf_cache_ttl_site" value="<?php echo esc_attr($this->config['cache_ttl_site']); ?>" style="width:90px" min="0" /> 秒</label>
-                                            <label style="margin-left:12px;">Feed TTL <input type="number" name="cf_cache_ttl_feed" value="<?php echo esc_attr($this->config['cache_ttl_feed']); ?>" style="width:90px" min="0" /> 秒</label>
-                                            <label style="margin-left:12px;">Feed 条数 <input type="number" name="cf_feed_count" value="<?php echo esc_attr($this->config['feed_count']); ?>" style="width:70px" min="1" max="100" /></label>
+                                            <button type="button" class="button" onclick="cfseFillCache(0,0,604800)">预设：全 D1（最省 KV 写）</button>
+                                            <button type="button" class="button" style="margin-left:4px;" onclick="cfseFillCache(0,86400,604800)">预设：混合（侧边栏 KV）</button>
+                                            <button type="button" class="button" style="margin-left:4px;" onclick="cfseFillCache(3600,86400,604800)">预设：全 KV（高流量）</button>
+                                            <span class="description" style="margin-left:6px;font-size:11px;">与 Worker 后台「设置 → 缓存策略」同一组数值；点完记得保存</span>
                                         </div>
+                                        <div style="margin-top:6px;">
+                                            <label>列表页 TTL <input type="number" id="cfse-ttl-list" name="cf_cache_ttl_list" value="<?php echo esc_attr($this->config['cache_ttl_list']); ?>" style="width:90px" min="0" /> 秒</label>
+                                            <label style="margin-left:12px;">侧边栏 TTL <input type="number" id="cfse-ttl-sidebar" name="cf_cache_ttl_sidebar" value="<?php echo esc_attr($this->config['cache_ttl_sidebar']); ?>" style="width:90px" min="0" /> 秒</label>
+                                            <label style="margin-left:12px;">站点信息 TTL <input type="number" id="cfse-ttl-site" name="cf_cache_ttl_site" value="<?php echo esc_attr($this->config['cache_ttl_site']); ?>" style="width:90px" min="0" /> 秒</label>
+                                            <label style="margin-left:12px;">Feed TTL <input type="number" id="cfse-ttl-feed" name="cf_cache_ttl_feed" value="<?php echo esc_attr($this->config['cache_ttl_feed']); ?>" style="width:90px" min="0" /> 秒</label>
+                                            <label style="margin-left:12px;">Feed 条数 <input type="number" id="cfse-feed-count" name="cf_feed_count" value="<?php echo esc_attr($this->config['feed_count']); ?>" style="width:70px" min="1" max="100" /></label>
+                                        </div>
+                                        <script>
+                                        function cfseFillCache(list, sidebar, site) {
+                                            var a = document.getElementById('cfse-ttl-list');
+                                            var b = document.getElementById('cfse-ttl-sidebar');
+                                            var c = document.getElementById('cfse-ttl-site');
+                                            if (a) a.value = list;
+                                            if (b) b.value = sidebar;
+                                            if (c) c.value = site;
+                                        }
+                                        </script>
                                     </div>
                                 </td></tr>
                         </table>
