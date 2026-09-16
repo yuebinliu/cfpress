@@ -401,15 +401,15 @@ function postStoragePath(row, pattern) {
     };
     let p = pattern || '{slug}/index.html';
     Object.keys(vals).forEach(function (k) { p = p.split('{' + k + '}').join(vals[k]); });
-    // R2 存储 key 用「URL 形态」（小写 %xx）：D1 的 slug 本身就是 %xx，与 /upload 落盘形态一致；
-    // R2 控制台据此按 `/` 分层显示目录。读取侧对两种形态都会尝试（兼容旧的中文 key 对象）。
-    return p;
+    // R2 存储 key 用「解码后的原文」（D1 的 slug 是 %xx 形态）：与读取侧一致，浏览器访问才能命中。
+    // 兜底 || p：极端情况下不返回 null，避免调用方拿到 null 崩掉。
+    return r2KeyFromPath(p) || p;
 }
 
 function postPublicUrl(row, site) {
     const p = postStoragePath(row, site.storagePattern).replace(/\/?index\.html$/, '');
-    // key 已是 URL 形态（小写 %xx）⇒ 直接拼；再编码会变成 %25xx
-    return (site.url || '') + '/' + p + '/';
+    // key 已是原文 ⇒ URL 需逐段编码（浏览器请求的形态）
+    return (site.url || '') + '/' + r2UrlPath(p.split('/').filter(Boolean).join('/')) + '/';
 }
 
 /** 正文含代码块时给单页注入 highlight.js 资源（/hl/ 由 Worker assets 直出） */

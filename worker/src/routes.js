@@ -10,7 +10,7 @@
  * 10    - 列表每页文章数（WP 设置页配置）
  */
 import { getFromR2 } from './storage';
-import { r2KeyFromPath, r2KeyFromUrl } from './r2key';
+import { r2KeyFromPath } from './r2key';
 import { getPostsByTaxonomy, getTaxonomyInfo, getRecentPosts, getPostsByArchive, getSidebarData, searchPosts } from './database';
 import { renderCategoryPage, renderTagPage, renderHomepage, renderArchivePage } from './templates';
 import { getCache, setCache, deleteCache, purgeCache } from './cache';
@@ -281,8 +281,7 @@ export async function handleRequest(request, env) {
     // 静态资源（图片/css/js/字体/文档等）
     //   注意：未命中时**不直接 404**，而是继续往下匹配（可能是 slug 正好带后缀，或显式 index.html）
     if (path.match(/\.(css|js|png|jpg|jpeg|gif|svg|webp|avif|ico|woff2?|ttf|eot|html?|xml|txt|json|map|webmanifest|pdf)$/)) {
-        let file = null;
-        for (const k of r2KeyCandidates(path)) { file = await getFromR2(env.R2_BUCKET, k); if (file) break; }
+        const file = await getFromR2(env.R2_BUCKET, r2KeyFromPath(path));
         if (file) {
             const isDoc = /\.html?$/i.test(path);
             return new Response(file.body, {
@@ -303,8 +302,7 @@ export async function handleRequest(request, env) {
     // 目录省略尾斜杠：/foo → 301 /foo/（仅当 R2 里确实有 foo/index.html，避免无谓跳转）
     if (path !== '/' && !path.endsWith('/') && !/\.[a-zA-Z0-9]+$/.test(path)) {
         try {
-            let probe = null;
-            for (const k of r2KeyCandidates(path + '/index.html')) { probe = await env.R2_BUCKET.head(k); if (probe) break; }
+            const probe = await env.R2_BUCKET.head(r2KeyFromPath(path + '/index.html'));
             if (probe) {
                 return new Response(null, { status: 301, headers: { 'Location': url.origin + path + '/' + (url.search || '') } });
             }
@@ -584,14 +582,11 @@ export async function handleRequest(request, env) {
         storagePath = storagePath.replace('{slug}', slug);
 
         // 单页为 R2 静态文件，直接读 R2，不套 KV 缓存（省 KV 读写且避免旧缓存不同步）
-        const r2Keys = r2KeyCandidates(storagePath);
-        let file = null;
-        for (const k of r2Keys) { file = await getFromR2(env.R2_BUCKET, k); if (file) break; }
-        if (!file && env.ENABLE_COMPRESSION) {
-            for (const k of r2Keys) {
-                file = await getFromR2(env.R2_BUCKET, k + '.gz');
-                if (file) { if (!file.contentEncoding) file.contentEncoding = 'gzip'; break; }
-            }
+        const r2StorageKey = r2KeyFromPath(storagePath);
+        let file = r2StorageKey ? await getFromR2(env.R2_BUCKET, r2StorageKey) : null;
+        if (!file && env.ENABLE_COMPRESSION && r2StorageKey) {
+            file = await getFromR2(env.R2_BUCKET, r2StorageKey + '.gz');
+            if (file && !file.contentEncoding) file.contentEncoding = 'gzip';
         }
 
         if (file) {
@@ -685,21 +680,6 @@ async function getSidebar(env) {
 // ============================================
 // 上传处理
 // ============================================
-/**
- * 同一 URL 路径可能对应的 R2 key 候选，按优先级：
- *   ① URL 形态（小写 %xx）—— **线上存储形态**，R2 控制台按 `/` 分层；
- *   ② 原文形态 —— 兼容 b8f52a4 期间写入的中文 key 对象（重建全部单页后会自然消失）。
- * 读取/删除按候选逐个尝试，两代对象都能命中。
- */
-function r2KeyCandidates(urlPath) {
-    const out = [];
-    const enc = r2KeyFromUrl(urlPath);
-    if (enc) out.push(enc);
-    const raw = r2KeyFromPath(urlPath);
-    if (raw && raw !== enc) out.push(raw);
-    return out;
-}
-
 async function handleUpload(request, env) {
     const providedKey = request.headers.get('X-Auth-Key');
     const validKey = env.AUTH_KEY_SECRET;
@@ -710,9 +690,7 @@ async function handleUpload(request, env) {
     try {
         const uploadData = await request.json();
         // 存储 key = 解码后的原文（URL 形态 → key）；null = 非法（含穿越段），下方校验会拒掉
-        // 存储 key = URL 形态（小写 %xx）：与插件侧 get_permalink() 一致，且 R2 控制台按 `/` 分层显示
-        // （中文原文 key 会被控制台平铺成"文件名带路径"，见 b8f52a4 的回归）
-        const filePath = (typeof uploadData.path === 'string') ? r2KeyFromUrl(uploadData.path) : null;
+        const filePath = (typeof uploadData.path === 'string') ? r2KeyFromPath(uploadData.path) : null;
         const fileContent = uploadData.content;
         const contentType = uploadData.contentType || 'text/html; charset=utf-8';
         const contentEncoding = uploadData.contentEncoding || null;
@@ -807,11 +785,11 @@ async function handleDelete(request, env) {
         let deleted = 0;
         for (const p of paths) {
             if (typeof p === 'string' && p.trim() !== '') {
-                const cands = r2KeyCandidates(p);
-                for (const k of cands) {
-                    await env.R2_BUCKET.delete(k);       // 两代 key 都清（不存在则 no-op）
+                const r2DelKey = r2KeyFromPath(p);
+                if (r2DelKey) {
+                    await env.R2_BUCKET.delete(r2DelKey);
+                    deleted++;
                 }
-                if (cands.length) deleted++;
             }
         }
         console.log(`✅ 文件删除成功 ${deleted} 个: ${paths.join(', ')}`);
