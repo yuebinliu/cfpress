@@ -140,6 +140,44 @@ export async function handleRequest(request, env) {
         });
     }
 
+    // 目录占位回填（一次性；分批以避开 CPU 限制）：POST /fix-dir-markers?limit=200&cursor=...
+    //   返回 { scanned, markers, cursor, done }；done=false 时带 cursor 继续调。
+    if (path === '/fix-dir-markers' && request.method === 'POST') {
+        const providedKey = request.headers.get('X-Auth-Key');
+        const validKey = env.AUTH_KEY_SECRET;
+        if (!providedKey || !validKey || providedKey !== validKey) {
+            return new Response('Unauthorized', { status: 401 });
+        }
+        const limRaw = parseInt(url.searchParams.get('limit') || '200', 10);
+        const lim = (limRaw > 0 && limRaw <= 500) ? limRaw : 200;
+        const cursor = url.searchParams.get('cursor') || undefined;
+        const page = await env.R2_BUCKET.list({ limit: lim, cursor: cursor });
+        const objs = page.objects || [];
+        const dirs = {};
+        for (const o of objs) {
+            const k = String(o.key || '');
+            if (!k || k.endsWith('/')) continue;          // 占位对象自身跳过
+            const parts = k.split('/');
+            if (parts.length < 2) continue;               // 根级文件没有父目录
+            let acc = '';
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!parts[i]) continue;
+                acc += parts[i] + '/';
+                dirs[acc] = true;
+            }
+        }
+        const keys = Object.keys(dirs);
+        let created = 0;
+        for (const d of keys) {
+            await env.R2_BUCKET.put(d, new Uint8Array(0), { httpMetadata: { contentType: 'application/x-directory' } });
+            created++;
+        }
+        return new Response(JSON.stringify({
+            ok: true, scanned: objs.length, markers: created,
+            cursor: page.truncated ? page.cursor : null, done: !page.truncated,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+
     // 文章清单（WP 端「从 Worker 拉取文章」用；X-Auth-Key 鉴权，不走登录）
     //   GET /sync/posts?limit=200&since=YYYY-MM-DD HH:MM:SS&min_wp_id=0&wp_id=0
     //   - since：增量拉取（modified > since）
@@ -723,6 +761,7 @@ async function handleUpload(request, env) {
         }
         await env.R2_BUCKET.put(filePath, bytes, putOptions);
         console.log(`✅ 文件上传成功: ${filePath}`);
+        await ensureDirMarkers(env, filePath);
         return new Response(
             JSON.stringify({ success: true, skipped: false, path: filePath }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -733,6 +772,30 @@ async function handleUpload(request, env) {
             JSON.stringify({ success: false, error: error.message }),
             { status: 500, headers: { 'Content-Type': 'application/json' } }
         );
+    }
+}
+
+/**
+ * 目录占位：为 key 的每一级父前缀写 0 字节对象（`a/b/c.html` → `a/`、`a/b/`）。
+ * 对象存储没有真目录；写显式 `前缀/` 对象后，R2 控制台 / S3 客户端会把目录作为条目列出。
+ * 幂等（同 key 覆盖、内容恒空），失败不影响主流程。
+ */
+async function ensureDirMarkers(env, key) {
+    try {
+        const parts = String(key || '').split('/');
+        if (parts.length < 2) return 0;
+        let acc = '';
+        let n = 0;
+        for (let i = 0; i < parts.length - 1; i++) {
+            if (!parts[i]) continue;
+            acc += parts[i] + '/';
+            await env.R2_BUCKET.put(acc, new Uint8Array(0), { httpMetadata: { contentType: 'application/x-directory' } });
+            n++;
+        }
+        return n;
+    } catch (e) {
+        console.warn('目录占位写入失败（忽略）:', e);
+        return 0;
     }
 }
 
