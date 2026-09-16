@@ -536,7 +536,6 @@ public function get_config() {
                     <input type="password" autocomplete="new-password" spellcheck="false" name="<?php echo esc_attr($n); ?>[pass]" value="<?php echo esc_attr(isset($t['pass']) ? $t['pass'] : ''); ?>" style="width:49%;margin-left:2%;margin-top:2px;" placeholder="密码（坚果云用应用密码）" />
                     <span class="description" style="font-size:11px;">MKCOL 建目录 + PUT 上传；坚果云请用「应用密码」。<b>语义：增量覆盖</b> —— 只上传、<b>不删除</b>远端多余文件（清理的 PROPFIND 递归删除尚未实现）。</span>
                 </div>
-            </td>
             <div style="margin-top:6px;"><b style="font-size:12px;">Auth Key</b>
                 <input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></div>
             <div style="margin-top:6px;"><b style="font-size:12px;">路径前缀</b> <span class="description" style="font-size:11px;">（产物写到该目标的哪个子目录；git 型部署时只清理该前缀之下，保护仓库其它内容）</span>
@@ -547,7 +546,6 @@ public function get_config() {
                         <input type="checkbox" name="<?php echo esc_attr($n); ?>[capabilities][<?php echo esc_attr($ck); ?>]" value="1" <?php checked(!empty($caps[$ck])); ?><?php disabled(empty($tpl['capabilities'][$ck])); ?> /> <?php echo esc_html($clabel); ?>
                     </label><br/>
                 <?php } ?>
-            </td>
             </div>
             <div style="margin-top:6px;white-space:nowrap;font-size:12px;">
                 <b style="font-size:12px;">意图</b>
@@ -683,24 +681,6 @@ public function get_config() {
                     <form method="post" action="options.php">
                         <?php settings_fields('cf_static_export_pro'); ?>
                         <table class="form-table">
-                            <tr><th><label for="cf_account_id">Account ID</label></th>
-                                <td><input type="text" id="cf_account_id" name="cf_account_id" value="<?php echo esc_attr($this->config['account_id']); ?>" class="regular-text" />
-                                    <p class="description">Cloudflare仪表盘右侧获取</p></td></tr>
-                            <tr><th><label for="cf_api_token">API Token</label></th>
-                                <td><input type="password" id="cf_api_token" name="cf_api_token" value="<?php echo esc_attr($this->config['api_token']); ?>" class="regular-text" />
-                                    <p class="description">需要 D1:Edit, R2:Edit, Account:Read 权限</p>
-                                    <button type="button" class="button" id="cf-test-connection">🔌 测试连接</button>
-                                    <span id="cf-test-result"></span></td></tr>
-                            <tr><th><label for="cf_r2_bucket">R2 Bucket</label></th>
-                                <td><input type="text" id="cf_r2_bucket" name="cf_r2_bucket" value="<?php echo esc_attr($this->config['r2_bucket']); ?>" class="regular-text" /></td></tr>
-                            <tr><th><label for="cf_d1_database">D1 Database ID</label></th>
-                                <td><input type="text" id="cf_d1_database" name="cf_d1_database" value="<?php echo esc_attr($this->config['d1_database']); ?>" class="regular-text" /></td></tr>
-                            <tr><th><label for="cf_site_url">静态站点URL</label></th>
-                                <td><input type="url" id="cf_site_url" name="cf_site_url" value="<?php echo esc_attr($this->config['site_url']); ?>" class="regular-text" />
-                                    <p class="description">Worker 所在域名</p></td></tr>
-                            <tr><th><label for="cf_auth_key">Worker Auth Key</label></th>
-                                <td><input type="password" id="cf_auth_key" name="cf_auth_key" value="<?php echo esc_attr($this->config['auth_key']); ?>" class="regular-text" />
-                                    <p class="description">与 Worker 中 AUTH_KEY_SECRET 相同</p></td></tr>
                             <tr><th><label for="cf_export_mode">导出模式</label></th>
                                 <td><select id="cf_export_mode" name="cf_export_mode">
                                         <option value="template" <?php selected($this->config['export_mode'], 'template'); ?>>内部模板渲染</option>
@@ -724,13 +704,6 @@ public function get_config() {
                             <tr><th><label for="cf_export_concurrency">全量导出并发数</label></th>
                                 <td><input type="number" id="cf_export_concurrency" name="cf_export_concurrency" value="<?php echo esc_attr($this->config['export_concurrency']); ?>" style="width:100px" min="1" max="8" />
                                     <p class="description">「🔄 全量导出」时并行进程数（1~8，默认 4）。并发越高全量越快，同时占用更多服务器资源；设为 1 即逐篇串行。R2/D1 写入为幂等覆盖，并发安全。</p></td></tr>
-                            <tr><th>发布行为</th>
-                                <td>
-                                    <p class="description">控制「在 WP 侧保存 / 发布文章」时自动做什么。<b>两项独立、默认都不勾</b> —— 都不勾时 WP 侧保存文章不动远端（内容由 Worker 后台或第三方编辑器如 Obsidian 管理）。<b>「同步到 D1」已移到下面的「☁️ 自托管 CMS 运行时」</b>（那属于 Worker 侧行为）。</p>
-                                    <label><input type="checkbox" name="cf_gen_static" value="1" id="cf-gen-static" <?php checked($this->config['gen_static']); ?> /> ① <b>生成静态文件</b>（渲染落盘到 <code>cfse-static/</code>，结构与 R2 同构；「纯静态托管」用它 —— 整目录搬到任意对象存储即成站）</label><br/>
-                                    <label><input type="checkbox" name="cf_publish_remote" value="1" id="cf-pub-remote" <?php checked($this->config['publish_remote']); ?> onchange="if(this.checked){var g=document.getElementById('cf-gen-static'); if(g) g.checked=true;}" /> ② <b>上传到远端</b>（R2 单页 + 清缓存；<b>勾选它等于同时启用 ②</b>）</label>
-                                    <p class="description" style="margin-top:4px;">说明：<b>md 文章只写 D1、不上传 R2 单页</b> —— 单页由 Worker 渲染（R2 未命中时按需渲染并回填）。只勾「上传到远端」而没勾「同步到 D1」时，Worker 端列表/后台看不到该篇（列表读 D1）。
-                                </td></tr>
                             <tr><th>导出与渲染</th>
                                 <td>
                                     <p class="description">这两个用法都有效（无论你发布到自托管 CMS 还是纯静态托管）。</p>
@@ -738,6 +711,36 @@ public function get_config() {
                                     <label><input type="checkbox" name="cf_enable_logging" value="1" <?php checked($this->config['enable_logging']); ?> /> 启用日志</label><br/>
                                     <label><input type="checkbox" name="cf_enable_compression" value="1" <?php checked($this->config['enable_compression']); ?> /> 启用Gzip压缩</label><br/>
                                     <label><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式</label>
+                                </td></tr>
+                        </table>
+                        <div class="cfse-card" style="margin:16px 0 0;background:#fff;border:1px solid #dcdcde;border-radius:4px;padding:16px;">
+                            <h2 style="margin-top:0;">☁️ 自托管 CMS（Cloudflare Worker + R2 + D1）</h2>
+                            <p class="description">这张卡只与「自托管 CMS」有关：平台凭证、站点地址、发布行为、缓存策略。<b>纯静态托管（s3 / local / ftp / webdav / git 型）用不到它</b> —— 各自的凭证在下面的「🎯 托管目标」里逐个配。</p>
+                            <table class="form-table">
+                            <tr><th><label for="cf_account_id">Account ID</label></th>
+                                <td><input type="text" id="cf_account_id" name="cf_account_id" value="<?php echo esc_attr($this->config['account_id']); ?>" class="regular-text" />
+                                    <p class="description">Cloudflare仪表盘右侧获取</p></td></tr>
+                            <tr><th><label for="cf_api_token">API Token</label></th>
+                                <td><input type="password" id="cf_api_token" name="cf_api_token" value="<?php echo esc_attr($this->config['api_token']); ?>" class="regular-text" />
+                                    <p class="description">需要 D1:Edit, R2:Edit, Account:Read 权限</p>
+                                    <button type="button" class="button" id="cf-test-connection">🔌 测试连接</button>
+                                    <span id="cf-test-result"></span></td></tr>
+                            <tr><th><label for="cf_r2_bucket">R2 Bucket</label></th>
+                                <td><input type="text" id="cf_r2_bucket" name="cf_r2_bucket" value="<?php echo esc_attr($this->config['r2_bucket']); ?>" class="regular-text" /></td></tr>
+                            <tr><th><label for="cf_d1_database">D1 Database ID</label></th>
+                                <td><input type="text" id="cf_d1_database" name="cf_d1_database" value="<?php echo esc_attr($this->config['d1_database']); ?>" class="regular-text" /></td></tr>
+                            <tr><th><label for="cf_site_url">静态站点URL</label></th>
+                                <td><input type="url" id="cf_site_url" name="cf_site_url" value="<?php echo esc_attr($this->config['site_url']); ?>" class="regular-text" />
+                                    <p class="description">Worker 所在域名</p></td></tr>
+                            <tr><th><label for="cf_auth_key">Worker Auth Key</label></th>
+                                <td><input type="password" id="cf_auth_key" name="cf_auth_key" value="<?php echo esc_attr($this->config['auth_key']); ?>" class="regular-text" />
+                                    <p class="description">与 Worker 中 AUTH_KEY_SECRET 相同</p></td></tr>
+                            <tr><th>发布行为</th>
+                                <td>
+                                    <p class="description">控制「在 WP 侧保存 / 发布文章」时自动做什么。<b>两项独立、默认都不勾</b> —— 都不勾时 WP 侧保存文章不动远端（内容由 Worker 后台或第三方编辑器如 Obsidian 管理）。<b>「同步到 D1」已移到下面的「☁️ 自托管 CMS 运行时」</b>（那属于 Worker 侧行为）。</p>
+                                    <label><input type="checkbox" name="cf_gen_static" value="1" id="cf-gen-static" <?php checked($this->config['gen_static']); ?> /> ① <b>生成静态文件</b>（渲染落盘到 <code>cfse-static/</code>，结构与 R2 同构；「纯静态托管」用它 —— 整目录搬到任意对象存储即成站）</label><br/>
+                                    <label><input type="checkbox" name="cf_publish_remote" value="1" id="cf-pub-remote" <?php checked($this->config['publish_remote']); ?> onchange="if(this.checked){var g=document.getElementById('cf-gen-static'); if(g) g.checked=true;}" /> ② <b>上传到远端</b>（R2 单页 + 清缓存；<b>勾选它等于同时启用 ②</b>）</label>
+                                    <p class="description" style="margin-top:4px;">说明：<b>md 文章只写 D1、不上传 R2 单页</b> —— 单页由 Worker 渲染（R2 未命中时按需渲染并回填）。只勾「上传到远端」而没勾「同步到 D1」时，Worker 端列表/后台看不到该篇（列表读 D1）。
                                 </td></tr>
                             <tr><th>⚙️ 自托管 CMS 运行时<br/><span style="font-weight:400;font-size:11px;color:#646970;">仅 cfse-worker 目标</span></th>
                                 <td>
@@ -778,7 +781,8 @@ public function get_config() {
                                         </script>
                                     </div>
                                 </td></tr>
-                        </table>
+                            </table>
+                        </div>
                         <div class="cfse-card" style="margin:16px 0 0;background:#fff;border:1px solid #dcdcde;border-radius:4px;padding:16px;">
                             <h2 style="margin-top:0;">🎯 托管目标</h2>
                             <p class="description">先选<b>模板</b>（= 托管方，决定能力上限：Cloudflare 支持 R2/D1/渲染/清缓存，S3 与本地目录只支持写文件），
@@ -864,7 +868,7 @@ public function get_config() {
                                       '<input type="password" autocomplete="new-password" spellcheck="false" name="cf_hosting_targets[' + idx + '][secret_key]" style="width:100%;margin-top:2px;" placeholder="Secret Key（不会自动填充）" />' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][public_url]" style="width:100%;margin-top:2px;" placeholder="public_url：站点访问地址" />' +
                                       '<select name="cf_hosting_targets[' + idx + '][path_style]" style="width:100%;margin-top:2px;"><option value="auto">寻址方式：自动</option><option value="path">path-style</option><option value="virtual">virtual-host</option></select>' +
-                                    '</div></td>' +
+                                    '</div>' +
                                   '<span class="cfse-f-github" style="display:none;">' +
                                     '<input type="text" name="cf_hosting_targets[' + idx + '][repo]" style="width:100%;margin-top:2px;" placeholder="仓库 owner/name" />' +
                                     '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][token]" style="width:100%;margin-top:2px;" placeholder="GitHub Token（需 repo 权限）" />' +
@@ -1077,6 +1081,8 @@ public function get_config() {
                     </div>
 
                     <div class="cfse-card" style="margin-top:16px;background:#fff;border:1px solid #dcdcde;border-radius:4px;padding:12px;">
+                        <hr style="margin:22px 0 12px;border:0;border-top:2px solid #dcdcde;" />
+                        <p style="font-weight:600;font-size:13px;margin:0 0 8px;color:#1d2327;">☁️ Worker 端相关（仅自托管 CMS）</p>
                         <h3 style="margin-top:0;">☁️ 与 Worker 同步（拉取）</h3>
                         <p class="description">
                             把「Worker 端诞生」的文章（<code>wp_id</code> 为时间戳形态 —— 即 Worker 后台 / 第三方编辑器新建的）拉回 WP 编辑。<br/>
