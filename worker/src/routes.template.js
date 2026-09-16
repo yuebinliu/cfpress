@@ -127,9 +127,14 @@ export async function handleRequest(request, env) {
         if (!providedKey || !validKey || providedKey !== validKey) {
             return new Response('Unauthorized', { status: 401 });
         }
-        const list = await env.R2_BUCKET.list({ prefix: 'style/' });
+        // ?prefix=（诊断用：可列任意前缀，默认 style/ 保持原行为）；?limit= 1~1000（默认 100）
+        const prefixParam = url.searchParams.get('prefix');
+        const prefix = (prefixParam === null || prefixParam === '') ? 'style/' : prefixParam;
+        const limRaw = parseInt(url.searchParams.get('limit') || '100', 10);
+        const lim = (limRaw > 0 && limRaw <= 1000) ? limRaw : 100;
+        const list = await env.R2_BUCKET.list({ prefix: prefix, limit: lim });
         const items = (list.objects || []).map(function (o) { return { key: o.key, size: o.size }; });
-        return new Response(JSON.stringify({ items: items }), {
+        return new Response(JSON.stringify({ prefix: prefix, truncated: !!list.truncated, items: items }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
         });
@@ -246,14 +251,17 @@ export async function handleRequest(request, env) {
         return await handleDelete(request, env);
     }
 
-    // 静态资源（图片/css/js/字体等）
-    if (path.match(/\.(css|js|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|eot)$/)) {
+    // 静态资源（图片/css/js/字体/文档等）
+    //   注意：未命中时**不直接 404**，而是继续往下匹配（可能是 slug 正好带后缀，或显式 index.html）
+    if (path.match(/\.(css|js|png|jpg|jpeg|gif|svg|webp|avif|ico|woff2?|ttf|eot|html?|xml|txt|json|map|webmanifest|pdf)$/)) {
         const file = await getFromR2(env.R2_BUCKET, r2KeyFromPath(path));
         if (file) {
+            const isDoc = /\.html?$/i.test(path);
             return new Response(file.body, {
                 headers: {
                     'Content-Type': file.contentType || getContentType(path),
-                    'Cache-Control': `public, max-age=${CACHE_TTL.STATIC}, immutable`,
+                    // HTML 会被重新生成（模板/标题变化），不适合 immutable
+                    'Cache-Control': isDoc ? 'public, max-age=300' : `public, max-age=${CACHE_TTL.STATIC}, immutable`,
                 }
             });
         }
@@ -261,7 +269,17 @@ export async function handleRequest(request, env) {
             const response = await fetch(env.WORDPRESS_URL + path);
             if (response.ok) return response;
         }
-        return new Response('Not Found', { status: 404 });
+        // 落到后面的分支（单页 / 归档 / 兜底 404）
+    }
+
+    // 目录省略尾斜杠：/foo → 301 /foo/（仅当 R2 里确实有 foo/index.html，避免无谓跳转）
+    if (path !== '/' && !path.endsWith('/') && !/\.[a-zA-Z0-9]+$/.test(path)) {
+        try {
+            const probe = await env.R2_BUCKET.head(r2KeyFromPath(path + '/index.html'));
+            if (probe) {
+                return new Response(null, { status: 301, headers: { 'Location': url.origin + path + '/' + (url.search || '') } });
+            }
+        } catch (e) { /* 忽略，继续正常匹配 */ }
     }
 
     // ============================================
@@ -817,6 +835,15 @@ function getContentType(path) {
     const types = {
         'css': 'text/css',
         'js': 'application/javascript',
+        'html': 'text/html; charset=utf-8',
+        'htm': 'text/html; charset=utf-8',
+        'xml': 'application/xml; charset=utf-8',
+        'txt': 'text/plain; charset=utf-8',
+        'json': 'application/json; charset=utf-8',
+        'map': 'application/json; charset=utf-8',
+        'webmanifest': 'application/manifest+json; charset=utf-8',
+        'avif': 'image/avif',
+        'pdf': 'application/pdf',
         'png': 'image/png',
         'jpg': 'image/jpeg',
         'jpeg': 'image/jpeg',
