@@ -68,6 +68,8 @@ if (is_admin() && file_exists($editor_path)) {
 // 主类
 // ============================================
 class CF_Static_Export_Pro {
+    /** 文章所属站点的 meta 键（可见字段，便于后台「自定义字段」手动改；多值 = 多个站点） */
+    const META_SITE = 'cfse_site';
 
     private static $instance = null;
     private static $deleted_post_ids = array();
@@ -130,6 +132,7 @@ class CF_Static_Export_Pro {
 		add_action('admin_init', array($this, 'register_settings'));
 		add_action('save_post', array($this, 'export_post'), 10, 3);
 		add_action('add_meta_boxes', array($this, 'add_doc_format_metabox'), 10, 2);
+		add_action('add_meta_boxes', array($this, 'add_site_metabox'), 10, 2);
 		add_action('admin_post_cfse_align_worker', array($this, 'handle_align_worker'));
 		add_action('wp_ajax_cfse_worker_status', array($this, 'ajax_worker_status'));
 		add_action('wp_ajax_cfse_test_targets', array($this, 'ajax_test_targets'));
@@ -137,6 +140,10 @@ class CF_Static_Export_Pro {
 		add_action('admin_post_cfse_deploy_git', array($this, 'handle_deploy_git'));
 		// 优先级 5：必须早于导出钩子（save_post 优先级 10），否则本次导出读到的是旧标记
 		add_action('save_post', array($this, 'save_doc_format_meta'), 5, 3);
+		add_action('save_post', array($this, 'save_site_meta'), 5, 3);
+		// 文章列表批量设置站点（每个站点一项，避免复杂弹窗）
+		add_filter('bulk_actions-edit-post', array($this, 'add_site_bulk_actions'));
+		add_filter('handle_bulk_actions-edit-post', array($this, 'handle_site_bulk_actions'), 10, 3);
 		add_filter('the_content', array($this, 'render_md_content'), 9);
 		add_action('before_delete_post', array($this, 'delete_post'));
 		add_action('trash_post', array($this, 'delete_post'));
@@ -241,6 +248,14 @@ public function get_config() {
         $templates = $this->get_hosting_templates();
         $raw = $value;   // 归一化前的输入：一致性校验与"自动修正回显"要靠它发现用户显式填的冲突（§12.4）
         $out = array();
+        // 站点 id / 目录名的分配与查重（见 §2：id 数字自增、site_dir 默认 = id、目录独占）
+        $usedIds = array(); $usedDirs = array(); $dirDup = false;
+        $nextId = function () use (&$usedIds) {
+            $max = 0;
+            foreach ($usedIds as $u) { $max = max($max, (int) $u); }
+            return (string) ($max + 1);
+        };
+        $seenDefault = false;
         foreach ($value as $t) {
             if (!is_array($t)) continue;
             // 1) 模板解析（§C1）：template 优先；仅有旧 type 时按 legacy_type 反查；未知模板丢弃（与运行期跳过一致）
@@ -254,8 +269,28 @@ public function get_config() {
             if ($tplId === '' || !isset($templates[$tplId])) continue;
             $tpl = $templates[$tplId];
             $name = isset($t['name']) ? sanitize_text_field($t['name']) : '';
-            $id = isset($t['id']) && $t['id'] !== '' ? sanitize_key($t['id']) : sanitize_title($name);
-            if ($id === '') $id = 't' . count($out);
+            // id：**数字自增**（不可变，文章 meta 用它）；旧数据里的字符串 id 迁移为数字，
+            // 原字符串存进 site_dir（目录名保持可读，产物路径不变）。
+            $oldIdRaw = isset($t['id']) ? (string) $t['id'] : '';
+            $oldId = sanitize_key($oldIdRaw);
+            $id = (string) max(0, (int) (isset($t['id']) ? $t['id'] : 0));
+            if ($id === '0') {
+                $id = $nextId();
+            } else {
+                while (in_array($id, $usedIds, true)) { $id = (string) max((int) $id, (int) $nextId()); }
+            }
+            $usedIds[] = $id;
+            // site_dir：目录名（仅英文/数字/_/-），留空默认 = 旧字符串 id（若有）否则数字 id
+            $dirIn = isset($t['site_dir']) ? trim((string) $t['site_dir']) : '';
+            if ($dirIn === '') $dirIn = ($oldId !== '' && !ctype_digit($oldId)) ? $oldId : $id;
+            $siteDir = preg_replace('/[^0-9a-zA-Z_-]/', '', $dirIn);
+            if ($siteDir === '') $siteDir = $id;
+            // 目录查重：重复则自动改为 <数字id>（并记入 adjustments 供回显）
+            if (isset($usedDirs[$siteDir])) {
+                $siteDir = $id;
+                $dirDup = true;
+            }
+            $usedDirs[$siteDir] = $id;
             // 2) 能力归一化（§12.7）：模板不支持 ⇒ false；未声明 ⇒ 模板默认；已声明 ⇒ 取值（受上限约束）
             $capsIn = (isset($t['capabilities']) && is_array($t['capabilities'])) ? $t['capabilities'] : array();
             $defCaps = isset($tpl['defaults']['capabilities']) ? $tpl['defaults']['capabilities'] : array();
@@ -271,8 +306,12 @@ public function get_config() {
             foreach (array('md', 'static-list', 'static-only', 'backup') as $ik) {
                 if (in_array($ik, $onIntent, true) && in_array($ik, $tpl['intents'], true)) $intent[] = $ik;
             }
+            $isDefault = $seenDefault ? false : !empty($t['is_default']);
+            if ($isDefault) $seenDefault = true;
             $entry = array(
                 'id' => $id,
+                'site_dir' => $siteDir,
+                'is_default' => $isDefault,
                 'name' => $name,
                 'template' => $tplId,
                 'type' => $tpl['legacy_type'],   // C3 双写：以模板为准重算 ⇒ 正常保存不可能产生不一致
@@ -369,14 +408,10 @@ public function get_config() {
         <table class="widefat striped" id="cfse-targets" style="max-width:100%;">
             <thead><tr>
                 <th style="width:46px;">启用</th>
-                <th style="width:140px;">名称</th>
-                <th style="width:170px;">模板</th>
-                <th>端点 / 目录（按模板）</th>
-                <th style="width:130px;">Auth Key</th>
-                <th style="width:90px;">路径前缀</th>
-                <th style="width:170px;">能力</th>
-                <th style="width:170px;">意图</th>
-                <th style="width:46px;"></th>
+                <th style="width:160px;">名称</th>
+                <th style="width:150px;">模板</th>
+                <th>站点 / 目标摘要</th>
+                <th style="width:150px;">操作</th>
             </tr></thead>
             <tbody id="cfse-targets-body">
             <?php foreach ($targets as $i => $t) {
@@ -418,7 +453,32 @@ public function get_config() {
                     <?php } ?>
                 </select>
             </td>
-            <td>
+            <td class="cfse-sum">
+                <?php
+                $sumDir = $this->site_dir_of($t);
+                $sumMod = 'cfse-static/' . $sumDir . '/';
+                $sumEnd = isset($t['endpoint']) && $t['endpoint'] !== '' ? $t['endpoint'] : (isset($t['dir']) && $t['dir'] !== '' ? $t['dir'] : '');
+                ?>
+                <div><b><?php echo esc_html($sumDir); ?></b><?php if (!empty($t['is_default'])) { ?> <span style="color:#2271b1;">（默认站点）</span><?php } ?></div>
+                <div style="font-size:11px;color:#646970;overflow-wrap:anywhere;">产物 <code><?php echo esc_html($sumMod); ?></code><?php if ($sumEnd !== '') { ?><br/><?php echo esc_html($sumEnd); ?><?php } ?></div>
+            </td>
+            <td style="white-space:nowrap;">
+                <button type="button" class="button cfse-toggle-detail">⚙️ 设置</button>
+                <button type="button" class="button cfse-del-target" title="删除该目标">✕</button>
+            </td>
+        </tr>
+        <tr class="cfse-target-detail" id="cfse-detail-<?php echo (int) $i; ?>" style="display:none;">
+            <td colspan="5" style="background:#f6f7f7;border-left:3px solid #72aee6;">
+                <div style="font-size:12px;color:#646970;margin-bottom:6px;">
+                    <b>站点目录</b>（仅英文/数字/下划线/连字符；产物写到 <code>cfse-static/&lt;目录&gt;/</code>；留空 = 站点 id；<b>保存后锁定</b>）
+                </div>
+                <label style="font-size:12px;">
+                    目录名 <input type="text" name="<?php echo esc_attr($n); ?>[site_dir]" value="<?php echo esc_attr(isset($t['site_dir']) ? $t['site_dir'] : ''); ?>" style="width:160px;" placeholder="留空 = <?php echo esc_attr(isset($t['id']) ? $t['id'] : ''); ?>" />
+                    &nbsp;<input type="hidden" name="<?php echo esc_attr($n); ?>[id]" value="<?php echo esc_attr(isset($t['id']) ? $t['id'] : ''); ?>" />
+                    站点 id：<code><?php echo esc_html(isset($t['id']) ? $t['id'] : ''); ?></code>
+                    &nbsp;<label><input type="checkbox" name="<?php echo esc_attr($n); ?>[is_default]" value="1" <?php checked(!empty($t['is_default'])); ?> /> 作为<b>默认站点</b>（未选站点的文章走它；全站只能有一个）</label>
+                </label>
+                <hr style="margin:8px 0;" />
                 <input type="text" class="cfse-f-endpoint" name="<?php echo esc_attr($n); ?>[endpoint]" value="<?php echo esc_attr(isset($t['endpoint']) ? $t['endpoint'] : ''); ?>" style="width:100%;" placeholder="https://你的站点" />
                 <input type="text" class="cfse-f-dir" name="<?php echo esc_attr($n); ?>[dir]" value="<?php echo esc_attr(isset($t['dir']) ? $t['dir'] : ''); ?>" style="width:100%;margin-top:2px;" placeholder="留空 = <?php echo esc_attr(CFSE_LOCAL_DIR); ?>" />
                 <div class="cfse-f-s3" style="margin-top:4px;display:none;">
@@ -477,24 +537,28 @@ public function get_config() {
                     <span class="description" style="font-size:11px;">MKCOL 建目录 + PUT 上传；坚果云请用「应用密码」。<b>语义：增量覆盖</b> —— 只上传、<b>不删除</b>远端多余文件（清理的 PROPFIND 递归删除尚未实现）。</span>
                 </div>
             </td>
-            <td><input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></td>
-            <td><input type="text" name="<?php echo esc_attr($n); ?>[path_prefix]" value="<?php echo esc_attr(isset($t['path_prefix']) ? $t['path_prefix'] : ''); ?>" style="width:100%;" placeholder="（暂未使用）" /></td>
-            <td style="white-space:nowrap;font-size:12px;">
+            <div style="margin-top:6px;"><b style="font-size:12px;">Auth Key</b>
+                <input type="text" class="cfse-f-key" name="<?php echo esc_attr($n); ?>[auth_key]" value="<?php echo esc_attr(isset($t['auth_key']) ? $t['auth_key'] : ''); ?>" style="width:100%;" /></div>
+            <div style="margin-top:6px;"><b style="font-size:12px;">路径前缀</b> <span class="description" style="font-size:11px;">（产物写到该目标的哪个子目录；git 型部署时只清理该前缀之下，保护仓库其它内容）</span>
+                <input type="text" name="<?php echo esc_attr($n); ?>[path_prefix]" value="<?php echo esc_attr(isset($t['path_prefix']) ? $t['path_prefix'] : ''); ?>" style="width:100%;" placeholder="留空 = 目标根目录" /></div>
+            <div style="margin-top:6px;white-space:nowrap;font-size:12px;">
                 <?php foreach (array('r2' => '静态文件', 'd1' => '文章数据', 'render' => '渲染(render)', 'cache' => '清缓存') as $ck => $clabel) { ?>
                     <label<?php if (empty($tpl['capabilities'][$ck])) echo ' style="opacity:.45;" title="该模板不支持此能力"'; ?>>
                         <input type="checkbox" name="<?php echo esc_attr($n); ?>[capabilities][<?php echo esc_attr($ck); ?>]" value="1" <?php checked(!empty($caps[$ck])); ?><?php disabled(empty($tpl['capabilities'][$ck])); ?> /> <?php echo esc_html($clabel); ?>
                     </label><br/>
                 <?php } ?>
             </td>
-            <td style="white-space:nowrap;font-size:12px;">
+            </div>
+            <div style="margin-top:6px;white-space:nowrap;font-size:12px;">
+                <b style="font-size:12px;">意图</b>
                 <?php foreach (array('md' => '服务 md', 'static-list' => '动态列表', 'static-only' => '静态 HTML', 'backup' => '备份') as $ik => $ilabel) { ?>
-                    <label><input type="checkbox" name="<?php echo esc_attr($n); ?>[intent][<?php echo esc_attr($ik); ?>]" value="1" <?php checked(in_array($ik, $intent, true)); ?> /> <?php echo esc_html($ilabel); ?></label><br/>
+                    <label><input type="checkbox" name="<?php echo esc_attr($n); ?>[intent][<?php echo esc_attr($ik); ?>]" value="1" <?php checked(in_array($ik, $intent, true)); ?> /> <?php echo esc_html($ilabel); ?></label>
                 <?php } ?>
+            </div>
             </td>
-            <td><button type="button" class="button cfse-del-target" title="删除该目标">✕</button></td>
         </tr>
         <?php if (!empty($warns)) { ?>
-        <tr class="cfse-row-warn"><td colspan="9" style="background:#fff8e5;border-left:3px solid #dba617;padding:8px 12px;">
+        <tr class="cfse-row-warn"><td colspan="5" style="background:#fff8e5;border-left:3px solid #dba617;padding:8px 12px;">
             <?php foreach ($warns as $w) { ?>
                 <div style="margin:2px 0;">⚠ <?php echo esc_html($w['message']); ?>
                 <?php if (!empty($w['fix']) && is_array($w['fix'])) { ?>
@@ -736,6 +800,18 @@ public function get_config() {
                               //   cloudflare ⇒ endpoint + auth_key
                               //   s3         ⇒ endpoint + s3 组（隐藏 auth_key）
                               //   local      ⇒ dir（隐藏 endpoint / auth_key / s3）
+                              // 「⚙️ 设置」展开/收起详情行（互斥：同时只展开一个）
+                              function bindDetail(tr){
+                                var btn = tr.querySelector('.cfse-toggle-detail');
+                                if (!btn) return;
+                                btn.addEventListener('click', function(){
+                                  var next = tr.nextElementSibling;
+                                  if (!next || !next.classList.contains('cfse-target-detail')) return;
+                                  var showing = next.style.display !== 'none';
+                                  Array.prototype.forEach.call(body.querySelectorAll('tr.cfse-target-detail'), function(d){ d.style.display = 'none'; });
+                                  next.style.display = showing ? 'none' : 'table-row';
+                                });
+                              }
                               function syncRow(tr){
                                 var tpl = tr.querySelector('.cfse-target-template');
                                 var ep = tr.querySelector('.cfse-f-endpoint');
@@ -765,7 +841,7 @@ public function get_config() {
                                 if (del) del.addEventListener('click', function(){ tr.parentNode.removeChild(tr); });
                                 syncRow(tr);
                               }
-                              Array.prototype.forEach.call(body.querySelectorAll('tr.cfse-target-row'), bind);
+                              Array.prototype.forEach.call(body.querySelectorAll('tr.cfse-target-row'), function(tr){ bind(tr); bindDetail(tr); });
                               var addBtn = document.getElementById('cfse-add-target');
                               if (addBtn) addBtn.addEventListener('click', function(){
                                 var tmp = document.createElement('tbody');
@@ -773,7 +849,14 @@ public function get_config() {
                                   '<td><input type="checkbox" name="cf_hosting_targets[' + idx + '][enabled]" value="1" checked /></td>' +
                                   '<td><input type="text" name="cf_hosting_targets[' + idx + '][name]" style="width:100%;" placeholder="例如：备份站" /><input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /></td>' +
                                   '<td><select name="cf_hosting_targets[' + idx + '][template]" class="cfse-target-template" style="width:100%;"><option value="cloudflare">Cloudflare（Worker + R2 + D1）</option><option value="s3">S3 兼容对象存储</option><option value="local">本地目录</option><option value="github">GitHub Pages（git 推送）</option><option value="git">通用 git（Gitee/Gitea）</option><option value="gitlab">GitLab Pages</option><option value="netlify">Netlify</option><option value="vercel">Vercel</option><option value="ftp">FTP / FTPS</option><option value="webdav">WebDAV（坚果云等）</option></select></td>' +
-                                  '<td><input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" />' +
+                                  '<td class="cfse-sum"><div><b class="cfse-sum-dir">（保存后显示）</b></div><div style="font-size:11px;color:#646970;">目录与站点 id 将在保存后生成</div></td>' +
+                                  '<td style="white-space:nowrap;"><button type="button" class="button cfse-toggle-detail">⚙️ 设置</button> <button type="button" class="button cfse-del-target" title="删除该目标">✕</button></td>' +
+                                '</tr>' +
+                                '<tr class="cfse-target-detail" style="background:#f6f7f7;"><td colspan="5" style="border-left:3px solid #72aee6;">' +
+                                  '<div style="font-size:12px;color:#646970;margin-bottom:6px;"><b>站点目录</b>（仅英文/数字/下划线/连字符；留空 = 站点 id；保存后锁定）</div>' +
+                                  '<label style="font-size:12px;">目录名 <input type="text" name="cf_hosting_targets[' + idx + '][site_dir]" style="width:160px;" placeholder="留空 = 自动 id" /> &nbsp;<input type="hidden" name="cf_hosting_targets[' + idx + '][id]" value="" /> &nbsp;<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][is_default]" value="1" /> 作为默认站点</label></label>' +
+                                  '<hr style="margin:8px 0;" />' +
+                                  '<input type="text" class="cfse-f-endpoint" name="cf_hosting_targets[' + idx + '][endpoint]" style="width:100%;" placeholder="https://你的站点" /><input type="text" class="cfse-f-dir" name="cf_hosting_targets[' + idx + '][dir]" style="width:100%;margin-top:2px;" placeholder="留空 = 默认本地目录" />' +
                                     '<div class="cfse-f-s3" style="margin-top:4px;display:none;">' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][bucket]" style="width:49%;" placeholder="bucket 名" />' +
                                       '<input type="text" name="cf_hosting_targets[' + idx + '][region]" style="width:49%;" placeholder="region（R2 填 auto）" value="auto" />' +
@@ -818,25 +901,27 @@ public function get_config() {
                                     '<input type="text" name="cf_hosting_targets[' + idx + '][user]" style="width:49%;margin-top:2px;" placeholder="用户名" />' +
                                     '<input type="password" autocomplete="new-password" name="cf_hosting_targets[' + idx + '][pass]" style="width:49%;margin-left:2%;margin-top:2px;" placeholder="密码" />' +
                                   '</span>' +
-                                  '<td><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></td>' +
-                                  '<td><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" /></td>' +
-                                  '<td style="white-space:nowrap;font-size:12px;">' +
+                                  '<div style="margin-top:6px;"><b style="font-size:12px;">Auth Key</b><input type="text" class="cfse-f-key" name="cf_hosting_targets[' + idx + '][auth_key]" style="width:100%;" /></div>' +
+                                  '<div style="margin-top:6px;"><b style="font-size:12px;">路径前缀</b><input type="text" name="cf_hosting_targets[' + idx + '][path_prefix]" style="width:100%;" placeholder="留空 = 目标根目录" /></div>' +
+                                  '<div style="margin-top:6px;white-space:nowrap;font-size:12px;">' +
                                     '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][r2]" value="1" checked /> 静态文件</label><br/>' +
                                     '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][d1]" value="1" checked /> 文章数据</label><br/>' +
                                     '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][render]" value="1" checked /> 渲染(render)</label><br/>' +
                                     '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][capabilities][cache]" value="1" checked /> 清缓存</label>' +
-                                  '</td>' +
-                                  '<td style="white-space:nowrap;font-size:12px;">' +
+                                  '</div>' +
+                                  '<div style="margin-top:6px;white-space:nowrap;font-size:12px;"><b style="font-size:12px;">意图</b>' +
                                     '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][intent][md]" value="1" checked /> 服务 md</label><br/>' +
                                     '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][intent][static-list]" value="1" checked /> 动态列表</label><br/>' +
                                     '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][intent][static-only]" value="1" /> 静态 HTML</label><br/>' +
                                     '<label><input type="checkbox" name="cf_hosting_targets[' + idx + '][intent][backup]" value="1" /> 备份</label>' +
-                                  '</td>' +
-                                  '<td><button type="button" class="button cfse-del-target">✕</button></td>' +
-                                '</tr>';
+                                  '</div>' +
+                                  '</td></tr>';
                                 var tr = tmp.firstElementChild;
                                 body.appendChild(tr);
                                 bind(tr);
+                                bindDetail(tr);
+                                var det = tr.nextElementSibling;
+                                if (det && det.classList.contains('cfse-target-detail')) det.style.display = 'table-row';
                                 idx++;
                               });
                               var testBtn = document.getElementById('cfse-test-targets');
@@ -921,7 +1006,8 @@ public function get_config() {
                             与上面的「📦 内容发布」的区别：那是<b>逐篇文章</b>的生成/上传；这里是<b>整个目录树</b>——用于把外部生成器的产物直接托管出去。
                         </p>
                         <p style="margin:8px 0 4px;">
-                            <label style="font-size:12px;">产物目录：<input type="text" id="cfse-site-dir" class="regular-text" style="width:70%;" value="<?php echo esc_attr(CFSE_LOCAL_DIR); ?>" /></label>
+                            <label style="font-size:12px;">产物目录：<input type="text" id="cfse-site-dir" class="regular-text" style="width:70%;" value="<?php echo esc_attr(CFSE_LOCAL_DIR); ?>" placeholder="留空 = 按所选站点的目录" />
+                                <span class="description" style="font-size:11px;">多站点下留空即可：会按「🎯 托管目标」里各站点的目录逐个发布；填了则只发布该目录（兼容旧用法）。</span></label>
                         </p>
                         <p class="description" style="font-size:11px;">
                             仅允许 <code><?php echo esc_html(CFSE_LOCAL_DIR); ?></code> 与 <code><?php echo esc_html(WP_CONTENT_DIR); ?></code> 下的子目录（<b>不含 plugins / themes / mu-plugins 源码目录</b>）。
@@ -1308,6 +1394,8 @@ private function get_post_storage_path($post) {
         $artifact['html'] = $html;
         // get_post_storage_path() 已返回含 index.html 的完整文件路径（如 made/index.html）
         $artifact['path'] = $this->get_post_storage_path($post);
+        // 该篇所属站点（meta cfse_site；空则默认站点；再空则空数组 ⇒ 不生成不发布）
+        $artifact['sites'] = $this->get_post_sites($post->ID);
         return $artifact;
     }
 
@@ -1316,18 +1404,29 @@ private function get_post_storage_path($post) {
      * 目录结构与 R2 key 同构：WP_CONTENT_DIR/cfse-static/<storagePath>
      */
     private function write_artifact_local($artifact) {
-        $target = CFSE_LOCAL_DIR . '/' . ltrim($artifact['path'], '/');
-        $dir = dirname($target);
-        if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-            throw new Exception('本地目录创建失败: ' . $dir);
+        // 多站点：同一份 HTML（渲染一次）写到该篇所属的每个站点目录 CFSE_LOCAL_DIR/<site_dir>/…
+        $sites = (isset($artifact['sites']) && is_array($artifact['sites'])) ? $artifact['sites'] : array();
+        $pid = isset($artifact['post']) ? $artifact['post']->ID : '?';
+        if (empty($sites)) {
+            $this->log("文章 {$pid} 未指定站点且未设默认站点，跳过本地生成（给文章选站点，或在托管目标里标记「默认站点」）", 'WARNING');
+            return array();
         }
-        $guard = CFSE_LOCAL_DIR . '/index.php';
-        if (!file_exists($guard)) @file_put_contents($guard, "<?php // Silence is golden.\n");
-        if (@file_put_contents($target, $artifact['html']) === false) {
-            throw new Exception('本地写入失败: ' . $target);
+        $written = array();
+        foreach ($sites as $site) {
+            $target = $this->site_local_root($site) . '/' . ltrim($artifact['path'], '/');
+            $dir = dirname($target);
+            if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+                throw new Exception('本地目录创建失败: ' . $dir);
+            }
+            $guard = dirname($this->site_local_root($site)) . '/index.php';
+            if (!file_exists($guard)) @file_put_contents($guard, "<?php // Silence is golden.\n");
+            if (@file_put_contents($target, $artifact['html']) === false) {
+                throw new Exception('本地写入失败: ' . $target);
+            }
+            $written[] = $target;
         }
-        $this->log("本地生成: {$target} (" . strlen($artifact['html']) . " 字节)", 'INFO');
-        return $target;
+        $this->log('本地生成：' . count($written) . ' 个站点 (' . strlen($artifact['html']) . ' 字节/份) → ' . implode(' | ', $written), 'INFO');
+        return $written;
     }
 
     /**
@@ -1345,7 +1444,7 @@ private function get_post_storage_path($post) {
      * @param array       $artifact    build_post_artifact()/build_post_meta() 的返回值（后者须自带 path）
      * @param string|null $html_source 非 null 时用它作为正文（「上传到远端」= 用本地已生成的 HTML）
      */
-    private function publish_artifact($artifact, $html_source = null, $write_d1 = true) {
+    private function publish_artifact($artifact, $html_source = null, $write_d1 = true, $only_ids = null) {
         $post = $artifact['post'];
         $html = $html_source === null ? (isset($artifact['html']) ? $artifact['html'] : '') : $html_source;
         if ($html === '') throw new Exception('正文为空，无法发布');
@@ -1372,11 +1471,11 @@ private function get_post_storage_path($post) {
             : $this->get_content_format($post->ID);
         if ($art_fmt === 'md') {
             // md 文章：不上传 R2，并清除已存在的旧单页（交给 Worker 按需渲染最新内容）
-            $this->invalidate_md_single_page($post);
+            $this->invalidate_md_single_page($post, $only_ids);
         } else {
             $uploaded = false;
             for ($i = 0; $i < $this->config['max_retries']; $i++) {
-                if ($this->upload_to_r2_via_worker($r2_path, $html, $content_type, $content_encoding)) {
+                if ($this->upload_to_r2_via_worker($r2_path, $html, $content_type, $content_encoding, $only_ids)) {
                     $uploaded = true;
                     break;
                 }
@@ -1391,7 +1490,7 @@ private function get_post_storage_path($post) {
         if ($write_d1) {
             $written = false;
             for ($i = 0; $i < $this->config['max_retries']; $i++) {
-                if ($this->write_to_d1($artifact['post_data'], $artifact['categories'], $artifact['tags'])) {
+                if ($this->write_to_d1($artifact['post_data'], $artifact['categories'], $artifact['tags'], $only_ids)) {
                     $written = true;
                     break;
                 }
@@ -1404,7 +1503,7 @@ private function get_post_storage_path($post) {
         }
 
         // 发布成功即按设置页开关清除相关缓存（sidebar 默认清；列表页第一页默认关，靠缓存自然过期）
-        $this->purge_page_caches();
+        $this->purge_page_caches($only_ids);
 
         return true;
     }
@@ -1414,10 +1513,10 @@ private function get_post_storage_path($post) {
      * 否则访问到的是上一次渲染的旧内容（D1 已更新、页面却没变）。
      * 清掉后由 Worker 的「单页按需渲染」用最新 D1 内容现场渲染并回填。
      */
-    private function invalidate_md_single_page($post) {
+    private function invalidate_md_single_page($post, $only_ids = null) {
         if ($this->get_content_format($post->ID) !== 'md') return;
         $path = $this->get_post_storage_path($post);
-        $this->delete_from_r2(array($path, $path . '.gz'));
+        $this->delete_from_r2(array($path, $path . '.gz'), $only_ids);
         $this->log("文章 {$post->ID} 为 md：已清除旧单页（下次访问由 Worker 按需渲染最新内容）", 'INFO');
     }
 
@@ -1428,17 +1527,25 @@ private function get_post_storage_path($post) {
      *   ③ $pub_remote  上传 R2（md 文章在 publish_artifact 内部跳过 R2）+ 清缓存；写不写 D1 由 ① 决定
      */
     private function export_post_by_switches($post, $sync_d1, $gen_static, $pub_remote) {
+        // 站点集合：决定「生成到哪些目录」与「发布到哪些目标」
+        $sites = $this->get_post_sites($post->ID);
+        $onlyIds = array();
+        foreach ($sites as $st) $onlyIds[] = $st['id'];
+        if (empty($onlyIds)) {
+            $this->log("文章 {$post->ID} 未指定站点且未设默认站点，跳过导出（内容只留在本地 WP）", 'INFO');
+            return true;
+        }
         $artifact = null;
         if ($gen_static || $pub_remote) {
             $artifact = $this->build_post_artifact($post);
             if ($gen_static) $this->write_artifact_local($artifact);
         }
         if ($pub_remote) {
-            return $this->publish_artifact($artifact, null, $sync_d1);
+            return $this->publish_artifact($artifact, null, $sync_d1, $onlyIds);
         }
         if ($sync_d1) {
             $meta = $this->build_post_meta($post);
-            $ok = $this->write_to_d1($meta['post_data'], $meta['categories'], $meta['tags']);
+            $ok = $this->write_to_d1($meta['post_data'], $meta['categories'], $meta['tags'], $onlyIds);
             $this->log("文章 {$post->ID} 仅同步到 D1：" . ($ok ? '成功' : '失败'), $ok ? 'INFO' : 'ERROR');
             if ($ok) $this->invalidate_md_single_page($post);   // md：清了旧单页，访问时才能看到新内容
             return $ok;
@@ -1480,8 +1587,8 @@ private function get_post_storage_path($post) {
             return false;
         }
         try {
-            $this->write_artifact_local($this->build_post_artifact($post));
-            return true;
+            $written = $this->write_artifact_local($this->build_post_artifact($post));
+            return !empty($written);
         } catch (Throwable $e) {
             $this->log("文章 {$post_id} 本地生成失败: " . $e->getMessage(), 'ERROR');
             return false;
@@ -1500,25 +1607,35 @@ private function get_post_storage_path($post) {
             return false;
         }
         $path = $this->get_post_storage_path($post);
-        $local = CFSE_LOCAL_DIR . '/' . ltrim($path, '/');
-        if (!is_readable($local)) {
-            $this->log("文章 {$post_id} 本地产物不存在，跳过上传（请先「生成到本地」）: {$local}", 'WARNING');
+        $sites = $this->get_post_sites($post->ID);
+        if (empty($sites)) {
+            $this->log("文章 {$post_id} 未指定站点且未设默认站点，跳过上传（给文章选站点，或标记默认站点）", 'WARNING');
             return false;
         }
-        $html = (string) @file_get_contents($local);
-        if ($html === '') {
-            $this->log("文章 {$post_id} 本地产物为空，跳过上传: {$local}", 'ERROR');
-            return false;
+        $okAny = false;
+        foreach ($sites as $site) {
+            $local = $this->site_local_root($site) . '/' . ltrim($path, '/');
+            if (!is_readable($local)) {
+                $this->log("文章 {$post_id} 站点 " . $this->site_dir_of($site) . " 的本地产物不存在，跳过该站点（请先「生成到本地」）: {$local}", 'WARNING');
+                continue;
+            }
+            $html = (string) @file_get_contents($local);
+            if ($html === '') {
+                $this->log("文章 {$post_id} 站点 " . $this->site_dir_of($site) . " 的本地产物为空，跳过: {$local}", 'ERROR');
+                continue;
+            }
+            try {
+                // 元数据（D1 行）以 WP 当前状态为准，正文用本地已生成的 HTML；只对该站点的目标发布
+                $artifact = $this->build_post_meta($post);
+                $artifact['path'] = $path;
+                $artifact['sites'] = $sites;
+                $this->publish_artifact($artifact, $html, true, array($site['id']));
+                $okAny = true;
+            } catch (Throwable $e) {
+                $this->log("文章 {$post_id} 站点 " . $this->site_dir_of($site) . " 上传失败: " . $e->getMessage(), 'ERROR');
+            }
         }
-        try {
-            // 元数据（D1 行）以 WP 当前状态为准，正文用本地已生成的 HTML
-            $artifact = $this->build_post_meta($post);
-            $artifact['path'] = $path;
-            return $this->publish_artifact($artifact, $html);
-        } catch (Throwable $e) {
-            $this->log("文章 {$post_id} 上传失败: " . $e->getMessage(), 'ERROR');
-            return false;
-        }
+        return $okAny;
     }
 
     // ============================================
@@ -1527,6 +1644,159 @@ private function get_post_storage_path($post) {
     // ============================================
     // 文章编辑页「📝 文档格式」面板（Markdown 原稿标记）
     // ============================================
+    // ============================================
+    // 文章编辑页「🌐 站点」面板（多站点归属）
+    // ============================================
+
+    /** 文章显式标记的站点 id（**不回落默认站点** —— 面板要如实显示"未选"） */
+    private function get_post_site_ids_raw($post_id) {
+        $raw = get_post_meta($post_id, self::META_SITE, false);
+        $ids = array();
+        foreach ((array) $raw as $v) {
+            if (is_array($v)) { foreach ($v as $x) $ids[] = (string) $x; }
+            elseif (is_string($v) && strpos($v, ',') !== false) { foreach (explode(',', $v) as $x) $ids[] = trim($x); }
+            elseif ($v !== '' && $v !== null) { $ids[] = (string) $v; }
+        }
+        return array_values(array_unique(array_filter($ids, 'strlen')));
+    }
+
+    public function add_site_metabox($post_type = '', $post = null) {
+        if ($post_type !== 'post') return;
+        add_meta_box('cfse_site', '🌐 站点', array($this, 'render_site_metabox'), 'post', 'side', 'default');
+    }
+
+    public function render_site_metabox($post) {
+        if (!$post || $post->post_type !== 'post') return;
+        $targets = $this->get_hosting_targets(true);          // 含停用（显示但禁用）
+        $checked = $this->get_post_site_ids_raw($post->ID);
+        $def = $this->default_site();
+        $defName = '';
+        foreach ($targets as $t) {
+            if ($def && (string) $t['id'] === (string) $def['id']) $defName = (string) $t['name'];
+        }
+        // 摘要
+        $names = array();
+        foreach ($targets as $t) {
+            if (in_array((string) $t['id'], $checked, true)) $names[] = $t['name'];
+        }
+        $summary = empty($names)
+            ? ($def ? ('未选择 → 使用默认站点「' . $defName . '」') : '未选择（且无默认站点 → 本篇不生成、不发布）')
+            : implode('、', $names);
+        ?>
+        <?php wp_nonce_field('cfse_site_' . $post->ID, 'cfse_site_nonce'); ?>
+        <div id="cfse-site-box">
+            <p style="margin:4px 0;"><b>当前：</b><span id="cfse-site-summary"><?php echo esc_html($summary); ?></span></p>
+            <button type="button" class="button" id="cfse-site-open">⚙️ 设置</button>
+            <p class="description" style="font-size:11px;margin-top:6px;">
+                选中的站点都会**生成并发布**（同一篇可多站点）；不选则走默认站点。
+                默认站点：<code><?php echo $def ? esc_html($defName . ' / ' . $this->site_dir_of($def)) : '（未设置）'; ?></code>
+            </p>
+        </div>
+        <div id="cfse-site-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100000;">
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;padding:18px 20px;border-radius:6px;min-width:340px;max-width:min(90vw,520px);max-height:80vh;overflow:auto;box-shadow:0 8px 32px rgba(0,0,0,.3);">
+                <h3 style="margin-top:0;">🌐 选择站点</h3>
+                <p class="description" style="margin:2px 0 10px;">勾选的站点都会生成产物并发布；一个都不勾 = 走默认站点。</p>
+                <?php foreach ($targets as $t) {
+                    $tid = (string) $t['id'];
+                    $dis = empty($t['enabled']);
+                    ?>
+                    <label style="display:block;margin:5px 0;<?php echo $dis ? 'opacity:.5;' : ''; ?>">
+                        <input type="checkbox" name="cfse_site[]" value="<?php echo esc_attr($tid); ?>"
+                            <?php checked(in_array($tid, $checked, true)); ?><?php disabled($dis); ?> />
+                        <?php echo esc_html($t['name']); ?>
+                        <code style="font-size:11px;"><?php echo esc_html($this->site_dir_of($t)); ?></code>
+                        <?php if (!empty($t['is_default'])) { ?><span style="color:#2271b1;">（默认）</span><?php } ?>
+                        <?php if ($dis) { ?><span style="color:#999;">（已停用）</span><?php } ?>
+                    </label>
+                <?php } ?>
+                <?php if (empty($targets)) { ?>
+                    <p>还没有站点。请到「设置 → CF 静态导出 → 🎯 托管目标」添加。</p>
+                <?php } ?>
+                <p style="text-align:right;margin-bottom:0;">
+                    <button type="button" class="button button-primary" id="cfse-site-close">完成</button>
+                </p>
+            </div>
+        </div>
+        <script>
+        (function () {
+            var open = document.getElementById('cfse-site-open');
+            var modal = document.getElementById('cfse-site-modal');
+            var close = document.getElementById('cfse-site-close');
+            if (!open || !modal) return;
+            open.addEventListener('click', function () { modal.style.display = 'block'; });
+            if (close) close.addEventListener('click', function () { modal.style.display = 'none'; });
+            modal.addEventListener('click', function (e) { if (e.target === modal) modal.style.display = 'none'; });
+            // 勾选变化时即时更新摘要（不必等保存）
+            var boxes = modal.querySelectorAll('input[name="cfse_site[]"]');
+            function refresh() {
+                var picked = [];
+                for (var i = 0; i < boxes.length; i++) {
+                    if (boxes[i].checked) {
+                        var lab = boxes[i].parentNode;
+                        picked.push((lab.textContent || '').replace(/（默认）|（已停用）/g, '').trim());
+                    }
+                }
+                var el = document.getElementById('cfse-site-summary');
+                if (el) el.textContent = picked.length ? picked.join('、') : '未选择（走默认站点；若无默认站点则本篇不生成、不发布）';
+            }
+            for (var i = 0; i < boxes.length; i++) boxes[i].addEventListener('change', refresh);
+        })();
+        </script>
+        <?php
+    }
+
+    /** 保存「站点」面板（无本面板 nonce ⇒ 不动作，避免其它写入路径被误清） */
+    public function save_site_meta($post_id, $post = null, $update = null) {
+        if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+        if (!isset($_POST['cfse_site_nonce'])) return;
+        if (!wp_verify_nonce($_POST['cfse_site_nonce'], 'cfse_site_' . $post_id)) return;
+        if (!current_user_can('edit_post', $post_id)) return;
+        delete_post_meta($post_id, self::META_SITE);
+        $vals = isset($_POST['cfse_site']) ? (array) $_POST['cfse_site'] : array();
+        $added = 0;
+        foreach ($vals as $v) {
+            $v = preg_replace('/[^0-9]/', '', (string) $v);
+            if ($v === '' ) continue;
+            add_post_meta($post_id, self::META_SITE, $v);
+            $added++;
+        }
+        $this->log("文章 {$post_id} 站点已更新为 " . ($added ? ($added . ' 个') : '（空 → 走默认站点）'), 'INFO');
+    }
+
+    // ---------- 文章列表：批量设置站点 ----------
+
+    public function add_site_bulk_actions($actions) {
+        $targets = $this->get_hosting_targets();
+        foreach ($targets as $t) {
+            $actions['cfse_site_' . (int) $t['id']] = '设置站点：' . $t['name'];
+        }
+        $actions['cfse_site_clear'] = '清除站点（走默认站点）';
+        return $actions;
+    }
+
+    public function handle_site_bulk_actions($redirect, $action, $post_ids) {
+        if (strpos($action, 'cfse_site_') !== 0) return $redirect;
+        $done = 0;
+        if ($action === 'cfse_site_clear') {
+            foreach ($post_ids as $pid) {
+                delete_post_meta($pid, self::META_SITE);
+                $done++;
+            }
+            $this->log("批量：已清除 {$done} 篇文章的站点标记", 'INFO');
+        } else {
+            $sid = preg_replace('/[^0-9]/', '', substr($action, strlen('cfse_site_')));
+            if ($sid !== '' && $this->site_by_id($sid)) {
+                foreach ($post_ids as $pid) {
+                    delete_post_meta($pid, self::META_SITE);
+                    add_post_meta($pid, self::META_SITE, $sid);
+                    $done++;
+                }
+                $this->log("批量：{$done} 篇文章已设为站点 id={$sid}", 'INFO');
+            }
+        }
+        return add_query_arg('cfse_site_bulk', $done, $redirect);
+    }
+
     public function add_doc_format_metabox($post_type = '', $post = null) {
         add_meta_box('cfse_doc_format', '📝 文档格式', array($this, 'render_doc_format_metabox'), 'post', 'side', 'high');
         // 「Worker 端诞生」的篇（wp_id 为时间戳形态，见 ROADMAP I.1）额外给一个同步面板
@@ -1678,9 +1948,34 @@ private function get_post_storage_path($post) {
      *   - cf_purge_sidebar：sidebar:data
      *   - cf_purge_lists：首页第 1 页 + 各分类/标签第 1 页 + 归档最近 8 个月及年份第 1 页
      */
-    private function purge_page_caches() {
+    /**
+     * 按站点清缓存（多站点路径）：只对「该篇所属站点」中具备 cache 能力的目标清 key。
+     * 判断条件与原逻辑一致（对应 TTL>0 且勾了"发布后即时刷新"才清）。
+     */
+    private function purge_sites_caches($only_ids) {
+        $clear_sidebar = !empty($this->config['purge_sidebar']) && $this->config['cache_ttl_sidebar'] > 0;
+        $clear_lists = !empty($this->config['purge_lists']) && $this->config['cache_ttl_list'] > 0;
+        if (!$clear_sidebar && !$clear_lists) return;
+        $keys = array();
+        if ($clear_sidebar) $keys[] = 'sidebar:data';
+        if ($clear_lists) $keys[] = 'home:page:1';
+        if (empty($keys)) return;
+        $res = $this->for_each_target('cache', function ($t) use ($keys) {
+            return $this->target_purge($t, $keys);
+        }, $only_ids);
+        if ($res['tried'] > 0) {
+            $this->log('按站点清缓存（' . $res['tried'] . ' 个目标）：' . implode(', ', $keys) . ($res['ok'] ? '' : '（部分失败）'), 'INFO');
+        }
+    }
+
+    private function purge_page_caches($only_ids = null) {
         $site_url = isset($this->config['site_url']) ? rtrim($this->config['site_url'], '/') : '';
         $auth = isset($this->config['auth_key']) ? $this->config['auth_key'] : '';
+        if ($only_ids !== null) {
+            // 多站点：只清「该站点」目标的缓存（走 target_purge；没有 cache 能力目标则跳过）
+            $this->purge_sites_caches($only_ids);
+            return;
+        }
         if ($site_url === '' || $auth === '') return;
         // 纯 TTL 语义：对应缓存未启用（TTL=0）时不产生清理请求（省 KV 写操作）
         $clear_sidebar = !empty($this->config['purge_sidebar']) && $this->config['cache_ttl_sidebar'] > 0;
@@ -2335,6 +2630,7 @@ private function get_post_storage_path($post) {
         }
         $templates = $this->get_hosting_templates();
         $out = array();
+        $usedNumIds = array(); $usedNumDirs = array(); $seenDefaultRt = false;
         foreach ($list as $t) {
             if (!is_array($t)) continue;
             // 运行期只取「已启用」的目标；设置页渲染传 $include_disabled = true ——
@@ -2372,22 +2668,106 @@ private function get_post_storage_path($post) {
                 $t['intent'] = isset($tpl['defaults']['intent']) ? $tpl['defaults']['intent'] : array();
             }
             if (!isset($t['path_prefix'])) $t['path_prefix'] = '';
+            // 站点字段归一化（旧数据无这些字段 ⇒ 就地补齐，幂等）：
+            //   id       = 数字（旧字符串 id 依次映射为 1,2,3…）
+            //   site_dir = 目录名（旧字符串 id 优先，保持既有产物路径不变）
+            //   is_default = 站点级默认（未标记文章走它）
+            $legacyId = isset($t['id']) ? (string) $t['id'] : '';
+            $numId = (string) max(0, (int) $legacyId);
+            if ($numId === '0') $numId = (string) (count($out) + 1);
+            while (in_array($numId, $usedNumIds, true)) { $numId = (string) ((int) $numId + 1); }
+            $usedNumIds[] = $numId;
+            $t['id'] = $numId;
+            if (!isset($t['site_dir']) || trim((string) $t['site_dir']) === '') {
+                $t['site_dir'] = ($legacyId !== '' && !ctype_digit($legacyId)) ? sanitize_key($legacyId) : $numId;
+            }
+            $t['site_dir'] = preg_replace('/[^0-9a-zA-Z_-]/', '', (string) $t['site_dir']);
+            if ($t['site_dir'] === '') $t['site_dir'] = $numId;
+            if (isset($usedNumDirs[$t['site_dir']]) && $usedNumDirs[$t['site_dir']] !== $numId) {
+                $t['site_dir'] = $numId;   // 运行期兜底：目录冲突时退回数字 id
+            }
+            $usedNumDirs[$t['site_dir']] = $numId;
+            $t['is_default'] = empty($t['is_default']) ? false : true;
+            if (!$seenDefaultRt && $t['is_default']) { $seenDefaultRt = true; } elseif ($t['is_default']) { $t['is_default'] = false; }
             if (isset($t['template']) && $t['template'] === 'github' && empty($t['branch'])) $t['branch'] = 'gh-pages';
             $out[] = $t;
         }
         return $out;
     }
 
+    // ============================================
+    // 站点（= 托管目标）辅助
+    // ============================================
+
+    /** 目标的目录名（site_dir 优先，缺省回退到 id） */
+    private function site_dir_of($target) {
+        $d = isset($target['site_dir']) ? preg_replace('/[^0-9a-zA-Z_-]/', '', (string) $target['site_dir']) : '';
+        if ($d !== '') return $d;
+        return isset($target['id']) ? (string) $target['id'] : 'default';
+    }
+
+    /** 该站点的本地产物根目录：CFSE_LOCAL_DIR/<site_dir>/ */
+    private function site_local_root($target) {
+        return CFSE_LOCAL_DIR . '/' . $this->site_dir_of($target);
+    }
+
+    /** 全站默认站点（托管目标里勾了「默认站点」且启用的第一个；没有则 null） */
+    private function default_site() {
+        $targets = isset($this->config['hosting_targets']) ? $this->config['hosting_targets'] : array();
+        foreach ($targets as $t) {
+            if (!empty($t['is_default']) && !empty($t['enabled'])) return $t;
+        }
+        return null;
+    }
+
+    /** 按 id 取站点（启用中的） */
+    private function site_by_id($id) {
+        $id = (string) $id;
+        $targets = isset($this->config['hosting_targets']) ? $this->config['hosting_targets'] : array();
+        foreach ($targets as $t) {
+            if ((string) (isset($t['id']) ? $t['id'] : '') === $id) return $t;
+        }
+        return null;
+    }
+
+    /**
+     * 一篇文章所属的站点列表（数组 of target）。
+     * 规则：meta cfse_site 有值 ⇒ 取其中「存在且启用」的站点；无值/全失效 ⇒ 走默认站点；仍无 ⇒ 空数组（该篇不生成、不发布）。
+     */
+    private function get_post_sites($post_id) {
+        $raw = get_post_meta($post_id, self::META_SITE, false);
+        $ids = array();
+        foreach ((array) $raw as $v) {
+            if (is_array($v)) { foreach ($v as $x) $ids[] = (string) $x; }
+            elseif (is_string($v) && strpos($v, ',') !== false) { foreach (explode(',', $v) as $x) $ids[] = trim($x); }
+            elseif ($v !== '' && $v !== null) { $ids[] = (string) $v; }
+        }
+        $sites = array(); $seen = array();
+        foreach ($ids as $id) {
+            if ($id === '' || isset($seen[$id])) continue;
+            $t = $this->site_by_id($id);
+            if ($t) { $sites[] = $t; $seen[$id] = true; }
+        }
+        if (empty($sites)) {
+            $def = $this->default_site();
+            if ($def) $sites[] = $def;
+        }
+        return $sites;
+    }
+
     /**
      * 对「支持 $capability 能力」的目标逐个执行 $send($target)。
+     * @param array|null $only_ids 只对这些站点 id 生效（null = 全部目标，保持原有行为）
      * @return array{tried:int, results:array, ok:bool}
      *   tried=0 ⇒ 没有目标具备该能力（例如纯静态档没有 d1）：ok 视为 true（无需执行，不算失败）
      */
-    private function for_each_target($capability, $send) {
+    private function for_each_target($capability, $send, $only_ids = null) {
         $targets = isset($this->config['hosting_targets']) ? $this->config['hosting_targets'] : array();
         $results = array();
+        $allow = ($only_ids === null) ? null : array_map('strval', (array) $only_ids);
         foreach ($targets as $t) {
             if (empty($t['capabilities'][$capability])) continue;
+            if ($allow !== null && !in_array((string) (isset($t['id']) ? $t['id'] : ''), $allow, true)) continue;
             $id = isset($t['id']) ? $t['id'] : ('t' . count($results));
             try {
                 $results[$id] = (bool) call_user_func($send, $t);
@@ -2559,7 +2939,7 @@ private function get_post_storage_path($post) {
         return true;
     }
 
-    private function upload_to_r2_via_worker($path, $content, $content_type = 'text/html', $content_encoding = null) {
+    private function upload_to_r2_via_worker($path, $content, $content_type = 'text/html', $content_encoding = null, $only_ids = null) {
         try {
             if ($this->config['debug_mode']) {
                 $debug_path = CFSE_DEBUG_DIR . '/' . $path;
@@ -2700,7 +3080,7 @@ private function get_post_storage_path($post) {
             $this->log('D1 schema 已就绪（v' . (int) self::D1_SCHEMA_VERSION . '）', 'DEBUG');
         }
     }
-    private function write_to_d1($post_data, $categories, $tags) {
+    private function write_to_d1($post_data, $categories, $tags, $only_ids = null) {
         // 0. 确保表结构存在（幂等）
         $this->ensure_d1_schema();
 
@@ -3066,14 +3446,17 @@ private function get_post_storage_path($post) {
      * 写文章数据：只对「具备 d1 能力」的目标执行。
      * 没有这样的目标（如纯静态档只有 local）⇒ **不联网**，返回等长 null 数组（不算失败）。
      */
-    private function d1_batch($statements) {
+    private function d1_batch($statements, $only_ids = null) {
         $statements = array_values($statements);
         if (empty($statements)) return array();
 
         $targets = isset($this->config['hosting_targets']) ? $this->config['hosting_targets'] : array();
+        $allow = ($only_ids === null) ? null : array_map('strval', (array) $only_ids);
         $usable = array();
         foreach ($targets as $t) {
-            if (!empty($t['capabilities']['d1'])) $usable[] = $t;
+            if (empty($t['capabilities']['d1'])) continue;
+            if ($allow !== null && !in_array((string) (isset($t['id']) ? $t['id'] : ''), $allow, true)) continue;
+            $usable[] = $t;
         }
         if (empty($usable)) {
             $this->log('没有启用「D1 数据」能力的托管目标，跳过 ' . count($statements) . ' 条 SQL（纯静态档无需写库）', 'DEBUG');
@@ -3295,14 +3678,14 @@ private function get_post_storage_path($post) {
      * @param string|array $paths
      * @return bool
      */
-    private function delete_from_r2($paths) {
+    private function delete_from_r2($paths, $only_ids = null) {
         try {
             $paths = array_values(array_filter((array) $paths, 'strlen'));
             if (empty($paths)) return true;
-            // 多托管：对所有「具备静态文件能力」的目标删除
+            // 多托管：对所有「具备静态文件能力」的目标删除（可按站点过滤）
             $res = $this->for_each_target('r2', function ($t) use ($paths) {
                 return $this->target_delete($t, $paths);
-            });
+            }, $only_ids);
             if ($res['tried'] === 0) {
                 $this->log('没有启用「静态文件」能力的托管目标，跳过删除：' . implode(', ', $paths), 'DEBUG');
             } elseif (!$res['ok']) {
