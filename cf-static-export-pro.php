@@ -181,6 +181,8 @@ class CF_Static_Export_Pro {
             'posts_per_page' => max(1, (int) get_option('cf_posts_per_page', 10)),
             // 编辑页是否自动比对 Worker 版本（默认关；打开后打开编辑页即查询，关则用面板里的「🔍 检查」按钮）
             'worker_auto_check' => (bool) get_option('cf_worker_auto_check', true),
+            // 是否允许 WP 更新「Worker 端原生文章」（有 _cfse_remote_wp_id 的篇）。默认关 = 保持防覆盖（WP 不覆盖 Worker 的文章）；开 = WP 更新时也写回 D1/R2（WP 接管）
+            'allow_wp_update_worker_posts' => (bool) get_option('cf_allow_wp_update_worker_posts', false),
             // 发布行为（三项独立、默认全不勾；③ 勾选时隐含 ②）：
             //   ① 同步到 D1（文章 + 草稿都写云端库）② 生成静态文件（本地 cfse-static/）③ 上传到远端（R2 + 清缓存）
             // 旧键（YY 批的 cf_sync_drafts / cf_auto_generate_single / cf_auto_publish_remote）作为默认值兼容迁移
@@ -246,6 +248,7 @@ public function get_config() {
             // 列表每页文章数（默认取 WP「设置→阅读」的 posts_per_page，即 10）
             'cf_posts_per_page' => array('sanitize' => 'intval', 'default' => 10),
             'cf_worker_auto_check' => array('sanitize' => 'boolval', 'default' => true),
+            'cf_allow_wp_update_worker_posts' => array('sanitize' => 'boolval', 'default' => 0),
             'cf_sync_d1' => array('sanitize' => 'boolval', 'default' => 0),
             'cf_gen_static' => array('sanitize' => 'boolval', 'default' => 0),
             'cf_publish_remote' => array('sanitize' => 'boolval', 'default' => 0),
@@ -362,7 +365,8 @@ public function get_config() {
                                     <label><input type="checkbox" name="cf_debug_mode" value="1" <?php checked($this->config['debug_mode']); ?> /> 调试模式</label><br/>
                                     <label><input type="checkbox" name="cf_purge_sidebar" value="1" <?php checked($this->config['purge_sidebar']); ?> /> 发布后即时刷新侧边栏（成本极小，建议开启）</label><br/>
                                     <label><input type="checkbox" name="cf_purge_lists" value="1" <?php checked($this->config['purge_lists']); ?> /> 发布后即时刷新列表页第一页缓存（首页/分类/标签/归档；高更新大站建议关闭，靠缓存自然过期）</label><br/>
-                                    <label><input type="checkbox" name="cf_worker_auto_check" value="1" <?php checked($this->config['worker_auto_check']); ?> /> 编辑页自动比对 Worker 版本（默认开：打开编辑页即只读查询两端版本时间，是否需要覆盖由你在面板里决定）</label>
+                                    <label><input type="checkbox" name="cf_worker_auto_check" value="1" <?php checked($this->config['worker_auto_check']); ?> /> 编辑页自动比对 Worker 版本（默认开：打开编辑页即只读查询两端版本时间，是否需要覆盖由你在面板里决定）</label><br/>
+                                    <label><input type="checkbox" name="cf_allow_wp_update_worker_posts" value="1" <?php checked(!empty($this->config['allow_wp_update_worker_posts'])); ?> /> 允许 WP 更新 Worker 端原生文章（默认关：保持防覆盖，WP 不覆盖 Worker 端诞生的文章；打开后 WP 更新这类文章也会写回 D1/R2，即 WP 接管）</label>
                                 </td></tr>
                             <tr><th>缓存策略</th>
                                 <td>
@@ -784,11 +788,15 @@ private function get_post_storage_path($post) {
         $html = $html_source === null ? (isset($artifact['html']) ? $artifact['html'] : '') : $html_source;
         if ($html === '') throw new Exception('正文为空，无法发布');
 
-        // Worker 端诞生的文章（md 编辑器的家）：跳过 R2 上传与 D1 覆盖 —— 否则会把 Worker 渲染的
-        // md 单页换成 WP 前台 HTML，并把 D1 里的 md 原稿冲掉（A 节候选 1 的硬保证）
-        if ($this->is_worker_owned_post($post)) {
-            $this->log("文章 {$post->ID} 由 Worker 端托管（远端 wp_id=" . $this->get_remote_wp_id($post->ID) . "），跳过 R2 上传与 D1 覆盖", 'INFO');
+        // Worker 端诞生的文章（md 编辑器的家）：默认跳过 R2 上传与 D1 覆盖 —— 否则会把 Worker 渲染的
+        // md 单页换成 WP 前台 HTML，并把 D1 里的 md 原稿冲掉（A 节候选 1 的硬保证）。
+        // 开关 cf_allow_wp_update_worker_posts 打开后，允许 WP 更新这类文章（写回 D1/R2，即 WP 接管）。
+        if ($this->is_worker_owned_post($post) && empty($this->config['allow_wp_update_worker_posts'])) {
+            $this->log("文章 {$post->ID} 由 Worker 端托管（远端 wp_id=" . $this->get_remote_wp_id($post->ID) . "），跳过 R2 上传与 D1 覆盖（未开启「允许 WP 更新 Worker 端原生文章」）", 'INFO');
             return true;
+        }
+        if ($this->is_worker_owned_post($post)) {
+            $this->log("文章 {$post->ID} 由 Worker 端托管，已开启「允许 WP 更新 Worker 端原生文章」——本次 WP 更新将写回 D1/R2（WP 接管）", 'INFO');
         }
 
         $content_type = 'text/html; charset=utf-8';
@@ -1574,17 +1582,19 @@ private function get_post_storage_path($post) {
         $statements = array();
 
         // 1. 写入 posts
+        // 开关 cf_allow_wp_update_worker_posts 打开后，去掉 WHERE 限制（允许覆盖 Worker 行，即 WP 接管）。
+        $allow_worker_update = !empty($this->config['allow_wp_update_worker_posts']);
         $statements[] = array(
-            // 真 upsert：wp_id 冲突时更新，但「Worker 端诞生」的行（wp_id ≥ CFSE_WORKER_ID_MIN）不覆盖
-            // —— 归属判据用 wp_id 形态（WP 文章 = WP post ID；Worker 文章 = 时间戳量级）
+            // 真 upsert：wp_id 冲突时更新。默认「Worker 端诞生」的行（wp_id ≥ CFSE_WORKER_ID_MIN）不覆盖
+            // —— 归属判据用 wp_id 形态（WP 文章 = WP post ID；Worker 文章 = 时间戳量级）。
             'sql' => "INSERT INTO posts (wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image)
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                       ON CONFLICT(wp_id) DO UPDATE SET
                         slug = excluded.slug, title = excluded.title, content = excluded.content,
                         content_format = excluded.content_format, excerpt = excluded.excerpt,
                         date = excluded.date, modified = excluded.modified, status = excluded.status,
-                        categories = excluded.categories, tags = excluded.tags, featured_image = excluded.featured_image
-                      WHERE posts.wp_id < " . (int) CFSE_WORKER_ID_MIN,
+                        categories = excluded.categories, tags = excluded.tags, featured_image = excluded.featured_image"
+                      . ($allow_worker_update ? '' : ' WHERE posts.wp_id < ' . (int) CFSE_WORKER_ID_MIN),
             'params' => array(
                 $post_data['wp_id'],
                 $post_data['slug'],
