@@ -1,9 +1,0 @@
-{
-  "id": "md-publisher",
-  "name": "MD Publisher",
-  "version": "1.2.0",
-  "minAppVersion": "1.0.0",
-  "description": "把当前笔记的 Markdown 原文发布到自建 Worker（WP REST 兼容端点 /wp-json/wp/v2/posts）。",
-  "author": "you",
-  "isDesktopOnly": false
-}

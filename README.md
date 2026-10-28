@@ -11,7 +11,7 @@ CF Press is a self-hosted CMS that runs entirely on Cloudflare: **D1** for conte
 - **Static + dynamic split** — single pages cached in R2, listings live from D1
 - **Built-in admin** — content, media, comments, styles, settings (no separate backend)
 - **Theme system** — a theme is just a directory + `tpl.json`; switch it in the admin
-- **Optional WordPress sync** — import an existing WordPress site (CF Sync plugin)
+- **Optional WordPress sync** — use the separate **CF Sync** plugin to import an existing WordPress site
 - **Runs on the Cloudflare free tier**
 
 ## Requirements
@@ -52,6 +52,8 @@ No local tooling needed:
 3. It creates D1 / KV / R2, generates `wrangler.toml`, deploys, and sets the secret.
 4. Open `https://<worker>.<account>.workers.dev/admin/` to finish setup.
 
+> **Repository owner?** The button creates a *copy* of the repo in your own account, so if `cfpress` already exists there it will report "project already exists". Change the project name in the setup page (e.g. `cfpress-site`), or delete the leftover project first. Owners can also just use the CLI install above.
+
 ## Themes
 
 Built-in packs live in `worker/static/wp-content/themes/`:
@@ -68,12 +70,13 @@ Add your own: create `worker/static/wp-content/themes/<id>/tpl.json` + `style.cs
 ## Project layout
 
 ```
-worker/            # the CMS Worker (D1 + R2 + KV + rendering + admin)
+worker/            # the CMS Worker
   src/             # routes, rendering, admin API, template engine
   static/          # assets, admin SPA, themes
-  scripts/         # setup.mjs (resource bootstrap), theme index sync
-  schema.sql       # D1 schema
-cf-static-export-pro.php  # WordPress export/sync plugin (optional companion)
+  scripts/         # setup.mjs (resource bootstrap)
+  migrations/      # D1 migrations
+  wrangler.toml    # default config (used by Deploy to Cloudflare)
+schema.sql         # D1 schema
 ```
 
 ## License
