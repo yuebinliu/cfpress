@@ -13,7 +13,7 @@ binding = "ASSETS"
 
 [vars]
 ENABLE_COMPRESSION = true
-WORDPRESS_URL = ""
+# 独立 CMS 默认不回源 WordPress。如需 WP 回源，部署后在 Dashboard 给本 Worker 加 WORDPRESS_URL 变量。
 
 [[r2_buckets]]
 binding = "R2_BUCKET"
