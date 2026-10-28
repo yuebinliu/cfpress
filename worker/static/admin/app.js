@@ -1153,17 +1153,18 @@
           '<td class="muted">' + esc(String(u.user_registered || '').slice(0, 10)) + '</td>' +
           '<td style="white-space:nowrap;"><button class="btn btn-sm" data-edit="' + u.id + '">编辑</button> ' +
           '<button class="btn btn-sm" data-tgl="' + u.id + '" data-status="' + u.user_status + '">' + (u.user_status === 1 ? '禁用' : '启用') + '</button> ' +
-          '<button class="btn btn-sm" data-pw="' + u.id + '" data-pwlogin="' + esc(u.user_login) + '">重置密码</button> ' +
           '<button class="btn btn-sm" data-ap="' + u.id + '" data-apname="' + esc(u.user_login) + '">应用密码</button> ' +
           '<button class="btn btn-sm btn-danger" data-deluser="' + u.id + '">删除</button></td></tr>';
       }).join('');
-      var add = '<div class="toolbar" style="margin-top:12px;border-top:1px solid #eee;padding-top:12px;">' +
-        '<input placeholder="用户名" id="u-name" style="max-width:130px;">' +
-        '<input placeholder="密码(≥8)" type="password" id="u-pass" style="max-width:130px;">' +
-        '<input placeholder="邮箱" id="u-email" style="max-width:170px;">' +
-        '<input placeholder="昵称" id="u-disp" style="max-width:110px;">' +
-        '<select id="u-role" style="max-width:100px;"><option value="editor">编辑</option><option value="author">作者</option><option value="admin">管理员</option><option value="subscriber">订阅者</option></select>' +
-        '<button class="btn btn-primary" id="u-add">新增用户</button></div>';
+      var add = '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #eee;">' +
+        '<h2 class="dl-h">新增用户</h2>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:8px;align-items:center;">' +
+        '<input placeholder="用户名" id="u-name">' +
+        '<input placeholder="密码（至少 8 位）" type="password" id="u-pass" autocomplete="new-password">' +
+        '<input placeholder="邮箱" id="u-email" type="email">' +
+        '<input placeholder="昵称（可选）" id="u-disp">' +
+        '<select id="u-role"><option value="editor">编辑</option><option value="author">作者</option><option value="admin">管理员</option><option value="subscriber">订阅者</option></select>' +
+        '<button class="btn btn-primary" id="u-add" style="justify-self:start;">新增用户</button></div></div>';
       sec.innerHTML = '<h1>用户</h1><div class="card grid"><table><thead><tr><th>用户名</th><th>昵称</th><th>邮箱</th><th>角色</th><th>注册</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' + add + '</div>' +
         '<div class="card" id="ue-panel" style="margin-top:12px;display:none;"></div>' +
         '<div class="card" id="ap-panel" style="margin-top:12px;display:none;"></div>';
@@ -1198,19 +1199,6 @@
         api('/api/users/' + id, { method: 'PUT', body: { user_status: st === 1 ? 0 : 1 } }).then(function () {
           flash('flash-main', '已更新', 'ok');
           renderUsers();
-        }).catch(function (e) { flash('flash-main', e.message, 'err'); });
-      });
-    });
-    document.querySelectorAll('[data-pw]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var id = b.getAttribute('data-pw');
-        var login = b.getAttribute('data-pwlogin') || '';
-        if (!confirm('重置「' + login + '」的登录密码？\n\n只影响网页后台登录，不会动已生成的应用密码 —— Obsidian 等第三方客户端仍然可用。')) return;
-        var pw = prompt('输入新的登录密码（至少 8 位）：');
-        if (pw === null) return;
-        if (String(pw).length < 8) { flash('flash-main', '密码至少 8 位', 'err'); return; }
-        api('/api/users/' + id, { method: 'PUT', body: { password: pw } }).then(function () {
-          flash('flash-main', '登录密码已重置（应用密码未受影响）', 'ok');
         }).catch(function (e) { flash('flash-main', e.message, 'err'); });
       });
     });
@@ -1251,8 +1239,12 @@
       roles.map(function (r) {
         return '<option value="' + r[0] + '"' + (u.role === r[0] ? ' selected' : '') + '>' + r[1] + '</option>';
       }).join('') + '</select></div></div>' +
+      '<div class="row" style="margin-top:10px;">' +
+      '<div><label>新密码</label><input type="password" id="ue-pass" placeholder="留空则不修改" autocomplete="new-password"></div>' +
+      '<div><label>确认新密码</label><input type="password" id="ue-pass2" placeholder="再输一次" autocomplete="new-password"></div></div>' +
       '<p class="muted" style="margin-top:10px;">用户名 <b>' + esc(u.user_login) + '</b> 是登录标识，创建后不可改。' +
-      '这里<b>不修改密码</b>：网页登录密码用「重置密码」，第三方编辑器用的是「应用密码」，两者互相独立。</p>' +
+      '上面的密码是<b>网页后台登录密码</b>（留空就不动）；给第三方编辑器（Obsidian 等）用的是另一个「应用密码」，' +
+      '在操作列的「应用密码」里单独生成 —— 改这里的密码不会影响它。</p>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="ue-save">保存</button> ' +
       '<button class="btn btn-sm" id="ue-close">收起</button> <span class="muted" id="ue-note"></span></div>';
     document.getElementById('ue-disp').value = u.display_name || '';
@@ -1265,9 +1257,16 @@
         email: document.getElementById('ue-email').value.trim(),
         role: document.getElementById('ue-role').value,
       };
+      var pw = document.getElementById('ue-pass').value;
+      var pw2 = document.getElementById('ue-pass2').value;
+      if (pw || pw2) {
+        if (pw.length < 8) { note.textContent = '新密码至少 8 位'; return; }
+        if (pw !== pw2) { note.textContent = '两次输入的新密码不一致'; return; }
+        body.password = pw;   // 留空则不带，后端就不会动密码
+      }
       note.textContent = '保存中…';
       api('/api/users/' + uid, { method: 'PUT', body: body }).then(function () {
-        flash('flash-main', '已保存', 'ok');
+        flash('flash-main', body.password ? '已保存，登录密码已更新（应用密码未受影响）' : '已保存', 'ok');
         renderUsers();
       }).catch(function (e) { note.textContent = '保存失败：' + (e && e.message || e); });
     };
@@ -1343,11 +1342,6 @@
     var sec = document.getElementById('view-settings');
     var curCache = null;   // 设置页加载回来的 cache 全量（保存「批量任务」时合并用）
     sec.innerHTML = '<h1>设置</h1>' +
-      '<div class="card"><h2 class="dl-h">账号资料</h2>' +
-      '<p class="muted" id="who-line">加载中…</p>' +
-      '<div class="row"><div><label>昵称</label><input type="text" id="m-name"></div>' +
-      '<div><label>邮箱</label><input type="email" id="m-email"></div></div>' +
-      '<div style="margin-top:10px;"><button class="btn btn-primary" id="m-save">保存资料</button></div></div>' +
       '<div class="card"><h2 class="dl-h">站点信息</h2>' +
       '<p class="muted">站名用于标题/页脚/侧边栏（保存即清缓存生效，历史静态单页需重建或全量导出）。站点描述用于 RSS 频道描述。</p>' +
       '<label>站点名</label><input type="text" id="s-name">' +
@@ -1415,21 +1409,6 @@
       '<button class="btn" id="imp-btn">导入备份</button> ' +
       '<input type="file" id="imp-file" accept=".json,application/json" hidden>' +
       '<span class="muted" id="bk-prog"></span></div></div>';
-
-    api('/api/me').then(function (u) {
-      document.getElementById('who-line').textContent = '登录用户：' + (u.username || '') + '（' + (u.role || '') + '）';
-      document.getElementById('m-name').value = u.displayName || '';
-      document.getElementById('m-email').value = u.email || '';
-    }).catch(function (err) { flash('flash-main', err.message, 'err'); });
-
-    document.getElementById('m-save').addEventListener('click', function () {
-      api('/api/me', {
-        method: 'PUT',
-        body: { display_name: document.getElementById('m-name').value.trim(), email: document.getElementById('m-email').value.trim() },
-      }).then(function () {
-        flash('flash-main', '资料已保存', 'ok');
-      }).catch(function (err) { flash('flash-main', err.message, 'err'); });
-    });
 
     // ---- 社交账号（{{SOCIAL_LINKS}}；每行 service|url）----
     var socInput = document.getElementById('soc-input');
