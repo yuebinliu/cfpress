@@ -1469,7 +1469,7 @@
     var sec = document.getElementById('view-settings');
     var curCache = null;   // 设置页加载回来的 cache 全量（保存「批量任务」时合并用）
     sec.innerHTML = '<h1>设置</h1>' +
-      '<h2 class="sg">站点</h2>' +
+      
       '<div class="card"><h2 class="dl-h">站点信息</h2>' +
       '<p class="muted">站名用于标题/页脚/侧边栏（保存即清缓存生效，历史静态单页需重建或全量导出）。站点描述用于 RSS 频道描述。</p>' +
       '<label>站点名</label><input type="text" id="s-name">' +
@@ -1496,7 +1496,26 @@
       '<div id="menu-rows" style="display:flex;flex-direction:column;gap:6px;margin-top:8px;"></div>' +
       '<div style="margin-top:10px;"><button class="btn btn-sm" id="menu-add">＋ 添加菜单项</button> ' +
       '<button class="btn btn-primary" id="menu-save">保存菜单</button> <span class="muted" id="menu-note"></span></div></div>' +
-            '<h2 class="sg">内容</h2>' +
+            
+      '<div class="card"><h2 class="dl-h">缓存策略</h2>' +
+      '<p class="muted">控制列表页 / 侧边栏 / RSS 的缓存时长，文章单页不受影响（始终直读存储）。缓存放在 Cloudflare 边缘节点，不额外计费；数值填 <b>0 就每次都实时查库</b>。保存后会自动清一次相关缓存。</p>' +
+      '<div style="margin:8px 0;display:flex;gap:6px;flex-wrap:wrap;">' +
+      '<button class="btn btn-sm" id="cp-preset-d1">预设：全 D1（最省资源）</button>' +
+      '<button class="btn btn-sm" id="cp-preset-mix">预设：混合（侧边栏缓存）</button>' +
+      '<button class="btn btn-sm" id="cp-preset-kv">预设：全缓存（高流量）</button></div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-top:8px;"><div><label>列表页 TTL（秒，0=直查 D1）</label><input type="number" id="c-ttl-list" min="0"></div>' +
+      '<div><label>侧边栏 TTL（秒，0=直查 D1）</label><input type="number" id="c-ttl-sidebar" min="0"></div>' +
+      '<div><label>站点信息 TTL（秒，0=不缓存；走 KV）</label><input type="number" id="c-ttl-site" min="0"></div>' +
+      '<div><label>Feed TTL（秒，0=不缓存；默认 4 小时）</label><input type="number" id="c-ttl-feed" min="0"></div>' +
+      '<div><label>Feed 输出条数（1-100）</label><input type="number" id="c-feed-count" min="1" max="100"></div>' +
+      '<div><label>列表每页文章数（1-100）</label><input type="number" id="c-per-page" min="1" max="100"></div></div>' +
+      '<label style="margin-top:8px;display:block;"><input type="checkbox" id="c-purge"> 发布文章时清列表第一页/侧边栏缓存（走边缘缓存，<b>不消耗 KV</b>；想让「发布后立即刷新」就打开）</label>' +
+      '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-save">保存缓存策略</button> <span class="muted" id="c-note"></span></div></div>' +
+      '<div class="card"><h2 class="dl-h">批量任务</h2>' +
+      '<p class="muted">「重建全部单页」「permalink 迁移」等批量任务共用。<b>批量大小</b> = 每次请求处理多少篇；<b>并发数</b> = 一批里同时处理几篇。</p>' +
+      '<div class="row"><div><label>批量大小（1-100）</label><input type="number" id="c-task-batch" min="1" max="100"></div>' +
+      '<div><label>并发数（1-16）</label><input type="number" id="c-task-conc" min="1" max="16"></div></div>' +
+      '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-task-save">保存批量任务设置</button> <span class="muted" id="c-task-note"></span></div></div>' +
       '<div class="card"><h2 class="dl-h">URL 结构（permalink）</h2>' +
       '<p class="muted">决定文章页的地址格式，例如 <code>/%year%/%postname%/</code>。支持 <code>%postname%</code> <code>%year%</code> <code>%monthnum%</code> <code>%day%</code> <code>%post_id%</code> <code>%category%</code>（不支持 %author%）。<b>改完必须点「开始迁移」</b>，否则旧地址会 404 —— 迁移会先把新结构复制一份、旧文件原样保留，全部完成才切换。</p>' +
       '<label>当前</label><input type="text" id="pm-current" readonly>' +
@@ -1519,26 +1538,6 @@
       '<div style="margin-top:10px;"><button class="btn" id="exp-btn">导出备份</button> ' +
       '<button class="btn" id="imp-btn">导入备份</button> ' +
       '<input type="file" id="imp-file" accept=".json,application/json" hidden>' +
-      '<h2 class="sg">高级</h2>' +
-      '<div class="card"><h2 class="dl-h">缓存策略</h2>' +
-      '<p class="muted">控制列表页 / 侧边栏 / RSS 的缓存时长，文章单页不受影响（始终直读存储）。缓存放在 Cloudflare 边缘节点，不额外计费；数值填 <b>0 就每次都实时查库</b>。保存后会自动清一次相关缓存。</p>' +
-      '<div style="margin:8px 0;display:flex;gap:6px;flex-wrap:wrap;">' +
-      '<button class="btn btn-sm" id="cp-preset-d1">预设：全 D1（最省资源）</button>' +
-      '<button class="btn btn-sm" id="cp-preset-mix">预设：混合（侧边栏缓存）</button>' +
-      '<button class="btn btn-sm" id="cp-preset-kv">预设：全缓存（高流量）</button></div>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-top:8px;"><div><label>列表页 TTL（秒，0=直查 D1）</label><input type="number" id="c-ttl-list" min="0"></div>' +
-      '<div><label>侧边栏 TTL（秒，0=直查 D1）</label><input type="number" id="c-ttl-sidebar" min="0"></div>' +
-      '<div><label>站点信息 TTL（秒，0=不缓存；走 KV）</label><input type="number" id="c-ttl-site" min="0"></div>' +
-      '<div><label>Feed TTL（秒，0=不缓存；默认 4 小时）</label><input type="number" id="c-ttl-feed" min="0"></div>' +
-      '<div><label>Feed 输出条数（1-100）</label><input type="number" id="c-feed-count" min="1" max="100"></div>' +
-      '<div><label>列表每页文章数（1-100）</label><input type="number" id="c-per-page" min="1" max="100"></div></div>' +
-      '<label style="margin-top:8px;display:block;"><input type="checkbox" id="c-purge"> 发布文章时清列表第一页/侧边栏缓存（走边缘缓存，<b>不消耗 KV</b>；想让「发布后立即刷新」就打开）</label>' +
-      '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-save">保存缓存策略</button> <span class="muted" id="c-note"></span></div></div>' +
-      '<div class="card"><h2 class="dl-h">批量任务</h2>' +
-      '<p class="muted">「重建全部单页」「permalink 迁移」等批量任务共用。<b>批量大小</b> = 每次请求处理多少篇；<b>并发数</b> = 一批里同时处理几篇。</p>' +
-      '<div class="row"><div><label>批量大小（1-100）</label><input type="number" id="c-task-batch" min="1" max="100"></div>' +
-      '<div><label>并发数（1-16）</label><input type="number" id="c-task-conc" min="1" max="16"></div></div>' +
-      '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-task-save">保存批量任务设置</button> <span class="muted" id="c-task-note"></span></div></div>' +
       '<span class="muted" id="bk-prog"></span></div></div>';
 
     // ---- 社交账号（{{SOCIAL_LINKS}}；每行 service|url）----
