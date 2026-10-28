@@ -2,6 +2,8 @@
 
 > Cloudflare-native CMS — static pages in R2, live lists from D1. One Worker, no servers.
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/yuebinliu/cfpress/tree/main/worker)
+
 CF Press is a self-hosted CMS that runs entirely on Cloudflare: **D1** for content, **R2** for media and pre-rendered single pages, **KV** for site settings, and a **Worker** for rendering. Single pages are generated to R2 as static HTML, while lists, categories, tags and archives render live from D1 — publish and it's instantly up to date.
 
 ## Features

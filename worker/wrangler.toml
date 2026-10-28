@@ -1,0 +1,33 @@
+# CF Press — Wrangler configuration
+#
+# This default config is what the "Deploy to Cloudflare" button and fresh clones read.
+# Cloudflare provisions D1 / KV / R2 from the bindings below and fills in real IDs at deploy time.
+# For your own production deployment, copy this file to wrangler.prod.toml (gitignored) with real IDs.
+name = "cfpress"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+[assets]
+directory = "./static"
+binding = "ASSETS"
+
+[vars]
+ENABLE_COMPRESSION = true
+WORDPRESS_URL = ""
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "cfpress"
+
+[[d1_databases]]
+binding = "D1_DATABASE"
+database_name = "cfpress"
+database_id = "00000000-0000-0000-0000-000000000000"   # auto-provisioned on deploy
+
+[[kv_namespaces]]
+binding = "KV_CACHE"
+id = "00000000000000000000000000000000"                  # auto-provisioned on deploy
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
