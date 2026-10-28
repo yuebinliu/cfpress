@@ -903,7 +903,13 @@ export async function handleAdminRequest(request, env) {
         if (!/^[A-Za-z0-9_.-]{3,40}$/.test(username)) return json({ error: '用户名需 3-40 位字母/数字/_.-' }, 400);
         if (password.length < 8) return json({ error: '密码至少 8 位' }, 400);
         const siteName = String(body.siteName || '').trim() || 'CF Press';
-        const siteUrl = String(body.siteUrl || '').trim().replace(/\/+$/, '');
+        let siteUrl = String(body.siteUrl || '').trim();
+        if (!siteUrl) {
+            siteUrl = new URL(request.url).origin;   // 留空 → 用当前 origin（不含 /admin 路径）
+        } else {
+            if (!/^https?:\/\//i.test(siteUrl)) siteUrl = 'https://' + siteUrl;
+            siteUrl = siteUrl.replace(/\/+$/, '').replace(/\/admin$/i, '');
+        }
         const hash = await hashPassword(password);
         try {
             await env.D1_DATABASE.prepare("INSERT INTO users (user_login, user_pass, user_nicename, user_email, display_name, role, user_status) VALUES (?, ?, ?, ?, ?, 'admin', 1)")
