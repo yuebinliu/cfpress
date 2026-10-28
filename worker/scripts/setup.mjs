@@ -61,9 +61,9 @@ async function ask(question, fallback = '') {
 }
 
 async function main() {
-    const tomlPath = path.join(root, 'wrangler.toml');
+    const tomlPath = path.join(root, 'wrangler.prod.toml');
     if (existsSync(tomlPath) && !force && !dryRun) {
-        const ans = await ask(`wrangler.toml 已存在，要覆盖吗？(y/N) `, 'n');
+        const ans = await ask(`wrangler.prod.toml 已存在，要覆盖吗？(y/N) `, 'n');
         if (ans.toLowerCase() !== 'y') { say('已取消（保留现有 wrangler.toml）。'); rl.close(); return; }
     }
 
@@ -100,14 +100,14 @@ async function main() {
         .replace(/^database_id = ".*"$/m, `database_id = "${d1Id || 'REPLACE_WITH_YOUR_D1_ID'}"`)
         .replace(/^id = ".*"$/m, `id = "${kvId || 'REPLACE_WITH_YOUR_KV_ID'}"`);
     if (dryRun) {
-        say('  [dry-run] 将写入 wrangler.toml（内容略）');
+        say('  [dry-run] 将写入 wrangler.prod.toml（内容略）');
     } else {
         writeFileSync(tomlPath, toml, 'utf8');
         say('  ✅ 已写入 ' + tomlPath);
     }
 
     say('\n下一步：');
-    say('  1) npm run deploy                 # 部署 Worker');
+    say('  1) npx wrangler deploy --config wrangler.prod.toml   # 部署 Worker');
     say('  2) 打开 https://<你的域名>/admin/  # 空库时会进初始化向导，创建第一个管理员');
     say('     （或用 curl：POST /api/setup {\"username\":\"…\",\"password\":\"…\",\"siteName\":\"…\"}；状态见 GET /api/setup/status）');
     say('  3) 内容来源三选一：WP 插件推送 / 第三方 md 编辑器（/wp-json/wp/v2/* + 应用密码）/ 后台直接写');

@@ -27,11 +27,11 @@ cd cfpress/worker
 npm install
 npx wrangler login
 
-# Create D1 + KV + R2 and generate wrangler.toml automatically
-node scripts/setup.mjs            # add --name=cfpress to name resources, --dry-run to preview
+# Create D1 + KV + R2 and generate wrangler.prod.toml (gitignored)
+node scripts/setup.mjs            # --name=cfpress to name resources, --dry-run to preview
 
-# Deploy
-npx wrangler deploy
+# Deploy with your generated config
+npx wrangler deploy --config wrangler.prod.toml
 ```
 
 Then open `https://<your-worker>.<account>.workers.dev/admin/` and follow the setup screen to create the admin account and set the site name / URL.
