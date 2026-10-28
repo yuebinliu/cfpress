@@ -198,7 +198,7 @@ function cfseReplace(tpl, token, value) {
 }
 
 /** 头部字标用词：站名以 CF（可选空格/连字符/下划线）开头时取后半段（"CF Press"/"CFPress" → "Press"），否则用全名 */
-function cfseBrandWord(name) {
+export function cfseBrandWord(name) {
     const n = String(name == null ? '' : name).trim();
     const m = n.match(/^CF[\s_\-]*(.+)$/i);
     if (m) {
@@ -206,6 +206,16 @@ function cfseBrandWord(name) {
         if (rest.length >= 2) return rest;   // 避免 "CFO" → "O" 这类误伤
     }
     return n;
+}
+
+/** 头部图标字标（logo 方块里的 1-2 个字母）：CF 系品牌固定 "CF"，否则取词首字母（"My Blog" → "MB"） */
+export function cfseBrandMark(name) {
+    const n = String(name == null ? '' : name).trim();
+    if (!n) return 'CF';
+    if (/^CF/i.test(n)) return 'CF';
+    const words = n.split(/[\s\-_]+/).filter(Boolean);
+    if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+    return n.slice(0, 2).toUpperCase();
 }
 
 /**

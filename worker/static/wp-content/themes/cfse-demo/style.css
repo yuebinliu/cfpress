@@ -51,7 +51,7 @@ p { margin: 0; }
   border-bottom: 1px solid var(--line);
 }
 .topbar-in { display: flex; align-items: center; gap: 28px; height: 68px; }
-.brand { display: inline-flex; align-items: center; gap: 5px; }
+.brand { display: inline-flex; align-items: center; gap: 3px; }
 .logo-mark {
   display: inline-grid; place-items: center;
   width: 30px; height: 30px;
@@ -59,9 +59,9 @@ p { margin: 0; }
   border-radius: 6px;
   font-family: var(--serif); font-size: 13px; font-weight: 700; letter-spacing: 0;
 }
-.brand-text { font-family: var(--serif); font-size: 16px; font-weight: 600; letter-spacing: 0.01em; }
+.brand-text { font-family: var(--serif); font-size: 16px; font-weight: 600; letter-spacing: -0.015em; }
 .badge {
-  margin-left: 6px;
+  margin-left: 9px;
   font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; text-transform: none;
   color: var(--accent-ink);
   border: 1px solid var(--line-2);
