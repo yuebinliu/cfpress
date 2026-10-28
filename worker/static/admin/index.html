@@ -59,6 +59,10 @@
   .setup-sub { margin: 0 0 18px; line-height: 1.6; }
   .btn-block { display: block; width: 100%; text-align: center; padding: 11px 14px; font-size: 14px; margin-top: 18px; }
   .setup-msg { margin-top: 12px; font-size: 13px; color: #8b8b93; white-space: pre-wrap; min-height: 1em; }
+  #login-card.setup-mode { max-width: 620px; }
+  .su-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 18px; }
+  .su-grid .su-full { grid-column: 1 / -1; }
+  @media (max-width: 560px) { .su-grid { grid-template-columns: 1fr; } }
   @media (max-width: 720px) {
     header { padding: 8px 12px; }
     header nav a { margin-right: 2px; font-size: 13px; }

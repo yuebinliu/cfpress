@@ -2649,18 +2649,22 @@
     var card = document.getElementById('login-card');
     if (!card) return;
     card.classList.remove('hidden');
+    card.classList.add('setup-mode');
     document.getElementById('view').style.display = 'none';
     document.getElementById('topbar').classList.add('hidden');
     card.innerHTML =
       '<div class="setup-brand"><span class="logo">CF</span> CF Press</div>' +
       '<h1>初始化站点</h1>' +
       '<p class="muted setup-sub">填写站点信息并创建第一个管理员账号，完成后即可进入后台。</p>' +
-      '<label>站点名<input id="su-name" placeholder="CF Press"></label>' +
+      '<div class="su-grid">' +
+      '<label>站点名<input id="su-name" placeholder="CF Press" value="CF Press"></label>' +
       '<label>站点 URL<input id="su-url" placeholder="https://cfpress.org"></label>' +
-      '<label>管理员用户名<input id="su-user" placeholder="admin"></label>' +
+      '<label class="su-full">站点描述<input id="su-desc" placeholder="一句话介绍你的站点" value="A site built with CF Press."></label>' +
+      '<label>管理员用户名<input id="su-user" placeholder="admin" value="admin"></label>' +
+      '<label>邮箱（可选）<input id="su-email" type="email"></label>' +
       '<label>管理员密码<input id="su-pass" type="password" placeholder="至少 8 位"></label>' +
       '<label>确认密码<input id="su-pass2" type="password"></label>' +
-      '<label>邮箱（可选）<input id="su-email" type="email"></label>' +
+      '</div>' +
       '<button class="btn btn-primary btn-block" id="su-go">创建并进入后台</button>' +
       '<div id="su-msg" class="setup-msg"></div>';
     var msg = document.getElementById('su-msg');
@@ -2680,6 +2684,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: u, password: p, siteName: name, siteUrl: siteUrl,
+          description: (document.getElementById('su-desc').value.trim() || 'A site built with CF Press.'),
           email: document.getElementById('su-email').value.trim(),
         }),
       }).then(function (r) { return r.json().then(function (d) { return { s: r.status, d: d }; }); })
