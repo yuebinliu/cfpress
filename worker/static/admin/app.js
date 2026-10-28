@@ -1471,7 +1471,7 @@
     sec.innerHTML = '<h1>设置</h1>' +
       
       '<div class="card"><h2 class="dl-h">站点信息</h2>' +
-      '<p class="muted">站名用于标题/页脚/侧边栏（保存即清缓存生效，历史静态单页需重建或全量导出）。站点描述用于 RSS 频道描述。</p>' +
+      '<p class="muted">站名显示在标题、页脚和侧边栏。保存后新页面立即生效；已生成的静态页需重建。站点描述用于 RSS。</p>' +
       '<label>站点名</label><input type="text" id="s-name">' +
       '<label>站点描述（用于 RSS 频道，可选）</label><textarea id="s-desc" style="min-height:54px;"></textarea>' +
       '<label>站点 logo URL（渲染 <code>{{SITE_LOGO}}</code>，留空则不显示该块）</label>' +
@@ -1488,17 +1488,17 @@
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="s-save">保存站点信息</button> <span class="muted" id="img-note"></span>' +
       '<input type="file" id="img-file" accept="image/*" hidden></div></div>' +
 '<div class="card"><h2 class="dl-h">社交账号</h2>' +
-      '<p class="muted">站点页脚 / 侧栏的社交链接。每行一条，格式 <code>平台|链接</code>，例如 <code>facebook|https://facebook.com/xxx</code>。平台名随意写（facebook / twitter / github…）。</p>' +
+      '<p class="muted">页脚与侧栏的社交链接，每行一条，格式 <code>平台|链接</code>。平台名可自定义。</p>' +
       '<textarea id="soc-input" style="min-height:72px;font-family:monospace;" placeholder="facebook|https://facebook.com/xxx"></textarea>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="soc-save">保存社交账号</button> <span class="muted" id="soc-note"></span></div></div>' +
       '<div class="card"><h2 class="dl-h">导航菜单</h2>' +
-      '<p class="muted">站点顶部的主导航，在这里独立维护。类型选「分类 / 标签」时第三列变成下拉选择，选完「显示文字」留空会自动填成它的名称；「自定义链接 / 文章」则填完整 URL 或 slug。「层级」用来做二级菜单：比上一项深就会自动挂到它下面。</p>' +
+      '<p class="muted">站点顶部导航。选「分类」或「标签」时，第三列变为下拉框；显示文字留空则自动填入名称。「层级」大于上一项时，该项成为它的子菜单。</p>' +
       '<div id="menu-rows" style="display:flex;flex-direction:column;gap:6px;margin-top:8px;"></div>' +
       '<div style="margin-top:10px;"><button class="btn btn-sm" id="menu-add">＋ 添加菜单项</button> ' +
       '<button class="btn btn-primary" id="menu-save">保存菜单</button> <span class="muted" id="menu-note"></span></div></div>' +
             
       '<div class="card"><h2 class="dl-h">缓存策略</h2>' +
-      '<p class="muted">控制列表页 / 侧边栏 / RSS 的缓存时长，文章单页不受影响（始终直读存储）。缓存放在 Cloudflare 边缘节点，不额外计费；数值填 <b>0 就每次都实时查库</b>。保存后会自动清一次相关缓存。</p>' +
+      '<p class="muted">列表页、侧边栏和 RSS 的缓存时长，文章页不受影响。缓存存放在 Cloudflare 边缘节点，不额外计费。填 <b>0</b> 表示每次实时查询。保存后自动清理相关缓存。</p>' +
       '<div style="margin:8px 0;display:flex;gap:6px;flex-wrap:wrap;">' +
       '<button class="btn btn-sm" id="cp-preset-d1">预设：全 D1（最省资源）</button>' +
       '<button class="btn btn-sm" id="cp-preset-mix">预设：混合（侧边栏缓存）</button>' +
@@ -1512,12 +1512,12 @@
       '<label style="margin-top:8px;display:block;"><input type="checkbox" id="c-purge"> 发布文章时清列表第一页/侧边栏缓存（走边缘缓存，<b>不消耗 KV</b>；想让「发布后立即刷新」就打开）</label>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-save">保存缓存策略</button> <span class="muted" id="c-note"></span></div></div>' +
       '<div class="card"><h2 class="dl-h">批量任务</h2>' +
-      '<p class="muted">「重建全部单页」「permalink 迁移」等批量任务共用。<b>批量大小</b> = 每次请求处理多少篇；<b>并发数</b> = 一批里同时处理几篇。</p>' +
+      '<p class="muted">批量任务共用此设置。<b>批量大小</b>：每次请求处理多少篇。<b>并发数</b>：同时处理几篇。</p>' +
       '<div class="row"><div><label>批量大小（1-100）</label><input type="number" id="c-task-batch" min="1" max="100"></div>' +
       '<div><label>并发数（1-16）</label><input type="number" id="c-task-conc" min="1" max="16"></div></div>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-task-save">保存批量任务设置</button> <span class="muted" id="c-task-note"></span></div></div>' +
       '<div class="card"><h2 class="dl-h">URL 结构（permalink）</h2>' +
-      '<p class="muted">决定文章页的地址格式，例如 <code>/%year%/%postname%/</code>。支持 <code>%postname%</code> <code>%year%</code> <code>%monthnum%</code> <code>%day%</code> <code>%post_id%</code> <code>%category%</code>（不支持 %author%）。<b>改完必须点「开始迁移」</b>，否则旧地址会 404 —— 迁移会先把新结构复制一份、旧文件原样保留，全部完成才切换。</p>' +
+      '<p class="muted">文章页的地址格式，例如 <code>/%year%/%postname%/</code>。支持 <code>%postname%</code> <code>%year%</code> <code>%monthnum%</code> <code>%day%</code> <code>%post_id%</code> <code>%category%</code>。<b>改完必须点「开始迁移」</b>，否则旧地址返回 404。迁移会保留旧文件，全部完成后再切换。</p>' +
       '<label>当前</label><input type="text" id="pm-current" readonly>' +
       '<label>新结构（WP 风格，如 /%year%/%postname%/）</label><input type="text" id="pm-input" placeholder="/%postname%/">' +
       '<div style="margin-top:10px;">' +
@@ -1529,12 +1529,12 @@
       '<span class="muted" id="pm-note"></span></div>' +
       '<pre id="pm-out" class="muted" style="margin-top:10px;white-space:pre-wrap;font-size:12px;"></pre></div>' +
       '<div class="card"><h2 class="dl-h">内容维护</h2>' +
-      '<p class="muted">用当前单页壳重建全部文章的静态单页（用于改名 / 换模板后统一旧单页外观与站点信息）。分批执行，页数多时请稍候。</p>' +
+      '<p class="muted">用当前模板重新生成所有文章页。改名或换模板后使用。分批执行，篇数多时耗时较久。</p>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="rb-btn">重建全部单页</button> ' +
       '<button class="btn" id="purge-btn">清空全站缓存</button> <span class="muted" id="rb-prog"></span></div></div>' +
       '<div class="card"><h2 class="dl-h">数据备份 / 恢复</h2>' +
-      '<p class="muted">导出一个 JSON：<b>文章正文、分类与标签定义、文档库索引、站点设置</b>（站名/菜单/URL 结构/缓存策略）。'
-      + '<b>不含</b>账号密码与 R2 里的媒体文件、文档原稿 —— 那些请另外备份。导入时按 slug 跳过已存在的文章；站点设置会再确认一次才覆盖。</p>' +
+      '<p class="muted">导出内容：<b>文章、分类与标签、文档库索引、站点设置</b>。'
+      + '<b>不含</b>账号、媒体文件和文档原稿，请另行备份。导入时跳过已存在的文章（按 slug 判断）。站点设置会再次确认后才覆盖。</p>' +
       '<div style="margin-top:10px;"><button class="btn" id="exp-btn">导出备份</button> ' +
       '<button class="btn" id="imp-btn">导入备份</button> ' +
       '<input type="file" id="imp-file" accept=".json,application/json" hidden>' +
