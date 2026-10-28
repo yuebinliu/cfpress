@@ -155,7 +155,7 @@ function cfseMenuUrl(site, item) {
  * （与 WP 后台菜单**不联动**，见 docs/skin-placeholder-split.md §2.1）。
  * 结构：[{title, type, target, children:[…]}]，type = custom|category|tag|post。
  */
-function cfseMenuHtml(site) {
+export function cfseMenuHtml(site) {
     const menu = (site && Array.isArray(site.menu)) ? site.menu : [];
     if (!menu.length) return '';
     const render = function (list) {
@@ -266,6 +266,7 @@ function cfseRenderItem(itemTpl, post, site) {
     h = cfseReplace(h, '{{SITE_URL}}', cfseEscUrl((site && site.url) || ''));
     h = cfseReplace(h, '{{SITE_NAME}}', escapeHtml((site && site.name) || ''));
     h = cfseReplace(h, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord((site && site.name) || '')));
+    h = cfseReplace(h, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark((site && site.name) || '')));
     h = cfseReplace(h, '{{SITE_DESC}}', escapeHtml((site && site.description) || ''));
     // 评论数：条目骨架是从"抓取那一刻的列表页"扒下来的，里面会夹带**探针文章**的评论数
     // （实测主题包写成 "3 Comments"）⇒ 这里按本篇真实评论数改写，避免列表里每篇都显示同一个数字。
@@ -399,6 +400,7 @@ export function renderHomepage(data, page, totalPosts, options = {}) {
     let html = pageTpl;
     html = cfseReplace(html, '{{SITE_NAME}}', escapeHtml(site.name || ''));
     html = cfseReplace(html, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord(site.name || '')));
+    html = cfseReplace(html, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark(site.name || '')));
     html = cfseReplace(html, '{{SITE_DESC}}', escapeHtml(site.description || ''));
     html = cfseReplace(html, '{{SITE_URL}}', cfseEscUrl(site.url || ''));
     html = cfseReplace(html, '{{CONTENT}}', postListHtml);
@@ -464,6 +466,7 @@ export function renderCategoryPage(data, page, totalPosts, options = {}) {
     let html = pageTpl;
     html = cfseReplace(html, '{{SITE_NAME}}', escapeHtml(site.name || ''));
     html = cfseReplace(html, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord(site.name || '')));
+    html = cfseReplace(html, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark(site.name || '')));
     html = cfseReplace(html, '{{SITE_DESC}}', escapeHtml(site.description || ''));
     html = cfseReplace(html, '{{SITE_URL}}', cfseEscUrl(site.url || ''));
     html = cfseReplace(html, '{{CONTENT}}', postListHtml);
@@ -529,6 +532,7 @@ export function renderTagPage(data, page, totalPosts, options = {}) {
     let html = pageTpl;
     html = cfseReplace(html, '{{SITE_NAME}}', escapeHtml(site.name || ''));
     html = cfseReplace(html, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord(site.name || '')));
+    html = cfseReplace(html, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark(site.name || '')));
     html = cfseReplace(html, '{{SITE_DESC}}', escapeHtml(site.description || ''));
     html = cfseReplace(html, '{{SITE_URL}}', cfseEscUrl(site.url || ''));
     html = cfseReplace(html, '{{CONTENT}}', postListHtml);
@@ -597,6 +601,7 @@ export function renderArchivePage(data, page, totalPosts, options = {}) {
     let html = pageTpl;
     html = cfseReplace(html, '{{SITE_NAME}}', escapeHtml(site.name || ''));
     html = cfseReplace(html, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord(site.name || '')));
+    html = cfseReplace(html, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark(site.name || '')));
     html = cfseReplace(html, '{{SITE_DESC}}', escapeHtml(site.description || ''));
     html = cfseReplace(html, '{{SITE_URL}}', cfseEscUrl(site.url || ''));
     html = cfseReplace(html, '{{CONTENT}}', postListHtml);

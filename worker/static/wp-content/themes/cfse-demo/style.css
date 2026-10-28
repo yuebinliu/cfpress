@@ -51,7 +51,7 @@ p { margin: 0; }
   border-bottom: 1px solid var(--line);
 }
 .topbar-in { display: flex; align-items: center; gap: 28px; height: 68px; }
-.brand { display: inline-flex; align-items: center; gap: 3px; }
+.brand { display: inline-flex; align-items: center; gap: 3px; margin-right: auto; }
 .logo-mark {
   display: inline-grid; place-items: center;
   width: 30px; height: 30px;
@@ -67,7 +67,7 @@ p { margin: 0; }
   border: 1px solid var(--line-2);
   border-radius: 999px; padding: 2px 8px;
 }
-.nav { margin-left: auto; }
+.nav { margin-left: 0; }
 .menu { display: flex; align-items: center; gap: 26px; list-style: none; margin: 0; padding: 0; }
 .menu-item a { color: var(--ink-2); font-size: 14.5px; letter-spacing: 0.01em; transition: color .15s ease; }
 .menu-item a:hover { color: var(--ink); }
@@ -322,3 +322,5 @@ p { margin: 0; }
   .band-in { flex-direction: column; align-items: flex-start; }
   .foot-grid { grid-template-columns: 1fr; gap: 26px; }
 }
+
+section.section:has(.post-grid:empty){display:none}

@@ -42,84 +42,67 @@ export const DEFAULT_DOC_SHELL = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{DOC_TITLE}} · {{SITE_NAME}}</title>
 <meta name="description" content="{{SITE_DESC}}">
+<link rel="stylesheet" href="{{CSS_URL}}">
 <style>
-:root{
-  --bg:#faf8f5;--surface:#ffffff;--surface-2:#f4f0e9;
-  --ink:#17140f;--ink-2:#5c564d;--ink-3:#9c9488;
-  --line:#e8e2d8;--line-2:#d8cfc0;
-  --accent:#8a6a43;--accent-ink:#6f5233;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
-  --serif:"Noto Serif SC","Songti SC","Source Han Serif SC",Georgia,"Times New Roman","SimSun",serif;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
-}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:16.5px/1.78 var(--sans);-webkit-font-smoothing:antialiased}
-a{color:var(--accent-ink)}
-.doc-top{position:sticky;top:0;z-index:20;background:rgba(250,248,245,0.94);border-bottom:1px solid var(--line)}
-.doc-top-in{display:flex;align-items:center;gap:14px;max-width:1180px;margin:0 auto;padding:0 24px;height:64px}
-.doc-brand{display:inline-flex;align-items:center;gap:3px;text-decoration:none;color:var(--ink)}
-.doc-logo{display:inline-grid;place-items:center;width:28px;height:28px;background:var(--ink);color:var(--bg);border-radius:6px;font-family:var(--serif);font-size:11.5px;font-weight:700;letter-spacing:0}
-.doc-word{font-family:var(--serif);font-size:15.5px;font-weight:600;letter-spacing:-0.015em}
-.doc-beta{margin-left:7px;font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--accent-ink);border:1px solid var(--line-2);border-radius:999px;padding:2px 7px}
-.doc-back{margin-left:auto;font-size:13.5px;color:var(--ink-3);text-decoration:none}
-.doc-back:hover{color:var(--ink)}
-.doc-layout{display:flex;align-items:flex-start;gap:56px;max-width:1180px;margin:0 auto;padding:44px 24px 96px}
-.doc-side-col{flex:0 0 230px;position:sticky;top:88px;max-height:calc(100vh - 112px);overflow:auto}
-.doc-side-title{margin:0 0 12px;padding-left:9px;font-size:10.5px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3)}
-.doc-main{flex:1;min-width:0;max-width:720px}
+.doc-wrap{display:flex;align-items:flex-start;gap:52px;max-width:var(--maxw,1080px);margin:0 auto;padding:46px 28px 90px}
+.doc-side-col{flex:0 0 224px;position:sticky;top:86px;max-height:calc(100vh - 112px);overflow:auto}
+.doc-side-title{margin:0 0 12px;padding-left:9px;font-size:10.5px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3,#9c9488)}
+.doc-main{flex:1;min-width:0;max-width:718px}
 .doc-sidebar{list-style:none;margin:0;padding:0;font-size:14px}
-.doc-sidebar ul{list-style:none;margin:2px 0 12px;padding-left:11px;border-left:1px solid var(--line)}
+.doc-sidebar ul{list-style:none;margin:2px 0 12px;padding-left:11px;border-left:1px solid var(--line,#e8e2d8)}
 .doc-sidebar li{margin:1px 0}
-.doc-sidebar a{display:block;padding:5px 9px;border-radius:6px;color:var(--ink-2);text-decoration:none;line-height:1.45;transition:color .15s ease,background .15s ease}
-.doc-sidebar a:hover{color:var(--ink);background:var(--surface-2)}
-.doc-sidebar a.active{color:var(--accent-ink);background:var(--surface-2);font-weight:600}
-.doc-sidebar .doc-dir-name{display:block;padding:13px 9px 4px;font-family:var(--serif);font-size:12.5px;font-weight:600;letter-spacing:.01em;color:var(--ink)}
-.doc-title{margin:0 0 30px;font-family:var(--serif);font-size:clamp(28px,3.4vw,36px);font-weight:600;line-height:1.2;letter-spacing:-0.02em;color:var(--ink)}
-.doc-body{font-size:16.5px;line-height:1.78;color:var(--ink-2)}
+.doc-sidebar a{display:block;padding:5px 9px;border-radius:6px;color:var(--ink-2,#5c564d);line-height:1.45;transition:color .15s ease,background .15s ease}
+.doc-sidebar a:hover{color:var(--ink,#17140f);background:var(--surface-2,#f4f0e9)}
+.doc-sidebar a.active{color:var(--accent-ink,#6f5233);background:var(--surface-2,#f4f0e9);font-weight:600}
+.doc-sidebar .doc-dir-name{display:block;padding:13px 9px 4px;font-family:var(--serif,serif);font-size:12.5px;font-weight:600;letter-spacing:.01em;color:var(--ink,#17140f)}
+.doc-title{margin:0 0 30px;font-family:var(--serif,serif);font-size:clamp(28px,3.4vw,36px);font-weight:600;line-height:1.2;letter-spacing:-0.02em}
+.doc-body{font-size:16.5px;line-height:1.78;color:var(--ink-2,#5c564d)}
 .doc-body>:first-child{margin-top:0}
-.doc-body h1,.doc-body h2,.doc-body h3,.doc-body h4{margin:2em 0 .6em;font-family:var(--serif);font-weight:600;line-height:1.32;letter-spacing:-0.01em;color:var(--ink)}
+.doc-body h1,.doc-body h2,.doc-body h3,.doc-body h4{margin:2em 0 .6em;line-height:1.32;letter-spacing:-0.01em}
 .doc-body h1{font-size:26px}
-.doc-body h2{font-size:21px;padding-bottom:.35em;border-bottom:1px solid var(--line)}
+.doc-body h2{font-size:21px;padding-bottom:.35em;border-bottom:1px solid var(--line,#e8e2d8)}
 .doc-body h3{font-size:17.5px}
 .doc-body p{margin:0 0 1.1em}
 .doc-body ul,.doc-body ol{margin:0 0 1.1em;padding-left:1.35em}
 .doc-body li{margin:.35em 0}
-.doc-body a{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid var(--line-2)}
-.doc-body a:hover{border-bottom-color:var(--accent)}
-.doc-body strong{color:var(--ink);font-weight:600}
-.doc-body code{font-family:var(--mono);font-size:.88em;padding:.12em .4em;border:1px solid var(--line);border-radius:5px;background:var(--surface-2);color:var(--ink)}
-.doc-body pre{margin:0 0 1.2em;padding:16px 18px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);overflow:auto;line-height:1.6}
+.doc-body a{color:var(--accent-ink,#6f5233);border-bottom:1px solid var(--line-2,#d8cfc0)}
+.doc-body a:hover{border-bottom-color:var(--accent,#8a6a43)}
+.doc-body strong{color:var(--ink,#17140f);font-weight:600}
+.doc-body code{font-family:var(--mono,monospace);font-size:.88em;padding:.12em .4em;border:1px solid var(--line,#e8e2d8);border-radius:5px;background:var(--surface-2,#f4f0e9);color:var(--ink,#17140f)}
+.doc-body pre{margin:0 0 1.2em;padding:16px 18px;border:1px solid var(--line,#e8e2d8);border-radius:9px;background:var(--surface-2,#f4f0e9);overflow:auto;line-height:1.6}
 .doc-body pre code{padding:0;border:0;background:none;font-size:13.5px}
-.doc-body blockquote{margin:1.2em 0;padding:.2em 0 .2em 18px;border-left:2px solid var(--accent);color:var(--ink-2)}
+.doc-body blockquote{margin:1.2em 0;padding:.2em 0 .2em 18px;border-left:2px solid var(--accent,#8a6a43);color:var(--ink-2,#5c564d)}
 .doc-body table{width:100%;margin:1.2em 0;border-collapse:collapse;font-size:15px}
-.doc-body th,.doc-body td{padding:9px 12px;border:1px solid var(--line);text-align:left}
-.doc-body th{background:var(--surface-2);font-family:var(--serif);font-weight:600;color:var(--ink)}
-.doc-body img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:8px}
-.doc-body hr{margin:2.4em 0;border:0;border-top:1px solid var(--line)}
-.doc-foot{display:flex;justify-content:space-between;gap:12px;margin-top:64px;padding-top:22px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-3)}
-.doc-foot a{color:var(--ink-2);text-decoration:none}
-.doc-foot a:hover{color:var(--ink)}
+.doc-body th,.doc-body td{padding:9px 12px;border:1px solid var(--line,#e8e2d8);text-align:left}
+.doc-body th{background:var(--surface-2,#f4f0e9);font-family:var(--serif,serif);font-weight:600;color:var(--ink,#17140f)}
+.doc-body img{max-width:100%;height:auto;border:1px solid var(--line,#e8e2d8);border-radius:8px}
+.doc-body hr{margin:2.4em 0;border:0;border-top:1px solid var(--line,#e8e2d8)}
+.doc-foot{display:flex;justify-content:space-between;gap:12px;margin-top:64px;padding-top:22px;border-top:1px solid var(--line,#e8e2d8);font-size:13px;color:var(--ink-3,#9c9488)}
+.doc-foot a{color:var(--ink-2,#5c564d)}
 @media(max-width:900px){
-  .doc-layout{flex-direction:column;gap:22px;padding:28px 20px 64px}
-  .doc-side-col{position:static;order:-1;width:100%;max-height:none;flex:none;padding-bottom:16px;border-bottom:1px solid var(--line)}
-  .doc-sidebar ul{border-left:0;padding-left:0}
-  .doc-top-in{padding:0 20px;height:58px}
+.doc-wrap{flex-direction:column;gap:22px;padding:28px 20px 64px}
+.doc-side-col{position:static;order:-1;width:100%;max-height:none;flex:none;padding-bottom:16px;border-bottom:1px solid var(--line,#e8e2d8)}
+.doc-sidebar ul{border-left:0;padding-left:0}
 }
 </style>
 </head>
 <body>
-<header class="doc-top"><div class="doc-top-in">
-<a class="doc-brand" href="{{SITE_URL}}/"><span class="doc-logo">{{BRAND_MARK}}</span><span class="doc-word">{{BRAND_WORD}}</span><span class="doc-beta">beta</span></a>
-<a class="doc-back" href="{{SITE_URL}}/">Back to site</a>
-</div></header>
-<div class="doc-layout">
-<aside class="doc-side-col"><div class="doc-side-title">Contents</div>{{DOC_SIDEBAR}}</aside>
-<main class="doc-main">
-<h1 class="doc-title">{{DOC_TITLE}}</h1>
-<article class="doc-body">{{CONTENT}}</article>
-<footer class="doc-foot"><span>{{SITE_NAME}}</span><a href="{{SITE_URL}}/">Home</a></footer>
-</main>
+<header class="topbar">
+  <div class="shell topbar-in">
+    <a class="brand" href="{{SITE_URL}}/"><span class="logo-mark">{{BRAND_MARK}}</span><span class="brand-text">{{BRAND_WORD}}</span><span class="badge">beta</span></a>
+    {{SITE_NAV}}
+    <form class="srch" role="search" action="{{SITE_URL}}/" method="get">
+      <input type="search" name="s" placeholder="Search docs…" aria-label="Search">
+    </form>
+  </div>
+</header>
+<div class="doc-wrap">
+  <aside class="doc-side-col"><div class="doc-side-title">Contents</div>{{DOC_SIDEBAR}}</aside>
+  <main class="doc-main">
+    <h1 class="doc-title">{{DOC_TITLE}}</h1>
+    <article class="doc-body">{{CONTENT}}</article>
+    <footer class="doc-foot"><span>{{SITE_NAME}}</span><a href="{{SITE_URL}}/">Home</a></footer>
+  </main>
 </div>
 </body>
 </html>`;
@@ -429,7 +412,13 @@ export async function renderDocument(env, route, doc, shared) {
     // 6. 填占位符
     const { getSiteContext } = await import('./site');
     const site = await getSiteContext(env);
-    const { cfseInjectHead, cfseBrandWord, cfseBrandMark } = await import('./template-engine');
+    const { cfseInjectHead, cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
+    // 主题 CSS：与主站共用同一份 style.css（文档库不再自带一套内嵌皮肤）
+    // 风格 id 优先级：路由自带 docRoutes.styleId → 站点当前生效风格 → 内置默认
+    const styleId = String(route.styleId || (site && site.activeStyleId) || 'cfse-demo');
+    const cssUrl = String(site.url || '').replace(/\/+$/, '') + '/wp-content/themes/' + styleId + '/style.css';
+    const menuHtml = cfseMenuHtml(site);
+    const siteNav = menuHtml ? '<nav class="nav">' + menuHtml + '</nav>' : '';
     function repVal(v) {
         if (v === 'DOC_TITLE') return escHtml(docTitleFromPath(path, doc.title));
         if (v === 'CONTENT') return bodyHtml;
@@ -439,12 +428,14 @@ export async function renderDocument(env, route, doc, shared) {
         if (v === 'SITE_DESC') return escHtml(site.description || '');
         if (v === 'BRAND_WORD') return escHtml(cfseBrandWord(site.name || ''));
         if (v === 'BRAND_MARK') return escHtml(cfseBrandMark(site.name || ''));
+        if (v === 'CSS_URL') return escUrl(cssUrl);
+        if (v === 'SITE_NAV') return siteNav;
         return '';
     }
     // 顺序很重要：**先把壳里未实现的占位符清掉，再注入正文**。
     // 旧实现是「注入正文 → 全局兜底清理」，会把正文（md 原稿）里形如 {{POST_TITLE}}
     // 的字面量一起删掉 —— 一旦文档讲解占位符本身，正文就会被吃空。
-    const DOC_KEYS = ['DOC_TITLE', 'CONTENT', 'DOC_SIDEBAR', 'SITE_NAME', 'SITE_URL', 'SITE_DESC', 'BRAND_WORD', 'BRAND_MARK'];
+    const DOC_KEYS = ['DOC_TITLE', 'CONTENT', 'DOC_SIDEBAR', 'SITE_NAME', 'SITE_URL', 'SITE_DESC', 'BRAND_WORD', 'BRAND_MARK', 'CSS_URL', 'SITE_NAV'];
     let h = shellTpl;
     // 壳里的已知占位符先换成哨兵（NUL 包裹；正文里不可能出现该串）
     DOC_KEYS.forEach(function (k, i) { h = h.split('{{' + k + '}}').join('\u0000cfseDoc' + i + '\u0000'); });
@@ -483,8 +474,12 @@ export async function renderDocIndex(env, route) {
     }).join('\n');
     const { getSiteContext } = await import('./site');
     const site = await getSiteContext(env);
-    const { cfseInjectHead, cfseBrandWord, cfseBrandMark } = await import('./template-engine');
-    const home = escHtml(site.url || '');
+    const { cfseInjectHead, cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
+    const home = String(site.url || '').replace(/\/+$/, '');
+    const styleId = String(route.styleId || (site && site.activeStyleId) || 'cfse-demo');
+    const cssUrl = home + '/wp-content/themes/' + styleId + '/style.css';
+    const menuHtml = cfseMenuHtml(site);
+    const siteNav = menuHtml ? '<nav class="nav">' + menuHtml + '</nav>' : '';
     return cfseInjectHead(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -492,43 +487,36 @@ export async function renderDocIndex(env, route) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${escHtml(site.name || 'Documentation')} · Documentation</title>
 <meta name="description" content="${escHtml(site.description || '')}">
+<link rel="stylesheet" href="${escHtml(cssUrl)}">
 <style>
-:root{--bg:#faf8f5;--surface-2:#f4f0e9;--ink:#17140f;--ink-2:#5c564d;--ink-3:#9c9488;--line:#e8e2d8;--line-2:#d8cfc0;--accent-ink:#6f5233;
---sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
---serif:"Noto Serif SC","Songti SC","Source Han Serif SC",Georgia,"Times New Roman","SimSun",serif;
---mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:16.5px/1.78 var(--sans);-webkit-font-smoothing:antialiased}
-a{color:var(--accent-ink)}
-.doc-top{position:sticky;top:0;z-index:20;background:rgba(250,248,245,0.94);border-bottom:1px solid var(--line)}
-.doc-top-in{display:flex;align-items:center;gap:14px;max-width:880px;margin:0 auto;padding:0 24px;height:64px}
-.doc-brand{display:inline-flex;align-items:center;gap:3px;text-decoration:none;color:var(--ink)}
-.doc-logo{display:inline-grid;place-items:center;width:28px;height:28px;background:var(--ink);color:var(--bg);border-radius:6px;font-family:var(--serif);font-size:11.5px;font-weight:700}
-.doc-word{font-family:var(--serif);font-size:15.5px;font-weight:600;letter-spacing:-0.015em}
-.doc-beta{margin-left:7px;font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--accent-ink);border:1px solid var(--line-2);border-radius:999px;padding:2px 7px}
-.doc-back{margin-left:auto;font-size:13.5px;color:var(--ink-3);text-decoration:none}
-.doc-back:hover{color:var(--ink)}
-.doc-index-wrap{max-width:880px;margin:0 auto;padding:56px 24px 96px}
-h1{margin:0 0 10px;font-family:var(--serif);font-size:clamp(28px,3.4vw,36px);font-weight:600;line-height:1.2;letter-spacing:-0.02em}
-.lead{margin:0 0 34px;color:var(--ink-3);font-size:14.5px}
-.doc-index{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
-.doc-index li{display:flex;align-items:baseline;gap:12px;justify-content:space-between;padding:14px 2px;border-bottom:1px solid var(--line)}
-.doc-index a{font-family:var(--serif);font-size:16.5px;font-weight:600;color:var(--ink);text-decoration:none;letter-spacing:-0.005em}
-.doc-index a:hover{color:var(--accent-ink)}
-.doc-path{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);flex:none}
-.doc-index .empty{color:var(--ink-3);justify-content:flex-start;font-size:14.5px}
-@media(max-width:640px){.doc-top-in,.doc-index-wrap{padding-left:20px;padding-right:20px}.doc-index li{flex-direction:column;gap:2px}}
+.doc-index-wrap{max-width:var(--maxw,1080px);margin:0 auto;padding:56px 28px 96px}
+.doc-index-head h1{margin:0 0 10px;font-family:var(--serif,serif);font-size:clamp(28px,3.4vw,36px);font-weight:600;line-height:1.2;letter-spacing:-0.02em}
+.doc-index-head p{margin:0 0 34px;color:var(--ink-3,#9c9488);font-size:14.5px}
+.doc-index{list-style:none;margin:0;padding:0;max-width:760px;border-top:1px solid var(--line,#e8e2d8)}
+.doc-index li{display:flex;align-items:baseline;gap:12px;justify-content:space-between;padding:14px 2px;border-bottom:1px solid var(--line,#e8e2d8)}
+.doc-index a{font-family:var(--serif,serif);font-size:16.5px;font-weight:600;color:var(--ink,#17140f);letter-spacing:-0.005em}
+.doc-index a:hover{color:var(--accent-ink,#6f5233)}
+.doc-path{font-family:var(--mono,monospace);font-size:11.5px;color:var(--ink-3,#9c9488);flex:none}
+.doc-index .empty{color:var(--ink-3,#9c9488);justify-content:flex-start;font-size:14.5px}
+@media(max-width:640px){.doc-index li{flex-direction:column;gap:2px}}
 </style>
 </head>
 <body>
-<header class="doc-top"><div class="doc-top-in">
-<a class="doc-brand" href="${home}/"><span class="doc-logo">${escHtml(cfseBrandMark(site.name || ''))}</span><span class="doc-word">${escHtml(cfseBrandWord(site.name || ''))}</span><span class="doc-beta">beta</span></a>
-<a class="doc-back" href="${home}/">Back to site</a>
-</div></header>
+<header class="topbar">
+  <div class="shell topbar-in">
+    <a class="brand" href="${home}/"><span class="logo-mark">${escHtml(cfseBrandMark(site.name || ''))}</span><span class="brand-text">${escHtml(cfseBrandWord(site.name || ''))}</span><span class="badge">beta</span></a>
+    ${siteNav}
+    <form class="srch" role="search" action="${home}/" method="get">
+      <input type="search" name="s" placeholder="Search docs…" aria-label="Search">
+    </form>
+  </div>
+</header>
 <main class="doc-index-wrap">
-<h1>Documentation</h1>
-<p class="lead">${docs.length} document${docs.length === 1 ? '' : 's'} in this library.</p>
-<ul class="doc-index">${items || '<li class="empty">No documents yet.</li>'}</ul>
+  <div class="doc-index-head">
+    <h1>Documentation</h1>
+    <p>${docs.length} document${docs.length === 1 ? '' : 's'} in this library.</p>
+  </div>
+  <ul class="doc-index">${items || '<li class="empty">No documents yet.</li>'}</ul>
 </main>
 </body>
 </html>`, site.headExtra);
