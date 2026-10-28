@@ -784,6 +784,10 @@ export async function handleRequest(request, env) {
         const cacheKey = `home:page:${page}`;
 
         const site = await getSiteContext(env);
+        // 未初始化（还没有站点名/设置）⇒ 直接进安装向导，别让空库显示一个空壳首页
+        if (!site || !site.name) {
+            return Response.redirect(new URL('/admin/', request.url).toString(), 302);
+        }
         const perPage = perPageOf(site);
         const data = await getRecentPosts(env.D1_DATABASE, page, perPage);
         await attachCommentCounts(env, data);

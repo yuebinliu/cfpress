@@ -6,55 +6,59 @@
 <title>CF Press · Admin</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #f4f5f7; color: #222; }
-  a { color: #2271d1; text-decoration: none; }
-  header { background: #1d2327; color: #fff; padding: 0 18px; min-height: 50px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  header .brand { font-weight: 700; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #f6f6f7; color: #17171a; -webkit-font-smoothing: antialiased; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header { background: #fff; color: #17171a; padding: 0 20px; min-height: 56px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; border-bottom: 1px solid #e6e6e9; position: sticky; top: 0; z-index: 30; }
+  header .brand { font-weight: 650; font-size: 15px; }
   header nav { display: flex; flex-wrap: wrap; align-items: center; }
-  header nav a { color: #c7c9cc; margin-right: 14px; padding: 4px 2px; }
-  header nav a.active { color: #fff; border-bottom: 2px solid #2271d1; }
-  @media (max-width: 720px) {
-    header { padding: 8px 12px; }
-    header nav a { margin-right: 12px; font-size: 14px; }
-    #who { display: none; }
-    main { margin: 12px auto; }
-  }
+  header nav a { color: #52525b; margin-right: 4px; padding: 6px 10px; border-radius: 7px; font-size: 13.5px; }
+  header nav a:hover { background: #f2f2f3; color: #17171a; text-decoration: none; }
+  header nav a.active { color: #17171a; background: #f2f2f3; font-weight: 550; }
+  header .spacer { flex: 1; }
+  main { max-width: 980px; margin: 26px auto; padding: 0 16px; }
   body.ed-full main { max-width: none; margin: 0; padding: 0; }
   body.ed-full #view-posts { position: fixed; inset: 0; z-index: 40; background: #fff; overflow: auto; padding: 14px 16px; }
   body.ed-full #ed-wysiwyg #ed-body { min-height: calc(100vh - 300px); }
   body.ed-full #ed-md textarea, body.ed-full #ed-md #ed-md-prev { min-height: calc(100vh - 300px); }
-  header .spacer { flex: 1; }
-  main { max-width: 980px; margin: 22px auto; padding: 0 14px; }
-  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 18px; margin-bottom: 18px; }
-  h1 { font-size: 20px; margin: 0 0 14px; }
-  .btn { display: inline-block; border: 1px solid #ccc; background: #f6f7f7; color: #222; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-  .btn:hover { background: #f0f0f1; }
-  .btn-primary { background: #2271d1; border-color: #2271d1; color: #fff; }
-  .btn-primary:hover { background: #135e96; }
-  .btn-danger { color: #b32d2e; border-color: #b32d2e; background: #fff; }
-  .btn-sm { padding: 3px 10px; font-size: 12px; }
+  .card { background: #fff; border: 1px solid #e6e6e9; border-radius: 12px; padding: 22px; margin-bottom: 18px; }
+  h1 { font-size: 19px; margin: 0 0 14px; letter-spacing: -0.01em; }
+  .btn { display: inline-block; border: 1px solid #d4d4d8; background: #fff; color: #17171a; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background .12s ease, border-color .12s ease; }
+  .btn:hover { background: #f4f4f5; }
+  .btn-primary { background: #17171a; border-color: #17171a; color: #fff; }
+  .btn-primary:hover { background: #000; }
+  .btn-danger { color: #b42318; border-color: #f0b4b0; background: #fff; }
+  .btn-danger:hover { background: #fcf0ef; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
   input[type=text], input[type=password], input[type=email], input[type=url], textarea, select {
-    width: 100%; padding: 8px 10px; border: 1px solid #c3c4c7; border-radius: 4px; font-size: 14px; font-family: inherit;
+    width: 100%; padding: 9px 11px; border: 1px solid #d4d4d8; border-radius: 8px; font-size: 14px; font-family: inherit; background: #fff; color: #17171a;
   }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
   textarea { min-height: 260px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.6; }
-  label { display: block; margin: 12px 0 4px; font-weight: 600; font-size: 13px; }
+  label { display: block; margin: 12px 0 5px; font-weight: 550; font-size: 13px; color: #3f3f46; }
   .row { display: flex; gap: 12px; flex-wrap: wrap; }
   .row > div { flex: 1; min-width: 220px; }
   .grid table { width: 100%; border-collapse: collapse; }
-  .grid th, .grid td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 14px; vertical-align: top; }
-  .grid th { font-size: 12px; color: #757575; text-transform: uppercase; }
-  .grid tr:hover td { background: #f9fafb; }
-  .muted { color: #888; font-size: 12px; }
+  .grid th, .grid td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #f0f0f1; font-size: 14px; vertical-align: top; }
+  .grid th { font-size: 11.5px; color: #8b8b93; text-transform: uppercase; letter-spacing: 0.04em; }
+  .grid tr:hover td { background: #fafafa; }
+  .muted { color: #8b8b93; font-size: 12px; }
   .pager { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
-  .flash { padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; font-size: 13px; }
-  .flash.ok { background: #edfaef; color: #22710a; border: 1px solid #b8e6bf; }
-  .flash.err { background: #fcf0f1; color: #b32d2e; border: 1px solid #f2c9cc; }
+  .flash { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
+  .flash.ok { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+  .flash.err { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
   .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
   .toolbar input[type=text] { flex: 1 1 140px; width: auto; max-width: 260px; }
   .toolbar select { flex: 0 0 auto; width: auto; max-width: 160px; }
-  #login-card { max-width: 380px; margin: 80px auto; }
+  #login-card { max-width: 380px; margin: 88px auto; }
   #view { display: none; }
   .hidden { display: none !important; }
+  @media (max-width: 720px) {
+    header { padding: 8px 12px; }
+    header nav a { margin-right: 2px; font-size: 13px; }
+    #who { display: none; }
+    main { margin: 14px auto; }
+  }
 </style>
 </head>
 <body>
@@ -71,8 +75,8 @@
 <a href="#comments" data-nav="comments">💬 评论</a>
   </nav>
   <span class="spacer"></span>
-  <a href="/" target="_blank" class="btn btn-sm" style="color:#c7c9cc;">查看站点 ↗</a>
-  <span id="who" style="color:#c7c9cc;font-size:13px;"></span>
+  <a href="/" target="_blank" class="btn btn-sm" style="color:#52525b;">查看站点 ↗</a>
+  <span id="who" style="color:#8b8b93;font-size:13px;"></span>
   <button class="btn btn-sm" id="btn-logout">退出</button>
 </header>
 

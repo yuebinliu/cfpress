@@ -21,7 +21,7 @@ const TPL_TTL = 15000;
  * 背景：templates.js 里的 140KB 内嵌兜底模板已删除 ⇒ 默认风格改为读内置风格包的 tpl.json
  *（assets 免费直出，无需部署即可用）。读不到时调用方回退 ./fallback-tpl 的极小骨架。
  */
-const DEFAULT_STYLE_ID = 'minimal-reading';
+const DEFAULT_STYLE_ID = 'cfse-demo';
 const tplCache = new Map(); // id -> { tpl, exp }
 const TPL_KINDS = ['single', 'item', 'pageHome', 'pageCategory', 'pageTag', 'pageArchive'];
 
