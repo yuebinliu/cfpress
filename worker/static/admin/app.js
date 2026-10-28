@@ -2254,16 +2254,15 @@
   function renderDocuments() {
     var sec = document.getElementById('view-documents');
     if (!sec) return;
-    sec.innerHTML = '<h1>📚 文档库</h1>'
-      + '<p class="muted">独立于博客文章的内容来源：本地 md/html 原稿上传到 R2，元数据存 D1，访问时套「目录级壳」渲染成品。'
-      + '配置见 <code>docs/document-library.md</code>。<b>abc</b> = 原稿目录（R2），<b>xyz</b> = 可访问前缀（全局唯一、避开保留前缀）。</p>'
+    sec.innerHTML = '<h1>文档库</h1>'
+      + '<p class="muted">把 Markdown / HTML 原稿存进 R2，元数据存 D1，访问时用<b>当前主题</b>渲染成页面。'
+      + '一个文档库 = 原稿目录（<b>abc</b>）+ 访问前缀（<b>xyz</b>，全局唯一）。</p>'
       + '<div class="card">'
       + '<div style="display:flex;gap:6px;border-bottom:1px solid #eee;padding-bottom:8px;margin-bottom:14px;">'
-      + '<button class="btn btn-sm" data-dltab="routes">📚 文档库映射</button>'
-      + '<button class="btn btn-sm" data-dltab="docs">📄 文档管理</button>'
-      + '<button class="btn btn-sm" data-dltab="shell">🎨 文档壳</button></div>'
+      + '<button class="btn btn-sm" data-dltab="routes">文档库</button>'
+      + '<button class="btn btn-sm" data-dltab="docs">文档与上传</button></div>'
       + '<section id="dltab-routes">'
-      + '<p class="muted">每条 = 一个文档库：<code>abc</code> 原稿目录 → <code>xyz</code> 访问前缀 → 壳（风格）→ 导航 → 目录页。保存后清 site:ctx 即时生效（KV/边缘缓存最终一致约 60s）。</p>'
+      + '<p class="muted">每条 = 一个文档库。保存后约 60 秒生效（站点缓存刷新）。</p>'
       + '<div id="doc-route-rows" style="display:flex;flex-direction:column;gap:8px;"></div>'
       + '<div style="margin-top:10px;"><button class="btn btn-sm" id="doc-route-add">＋ 添加文档库</button> '
       + '<button class="btn btn-primary" id="doc-route-save">保存映射</button> <span class="muted" id="doc-route-note"></span></div></section>'
@@ -2276,44 +2275,31 @@
       + '<button class="btn btn-sm" id="doc-batch-del">🗑 批量删除</button>'
       + '<span class="muted" id="doc-count"></span>'
       + '<span class="muted" id="doc-selcount"></span></div>'
-      + '<div id="doc-list" style="margin-top:10px;">先选库</div>'
-      + '<hr style="border:0;border-top:1px solid #eee;margin:16px 0;">'
-      + '<h1 style="font-size:15px;">上传 / 更新单篇</h1>'
+      + '<div id="doc-list" style="margin-top:12px;"><p class="muted">选择一个文档库后，这里显示它的文档。</p></div>'
+      + '<div class="dl-sep"></div>'
+      + '<h2 class="dl-h">上传单篇</h2>'
       + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
       + '<input type="file" id="doc-file" accept=".md,.markdown,.html,.htm">'
       + '<input type="text" id="doc-path" placeholder="相对路径，如 guide/readme.md" style="flex:1;min-width:200px;">'
       + '<input type="text" id="doc-title" placeholder="标题（可选，留空用文件名）" style="width:200px;">'
       + '<button class="btn btn-primary" id="doc-upload">上传</button> <span class="muted" id="doc-up-note"></span></div>'
-      + '<h1 style="font-size:15px;margin-top:18px;">批量导入（选目录）</h1>'
+      + '<h2 class="dl-h">批量导入目录</h2>'
       + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
       + '<input type="file" id="doc-bulk" multiple webkitdirectory>'
       + '<label style="display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" id="doc-bulk-strip" checked> 去掉顶层目录名</label>'
       + '<input type="text" id="doc-bulk-prefix" placeholder="路径前缀（可选）" style="width:180px;">'
       + '<button class="btn btn-primary" id="doc-bulk-go">批量导入</button> <span class="muted" id="doc-bulk-note"></span></div>'
-      + '<p class="muted" style="margin-top:6px;">大目录（几百篇/含大文件）建议用本地脚本 <code>tools/import-documents.mjs</code>；单次请求体上限 25MB。</p>'
+      + '<p class="muted" style="margin-top:6px;">单次请求体上限 25MB；目录很大时建议分批导入。</p>'
       + '</section>'
-      + '<section id="dltab-shell" class="hidden">'
-      + '<p class="muted">文档页的 HTML 模板。可用占位符：<code>{{DOC_TITLE}}</code> <code>{{CONTENT}}</code> <code>{{DOC_SIDEBAR}}</code> <code>{{SITE_NAME}}</code> <code>{{SITE_URL}}</code> <code>{{SITE_DESC}}</code>。'
-      + '库的「风格下拉」选「（默认壳）」或某个<i>没有文档壳</i>的风格时，一律回退到<b>内置默认文档壳</b>。</p>'
-      + '<p class="muted"><b>推荐流程</b>：先选好库 → 「载入当前库的文档壳」→ 改 → <b>💾 保存并应用到当前库</b> → 去「文档管理」点<b>整库重建</b>即可。</p>'
-      + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0;">'
-      + '<button class="btn btn-sm" id="doc-shell-default">载入内置默认壳</button>'
-      + '<button class="btn btn-sm" id="doc-shell-load">载入当前库的文档壳</button>'
-      + '<label>名称</label><input type="text" id="doc-shell-name" placeholder="我的文档壳" style="width:200px;">'
-      + '<span class="muted" id="doc-shell-cur"></span></div>'
-      + '<textarea id="doc-shell-ta" style="min-height:240px;width:100%;font-family:monospace;font-size:12px;"></textarea>'
-      + '<div style="margin-top:8px;"><button class="btn btn-primary" id="doc-shell-apply">💾 保存并应用到当前库</button> '
-      + '<button class="btn btn-sm" id="doc-shell-save">📄 另存为新壳</button> '
-      + '<span class="muted" id="doc-shell-note"></span></div></section>'
       + '</div>';
 
     var note = document.getElementById('doc-route-note');
-    var st = { routes: [], abc: '', tab: 'routes', shellId: '' };
+    var st = { routes: [], abc: '', tab: 'routes' };
 
     // ---- 大类 tab 切换 ----
     function setDlTab(name) {
       st.tab = name;
-      ['routes', 'docs', 'shell'].forEach(function (k) {
+      ['routes', 'docs'].forEach(function (k) {
         var el = document.getElementById('dltab-' + k);
         if (el) el.classList.toggle('hidden', k !== name);
       });
@@ -2330,24 +2316,16 @@
     function routeRow(dr, idx) {
       var d = dr || {};
       var row = document.createElement('div');
-      row.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:nowrap;border:1px solid #eee;padding:8px;border-radius:6px;';
+      row.dataset.styleId = d.styleId || '';
+      row.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;border:1px solid #eee;padding:8px;border-radius:6px;';
       row.innerHTML =
-        '<input type="text" data-f="abc" placeholder="abc（原稿目录）" value="' + esc(d.abc || '') + '" style="width:140px;flex:0 0 auto;">'
-        + '<input type="text" data-f="xyz" placeholder="xyz（访问前缀）" value="' + esc(d.xyz || '') + '" style="width:140px;flex:0 0 auto;">'
-        + '<select data-f="styleId" style="flex:1 1 auto;min-width:110px;"></select>'
-        + '<select data-f="docNav" style="flex:0 0 auto;width:132px;" title="导航"><option value="sidebar">侧边栏目录树</option><option value="none">无导航</option><option value="prevnext">上一篇/下一篇</option></select>'
-        + '<label style="display:flex;align-items:center;gap:3px;white-space:nowrap;flex:0 0 auto;"><input type="checkbox" data-f="docIndex"> 目录页</label>'
-        + '<button class="btn btn-sm" data-act="del" style="flex:0 0 auto;">✕</button>';
-      var styleSel = row.querySelector('[data-f="styleId"]');
-      styleSel.innerHTML = '<option value="">（默认文档壳）</option>';
-      api('/api/documents/shells').then(function (r) {
-        ((r && r.shells) || []).forEach(function (s) {
-          var o = document.createElement('option');
-          o.value = s.id; o.textContent = s.name || s.id;
-          styleSel.appendChild(o);
-        });
-        styleSel.value = d.styleId || '';
-      }).catch(function () {});
+        '<input type="text" data-f="abc" placeholder="原稿目录（如 docs）" title="abc：原稿在 R2 里的目录" value="' + esc(d.abc || '') + '" style="width:150px;flex:0 0 auto;">'
+        + '<span class="muted" style="flex:0 0 auto;">→</span>'
+        + '<input type="text" data-f="xyz" placeholder="访问前缀（如 docs）" title="xyz：对外 URL 前缀，全局唯一" value="' + esc(d.xyz || '') + '" style="width:150px;flex:0 0 auto;">'
+        + '<select data-f="docNav" style="flex:0 0 auto;width:148px;" title="文档页左侧导航">'
+        + '<option value="sidebar">侧边栏目录树</option><option value="none">无导航</option><option value="prevnext">上一篇 / 下一篇</option></select>'
+        + '<label style="display:flex;align-items:center;gap:3px;white-space:nowrap;flex:0 0 auto;"><input type="checkbox" data-f="docIndex"> 生成目录页</label>'
+        + '<button class="btn btn-sm" data-act="del" style="flex:0 0 auto;margin-left:auto;" title="删除这一条">✕</button>';
       row.querySelector('[data-f="docNav"]').value = d.docNav || 'sidebar';
       row.querySelector('[data-f="docIndex"]').checked = !!d.docIndex;
       row.querySelector('[data-act="del"]').onclick = function () { row.remove(); };
@@ -2372,7 +2350,7 @@
         routes.push({
           abc: abc,
           xyz: xyz,
-          styleId: row.querySelector('[data-f="styleId"]').value,
+          styleId: row.dataset.styleId || '',
           docNav: row.querySelector('[data-f="docNav"]').value,
           docIndex: row.querySelector('[data-f="docIndex"]').checked,
         });
@@ -2399,7 +2377,7 @@
         });
         if (prev) sel.value = prev;
         st.abc = sel.value || '';
-        if (st.abc) loadDocs(); else document.getElementById('doc-list').innerHTML = '<p class="muted">请先配置文档库映射并选择库。</p>';
+        if (st.abc) loadDocs(); else document.getElementById('doc-list').innerHTML = '<p class="muted">还没有可用的文档库，先到「文档库」标签添加一条。</p>';
       }).catch(function (e) { note.textContent = '读取失败：' + (e && e.message || e); });
     }
     function docViewHref(d) {
@@ -2500,7 +2478,7 @@
           method: 'POST',
           body: { abc: st.abc, path: path, title: document.getElementById('doc-title').value.trim(), content_base64: b64 },
         }).then(function () {
-          upNote.textContent = '已上传（成品已失效，访问时自动重渲染）';
+          upNote.textContent = '已上传，访问时自动渲染';
           loadDocs();
         }).catch(function (e) { upNote.textContent = '上传失败：' + (e && e.message || e); });
       };
@@ -2549,48 +2527,6 @@
           .catch(function (e) { bkNote.textContent = '导入失败：' + (e && e.message || e); });
       }
     };
-    // 文档壳编辑器
-    function setShellCur() {
-      var el = document.getElementById('doc-shell-cur');
-      if (el) el.textContent = st.shellId ? ('当前壳 id：' + st.shellId) : '当前：内置默认壳（未绑定具名壳）';
-    }
-    document.getElementById('doc-shell-default').onclick = function () {
-      api('/api/documents/shell').then(function (r) {
-        document.getElementById('doc-shell-ta').value = r.docShell || '';
-        document.getElementById('doc-shell-name').value = '';
-        st.shellId = ''; setShellCur();
-      }).catch(function () {});
-    };
-    document.getElementById('doc-shell-load').onclick = function () {
-      var rt = st.routes.filter(function (x) { return x.abc === st.abc; })[0];
-      var sid = rt ? rt.styleId : '';
-      api('/api/documents/shell' + (sid ? '?id=' + encodeURIComponent(sid) : '')).then(function (r) {
-        document.getElementById('doc-shell-ta').value = r.docShell || '';
-        document.getElementById('doc-shell-name').value = (r.name && r.name !== '（默认文档壳）') ? r.name : '';
-        st.shellId = sid || ''; setShellCur();
-      }).catch(function () {});
-    };
-    function saveShell(applyTo) {
-      var noteEl = document.getElementById('doc-shell-note');
-      var ta = document.getElementById('doc-shell-ta').value;
-      if (!ta.trim()) { noteEl.textContent = '壳内容为空'; return; }
-      if (applyTo && !st.abc) { noteEl.textContent = '请先在「文档管理」选一个库'; return; }
-      noteEl.textContent = '保存中…';
-      var body = { name: document.getElementById('doc-shell-name').value.trim(), docShell: ta };
-      if (applyTo) { body.applyTo = st.abc; if (st.shellId) body.id = st.shellId; }
-      api('/api/documents/shell/save', { method: 'POST', body: body }).then(function (r) {
-        if (applyTo && r.applied) {
-          st.shellId = r.id; setShellCur();
-          noteEl.textContent = '已保存并应用到库「' + st.abc + '」→ 去「文档管理」点「整库重建」即生效';
-        } else {
-          noteEl.textContent = '已保存为新壳（id=' + r.id + '）→ 到「文档库映射」把它选为该库的壳并保存';
-        }
-      }).catch(function (e) { noteEl.textContent = '保存失败：' + (e && e.message || e); });
-    }
-    document.getElementById('doc-shell-apply').onclick = function () { saveShell(true); };
-    document.getElementById('doc-shell-save').onclick = function () { saveShell(false); };
-    // 初始载入内置默认壳
-    api('/api/documents/shell').then(function (r) { document.getElementById('doc-shell-ta').value = r.docShell || ''; setShellCur(); }).catch(function () {});
     setDlTab('routes');
     refreshAbc();
   }

@@ -414,8 +414,9 @@ export async function renderDocument(env, route, doc, shared) {
     const site = await getSiteContext(env);
     const { cfseInjectHead, cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
     // 主题 CSS：与主站共用同一份 style.css（文档库不再自带一套内嵌皮肤）
-    // 风格 id 优先级：路由自带 docRoutes.styleId → 站点当前生效风格 → 内置默认
-    const styleId = String(route.styleId || (site && site.activeStyleId) || 'cfse-demo');
+    // 皮肤永远跟站点当前主题走 —— route.styleId 只用于取自定义 docShell（HTML 结构），
+    // 它指向的往往是「只有 tpl.json、没有 style.css」的壳包，拿它拼 CSS 会 404。
+    const styleId = String((site && site.activeStyleId) || 'cfse-demo');
     const cssUrl = String(site.url || '').replace(/\/+$/, '') + '/wp-content/themes/' + styleId + '/style.css';
     const menuHtml = cfseMenuHtml(site);
     const siteNav = menuHtml ? '<nav class="nav">' + menuHtml + '</nav>' : '';
@@ -476,7 +477,7 @@ export async function renderDocIndex(env, route) {
     const site = await getSiteContext(env);
     const { cfseInjectHead, cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
     const home = String(site.url || '').replace(/\/+$/, '');
-    const styleId = String(route.styleId || (site && site.activeStyleId) || 'cfse-demo');
+    const styleId = String((site && site.activeStyleId) || 'cfse-demo');
     const cssUrl = home + '/wp-content/themes/' + styleId + '/style.css';
     const menuHtml = cfseMenuHtml(site);
     const siteNav = menuHtml ? '<nav class="nav">' + menuHtml + '</nav>' : '';
