@@ -1,0 +1,968 @@
+{
+  "version": 1,
+  "kind": "audit",
+  "generatedAt": "2026-09-22T17:33:07.725Z",
+  "about": "配套 docs/skin-contract.json 的工程审计：渲染器行号、覆盖率、实施记录、待办。维护者视角，风格作者不必看。 escapeStatus 反映**当前状态**（2026-09-22 那批转义统一已实施 ⇒ 全部 aligned）；历史过程见 escapeAudit.implemented。",
+  "rendererSource": [
+    "worker/src/templates.js",
+    "worker/src/admin.js",
+    "worker/src/comments.js",
+    "worker/src/routes.js"
+  ],
+  "tokenCount": 70,
+  "tokens": {
+    "IF:AUTHOR": {
+      "loc": [
+        "templates.js:196 cfseRenderItem",
+        "admin.js:605 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:CATEGORIES": {
+      "loc": [
+        "templates.js:183 cfseRenderItem",
+        "admin.js:595 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:COMMENTS": {
+      "loc": [
+        "admin.js:618 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:COMMENT_AUTHOR_URL": {
+      "loc": [
+        "comments.js:144 cfseCommentItems"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:COMMENT_CHILDREN": {
+      "loc": [
+        "comments.js:160 cfseCommentItems"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:LOGO": {
+      "loc": [
+        "templates.js:342 renderHomepage",
+        "templates.js:403 renderCategoryPage",
+        "templates.js:464 renderTagPage",
+        "templates.js:528 renderArchivePage",
+        "admin.js:577 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:MENU": {
+      "loc": [
+        "templates.js:348 renderHomepage",
+        "templates.js:409 renderCategoryPage",
+        "templates.js:470 renderTagPage",
+        "templates.js:534 renderArchivePage",
+        "admin.js:583 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:NEXT": {
+      "loc": [
+        "admin.js:627 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:PREV": {
+      "loc": [
+        "admin.js:626 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:SOCIAL": {
+      "loc": [
+        "templates.js:343 renderHomepage",
+        "templates.js:404 renderCategoryPage",
+        "templates.js:465 renderTagPage",
+        "templates.js:529 renderArchivePage",
+        "admin.js:578 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:TAGS": {
+      "loc": [
+        "templates.js:184 cfseRenderItem",
+        "admin.js:596 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:THUMBNAIL": {
+      "loc": [
+        "templates.js:197 cfseRenderItem",
+        "admin.js:606 renderSingleHtml"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "IF:hasPage": {
+      "loc": [
+        "templates.js:336 renderHomepage",
+        "templates.js:397 renderCategoryPage",
+        "templates.js:458 renderTagPage",
+        "templates.js:522 renderArchivePage"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{CFSE_POST_ID}}": {
+      "loc": [
+        "admin.js:586 renderSingleHtml"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENTS}}": {
+      "loc": [
+        "admin.js:622 renderSingleHtml",
+        "comments.js:182 cfseCommentItems"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_ALT}}": {
+      "loc": [
+        "comments.js:155 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_AUTHOR_PLAIN}}": {
+      "loc": [
+        "comments.js:147 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_AUTHOR_URL}}": {
+      "loc": [
+        "comments.js:145 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_AUTHOR}}": {
+      "loc": [
+        "comments.js:146 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_AVATAR_2X}}": {
+      "loc": [
+        "comments.js:150 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_AVATAR}}": {
+      "loc": [
+        "comments.js:149 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_CHILDREN}}": {
+      "loc": [
+        "comments.js:169 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_CONTENT}}": {
+      "loc": [
+        "comments.js:157 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_COUNT_TEXT}}": {
+      "loc": [
+        "templates.js:211 cfseRenderItem"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_COUNT}}": {
+      "loc": [
+        "templates.js:210 cfseRenderItem",
+        "comments.js:180 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_DATETIME}}": {
+      "loc": [
+        "comments.js:152 cfseCommentItems"
+      ],
+      "usedBy": [],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_DATE}}": {
+      "loc": [
+        "comments.js:151 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_DEPTH}}": {
+      "loc": [
+        "comments.js:153 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_ID}}": {
+      "loc": [
+        "comments.js:148 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_ODD_EVEN}}": {
+      "loc": [
+        "comments.js:154 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_POST_ID}}": {
+      "loc": [
+        "comments.js:197 commentFormBlock"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{COMMENT_THREAD_CLASS}}": {
+      "loc": [
+        "comments.js:156 cfseCommentItems"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{CONTENT}}": {
+      "loc": [
+        "templates.js:332 renderHomepage",
+        "templates.js:393 renderCategoryPage",
+        "templates.js:454 renderTagPage",
+        "templates.js:518 renderArchivePage"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{ITEM_COUNT}}": {
+      "loc": [
+        "templates.js:239 cfseSidebarCategoryItems",
+        "templates.js:269 cfseSidebarArchiveItems",
+        "templates.js:303 cfseSidebarTagItems"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{ITEM_NAME}}": {
+      "loc": [
+        "templates.js:238 cfseSidebarCategoryItems",
+        "templates.js:268 cfseSidebarArchiveItems",
+        "templates.js:300 cfseSidebarTagItems"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{ITEM_POSITION}}": {
+      "loc": [
+        "templates.js:241 cfseSidebarCategoryItems",
+        "templates.js:271 cfseSidebarArchiveItems",
+        "templates.js:302 cfseSidebarTagItems"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{ITEM_SIZE}}": {
+      "loc": [
+        "templates.js:240 cfseSidebarCategoryItems",
+        "templates.js:270 cfseSidebarArchiveItems",
+        "templates.js:301 cfseSidebarTagItems"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{ITEM_URL}}": {
+      "loc": [
+        "templates.js:237 cfseSidebarCategoryItems",
+        "templates.js:267 cfseSidebarArchiveItems",
+        "templates.js:299 cfseSidebarTagItems"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{MENU}}": {
+      "loc": [
+        "templates.js:349 renderHomepage",
+        "templates.js:410 renderCategoryPage",
+        "templates.js:471 renderTagPage",
+        "templates.js:535 renderArchivePage",
+        "admin.js:584 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{MONTH}}": {
+      "loc": [
+        "templates.js:354 renderHomepage",
+        "templates.js:415 renderCategoryPage",
+        "templates.js:476 renderTagPage",
+        "templates.js:540 renderArchivePage"
+      ],
+      "usedBy": [],
+      "escapeStatus": "aligned"
+    },
+    "{{NEXT_TITLE}}": {
+      "loc": [
+        "admin.js:631 renderSingleHtml"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{NEXT_URL}}": {
+      "loc": [
+        "admin.js:630 renderSingleHtml"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{PAGE_NUMBER}}": {
+      "loc": [
+        "templates.js:337 renderHomepage",
+        "templates.js:398 renderCategoryPage",
+        "templates.js:459 renderTagPage",
+        "templates.js:523 renderArchivePage"
+      ],
+      "usedBy": [],
+      "escapeStatus": "aligned"
+    },
+    "{{PAGINATION_NEXT}}": {
+      "loc": [
+        "templates.js:334 renderHomepage",
+        "templates.js:395 renderCategoryPage",
+        "templates.js:456 renderTagPage",
+        "templates.js:520 renderArchivePage"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{PAGINATION_PREV}}": {
+      "loc": [
+        "templates.js:333 renderHomepage",
+        "templates.js:394 renderCategoryPage",
+        "templates.js:455 renderTagPage",
+        "templates.js:519 renderArchivePage"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_AUTHOR_URL}}": {
+      "loc": [
+        "templates.js:199 cfseRenderItem",
+        "admin.js:620 renderSingleHtml"
+      ],
+      "usedBy": [
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_AUTHOR}}": {
+      "loc": [
+        "templates.js:198 cfseRenderItem",
+        "admin.js:619 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_CATEGORIES}}": {
+      "loc": [
+        "templates.js:189 cfseRenderItem",
+        "admin.js:598 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_CONTENT}}": {
+      "loc": [
+        "admin.js:590 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_DATE}}": {
+      "loc": [
+        "templates.js:187 cfseRenderItem",
+        "admin.js:587 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_EXCERPT}}": {
+      "loc": [
+        "templates.js:188 cfseRenderItem",
+        "admin.js:588 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_TAGS}}": {
+      "loc": [
+        "templates.js:190 cfseRenderItem",
+        "admin.js:599 renderSingleHtml"
+      ],
+      "usedBy": [
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_THUMBNAIL}}": {
+      "loc": [
+        "templates.js:200 cfseRenderItem",
+        "admin.js:621 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyfifteen",
+        "twentynineteen"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_TITLE}}": {
+      "loc": [
+        "templates.js:185 cfseRenderItem",
+        "admin.js:585 renderSingleHtml",
+        "comments.js:181 cfseCommentItems"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{POST_URL}}": {
+      "loc": [
+        "templates.js:186 cfseRenderItem",
+        "admin.js:591 renderSingleHtml",
+        "comments.js:185 cfseCommentItems"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{PREV_TITLE}}": {
+      "loc": [
+        "admin.js:629 renderSingleHtml"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{PREV_URL}}": {
+      "loc": [
+        "admin.js:628 renderSingleHtml"
+      ],
+      "usedBy": [
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{SEARCH_ACTION}}": {
+      "loc": [
+        "templates.js:345 renderHomepage",
+        "templates.js:406 renderCategoryPage",
+        "templates.js:467 renderTagPage",
+        "templates.js:531 renderArchivePage",
+        "admin.js:580 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{SIDEBAR_ARCHIVES}}": {
+      "loc": [
+        "templates.js:364 renderHomepage",
+        "templates.js:425 renderCategoryPage",
+        "templates.js:486 renderTagPage",
+        "templates.js:550 renderArchivePage",
+        "admin.js:636 renderSingleHtml"
+      ],
+      "usedBy": [
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{SIDEBAR_CATEGORIES}}": {
+      "loc": [
+        "templates.js:363 renderHomepage",
+        "templates.js:424 renderCategoryPage",
+        "templates.js:485 renderTagPage",
+        "templates.js:549 renderArchivePage",
+        "admin.js:635 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{SIDEBAR_TAGS}}": {
+      "loc": [
+        "templates.js:365 renderHomepage",
+        "templates.js:426 renderCategoryPage",
+        "templates.js:487 renderTagPage",
+        "templates.js:551 renderArchivePage",
+        "admin.js:637 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{SITE_DESC}}": {
+      "loc": [
+        "templates.js:204 cfseRenderItem",
+        "templates.js:330 renderHomepage",
+        "templates.js:391 renderCategoryPage",
+        "templates.js:452 renderTagPage",
+        "templates.js:516 renderArchivePage",
+        "admin.js:572 renderSingleHtml"
+      ],
+      "usedBy": [],
+      "escapeStatus": "aligned"
+    },
+    "{{SITE_FOOTER}}": {
+      "loc": [
+        "templates.js:338 renderHomepage",
+        "templates.js:399 renderCategoryPage",
+        "templates.js:460 renderTagPage",
+        "templates.js:524 renderArchivePage",
+        "admin.js:573 renderSingleHtml"
+      ],
+      "usedBy": [],
+      "escapeStatus": "aligned"
+    },
+    "{{SITE_LOGO}}": {
+      "loc": [
+        "templates.js:344 renderHomepage",
+        "templates.js:405 renderCategoryPage",
+        "templates.js:466 renderTagPage",
+        "templates.js:530 renderArchivePage",
+        "admin.js:579 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{SITE_NAME}}": {
+      "loc": [
+        "templates.js:203 cfseRenderItem",
+        "templates.js:329 renderHomepage",
+        "templates.js:390 renderCategoryPage",
+        "templates.js:451 renderTagPage",
+        "templates.js:515 renderArchivePage",
+        "admin.js:571 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{SITE_URL}}": {
+      "loc": [
+        "templates.js:202 cfseRenderItem",
+        "templates.js:331 renderHomepage",
+        "templates.js:392 renderCategoryPage",
+        "templates.js:453 renderTagPage",
+        "templates.js:517 renderArchivePage",
+        "admin.js:570 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{SOCIAL_LINKS}}": {
+      "loc": [
+        "templates.js:346 renderHomepage",
+        "templates.js:407 renderCategoryPage",
+        "templates.js:468 renderTagPage",
+        "templates.js:532 renderArchivePage",
+        "admin.js:581 renderSingleHtml"
+      ],
+      "usedBy": [
+        "saaslauncher"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{TITLE}}": {
+      "loc": [
+        "templates.js:355 renderHomepage",
+        "templates.js:357 renderHomepage",
+        "templates.js:416 renderCategoryPage",
+        "templates.js:418 renderCategoryPage",
+        "templates.js:477 renderTagPage",
+        "templates.js:479 renderTagPage",
+        "templates.js:541 renderArchivePage",
+        "templates.js:543 renderArchivePage"
+      ],
+      "usedBy": [
+        "saaslauncher",
+        "twentyeleven",
+        "twentyfifteen",
+        "twentynineteen",
+        "twentyten"
+      ],
+      "escapeStatus": "aligned"
+    },
+    "{{TOTAL_POSTS}}": {
+      "loc": [
+        "templates.js:335 renderHomepage",
+        "templates.js:396 renderCategoryPage",
+        "templates.js:457 renderTagPage",
+        "templates.js:521 renderArchivePage"
+      ],
+      "usedBy": [],
+      "escapeStatus": "aligned"
+    },
+    "{{YEAR}}": {
+      "loc": [
+        "templates.js:353 renderHomepage",
+        "templates.js:414 renderCategoryPage",
+        "templates.js:475 renderTagPage",
+        "templates.js:539 renderArchivePage"
+      ],
+      "usedBy": [],
+      "escapeStatus": "aligned"
+    }
+  },
+  "problems": {
+    "unclassified": [],
+    "phantom": [],
+    "backendGhost": [],
+    "pkgGhost": [
+      "{{PREV_POST}}",
+      "{{NEXT_POST}}"
+    ],
+    "unusedInPackages": [
+      "{{SITE_DESC}}",
+      "{{TOTAL_POSTS}}",
+      "{{PAGE_NUMBER}}",
+      "{{SITE_FOOTER}}",
+      "{{YEAR}}",
+      "{{MONTH}}",
+      "IF:hasPage",
+      "{{COMMENT_DATETIME}}"
+    ]
+  },
+  "corrections": [
+    {
+      "where": "views/template-editor.php:477 cfse_get_item_vars()",
+      "problem": "label 被当成数组键：'{{#IF_TAGS}}…{{/IF_TAGS}}' => '条件块：…'",
+      "impact": "不是可插入 token；扫描/校验端会误判",
+      "fix": "清单结构拆成 { token, label }，label 不参与校验",
+      "status": "done（2026-09-22）"
+    },
+    {
+      "where": "cfse_get_page_vars() / cfse_get_item_vars()",
+      "problem": "{{SITE_NAME}} / {{SITE_URL}} 的说明写着「保存时写死」",
+      "impact": "与事实不符（现在是渲染时替换）",
+      "fix": "改文案",
+      "status": "done（2026-09-22）"
+    },
+    {
+      "where": "views/template-editor.php:288-292（硬编码单页清单 5 项）",
+      "problem": "只列 POST_TITLE / POST_CONTENT / POST_DATE / POST_URL / POST_EXCERPT",
+      "impact": "用户看不到 {{COMMENTS}} / {{PREV_*}} / {{NEXT_*}} / {{CFSE_POST_ID}} / 站点级 8 项 —— native 评论要写半动态注入标记这件事完全不可见",
+      "fix": "改为读契约清单",
+      "status": "done（2026-09-22）"
+    },
+    {
+      "where": "同上 + cfse_get_item_vars()",
+      "problem": "条件块只列 2 个（CATEGORIES / TAGS）",
+      "impact": "另外 11 个 flag 用户不知道存在（含全系统唯一小写的 hasPage）",
+      "fix": "改为读契约清单",
+      "status": "done（2026-09-22）"
+    }
+  ],
+  "openIssues": [
+    {
+      "id": "legacy-prevnext",
+      "severity": "high",
+      "where": "twentyfifteen / twentynineteen 的 tpl.json（single 段）",
+      "detail": "残留 {{PREV_POST}} / {{NEXT_POST}}。代码里已无产出点（仅 skin-builder.php:1360 一行注释提到旧名），属改名前产物、single 段从未重抓；twentyten 已重抓故正常。",
+      "impact": "渲染时被 cfseStripLeftovers() 静默清空 ⇒ 这两个主题的上下篇链接/标题空白（可能留 <a href=\"\">）",
+      "fix": "重抓这两个主题；或把 single 段按 {{PREV_URL}}/{{PREV_TITLE}}/{{NEXT_URL}}/{{NEXT_TITLE}} 修补",
+      "evidence": "扫描：packagesNotInRenderer = [\"{{NEXT_POST}}\", \"{{PREV_POST}}\"]"
+    },
+    {
+      "id": "coverage-gap",
+      "severity": "medium",
+      "where": "全部 5 个内置包（scanned union 64 项）",
+      "detail": "8 项从未被任何包使用：{{SITE_DESC}} {{SITE_FOOTER}} {{YEAR}} {{MONTH}} {{TOTAL_POSTS}} {{PAGE_NUMBER}} {{#IF_hasPage}} {{COMMENT_DATETIME}}",
+      "impact": "站点描述 / 页脚 / 归档年月 / 分页计数未被归一化（写死或抓取时丢失）—— 抓取端没有目标集合的直接后果",
+      "fix": "抓取端按本清单归一化 + 重抓",
+      "evidence": "扫描：unusedInPackages（8 项）"
+    },
+    {
+      "id": "naming-never-written",
+      "severity": "low",
+      "where": "整份清单",
+      "detail": "命名规则从未成文：{{POST_TAGS}} 与 {{TAGS}} 的区别只存在于渲染器实现里。",
+      "impact": "连项目所有者都会记成 {{TAGS}}，而该名字实测输出为空（静默空白）",
+      "fix": "本文件 naming 一节 + 后台 UI 展示全清单",
+      "evidence": "离线实验（直接调 renderHomepage）：A({{#IF_TAGS}}[{{TAGS}}]{{/IF_TAGS}}) → A([]) 且日志 unreplaced placeholders: {{TAGS}}；B(…{{POST_TAGS}}…) → B([<a href=\"…/tag/tag/\">Tag</a>])"
+    }
+  ],
+  "escapeAudit": {
+    "conclusion": "不是设计差异，是「没对齐」——补占位符时漏带转义。",
+    "history": [
+      "e7f4cdd (2026-09-11 基线)：single 的 {{SITE_NAME}} 一开始就用 escHtml ✅",
+      "46baf2c (2026-09-15)：生成端补站点占位符时写成 (site && site.name) || ''（漏转义）",
+      "95edd3c (2026-09-21)：页壳补 SITE_LOGO/SEARCH_ACTION/SOCIAL_LINKS 时同样漏",
+      "template-editor.php:767：插件内置默认模板却用了 esc_html($site_name) —— 同一个值，三处三种做法"
+    ],
+    "trulyMixed": [
+      "{{SITE_NAME}}",
+      "{{SITE_DESC}}",
+      "{{POST_URL}}"
+    ],
+    "falsePositives": {
+      "note": "以下三项按\"实参表达式\"判定像是 mixed，实际行为一致（都是 HTML 片段、其值在生成函数内部转义）：",
+      "items": [
+        "{{COMMENTS}}",
+        "{{POST_CATEGORIES}}",
+        "{{POST_TAGS}}"
+      ]
+    },
+    "target": {
+      "text": "纯文本 ⇒ escapeHtml（跨全部渲染路径统一）",
+      "attr": "URL / 属性值 ⇒ cfseEscUrl",
+      "html": "HTML 内容与片段 ⇒ 不整体转义（内部自行转义其值）",
+      "num": "数字 ⇒ 无需转义",
+      "const": "固定类名 ⇒ 无需转义"
+    },
+    "misalignedCount": 11,
+    "misaligned": [
+      "{{ITEM_URL}}",
+      "{{NEXT_URL}}",
+      "{{POST_AUTHOR_URL}}",
+      "{{POST_THUMBNAIL}}",
+      "{{POST_URL}}",
+      "{{PREV_URL}}",
+      "{{SEARCH_ACTION}}",
+      "{{SITE_DESC}}",
+      "{{SITE_NAME}}",
+      "{{SITE_URL}}",
+      "{{TITLE}}"
+    ],
+    "notableRisk": "{{POST_THUMBNAIL}} 未经属性转义 —— 它来自 posts.thumbnail 或正文首图，可能是含 & 的外链 URL ⇒ 会破坏 HTML 属性。这是本次审计里唯一有实际风险的项。",
+    "fixPlan": [
+      "worker/src/templates.js：文本类补 escapeHtml、URL 类补 cfseEscUrl（列表页段是 4 份同构副本，需全改）",
+      "views/template-editor.php 生成端同改（cfseHelpers 的 1 份源 + 4 份展开；:1133 与页面壳源）",
+      "worker/src/admin.js：single 的 URL 类补 cfseEscUrl（文本类已是 escHtml）",
+      "改完做一次「生成端 vs 产物 byte-identical」自检（本仓库既有规矩）",
+      "重建单页：列表页每请求渲染即改即生效；single 是 R2 静态快照，须重建"
+    ],
+    "unaffected": "抓取包模板文本不用动 —— 模板没变，只是渲染时多一次转义；且转义后的结果与 WP 原始输出（已转义）一致。",
+    "removed": "统一之后 escape 不再有 mixed 这个取值。",
+    "implemented": {
+      "files": [
+        "worker/src/templates.js",
+        "views/template-editor.php",
+        "worker/src/admin.js"
+      ],
+      "ruleCount": 33,
+      "assertions": "33 条替换规则逐一断言命中次数（item ×1、页壳 ×4、骨架 ×1/×2）—— 数量不符即中止不写盘",
+      "generationParity": "templates.js（产物 4 份）与 views/template-editor.php（生成端 1 份源）用同一组规则同改 ⇒ 一致性由次数断言保证",
+      "verified": [
+        "node --check ×2 通过（ESM）",
+        "php -l 通过（服务器容器内）",
+        "运行时实测：文本位置与属性位置均转义；无特殊字符时值与改动前一致"
+      ],
+      "skippedByDecision": [
+        "重建单页（用户决定跳过；单页是 R2 静态快照，会随按需渲染/后续重建渐进更新）",
+        "抓取包模板（本就不需要动）"
+      ]
+    }
+  },
+  "uiCorrections": {
+    "implemented": true,
+    "when": "2026-09-22",
+    "files": [
+      "views/template-editor.php"
+    ],
+    "change": [
+      "标识符清单改为从 docs/skin-contract.json 读取（cfse_contract_vars，按页签过滤；条件块给\"整对\" {{#IF_X}}{{/IF_X}}）",
+      "删掉硬编码的\"单页占位符 5 项\"块（$page_vars 已按页签含 single 专属）",
+      "cfse_get_page_vars() / cfse_get_item_vars() 降级为\"内置回退清单\"（契约缺失时兜底），并修掉\"保存时写死\"等过时文案",
+      "插入 JS：条件块插入后光标落在一对标记中间"
+    ],
+    "verified": [
+      "php -l 通过（服务器容器）",
+      "服务器探针：page/homepage|category|tag|archive = 23 项，page/single = 37 项，item = 18 项；single 专属占位符（POST_CONTENT/COMMENTS/PREV_URL/CFSE_POST_ID/IF_COMMENTS）齐全",
+      "页壳清单含 {{MENU}} {{SITE_LOGO}} {{SOCIAL_LINKS}} {{SEARCH_ACTION}} {{SITE_FOOTER}} {{PAGE_NUMBER}} 与 4 个条件块（此前全部缺失）"
+    ],
+    "deployNote": "⚠️ plugins/cf/docs/skin-contract.json 必须与插件一起上传；缺失时后台自动回退到内置清单（不会白屏，但清单不全）。"
+  }
+}

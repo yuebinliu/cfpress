@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yuebin — Static WordPress export plus a standalone Cloudflare CMS</title>
+<meta name="description" content="Static WordPress export plus a standalone Cloudflare CMS">
+<link rel="stylesheet" href="https://yuebin.uk/wp-content/themes/cfse-demo/style.css">
+<link rel="alternate" type="application/rss+xml" title="Yuebin &raquo; Feed" href="https://yuebin.uk/feed/">
+<link rel="canonical" href="https://yuebin.uk/en/">
+<link rel="alternate" hreflang="en" href="https://yuebin.uk/en/">
+<link rel="alternate" hreflang="zh-Hans" href="https://yuebin.uk/">
+<link rel="alternate" hreflang="x-default" href="https://yuebin.uk/">
+</head>
+<body>
+<header class="topbar">
+  <div class="shell topbar-in">
+    <a class="brand" href="https://yuebin.uk/en/"><span class="logo-mark">CF</span><span class="brand-text">Yuebin</span><span class="badge">DEMO</span></a>
+    <nav class="nav"><a href="#overview">Overview</a><a href="#routes">Two Paths</a><a href="#features">Features</a><a href="https://yuebin.uk/">中文</a></nav>
+    <form class="srch" role="search" action="https://yuebin.uk/" method="get">
+      <input type="search" name="s" placeholder="Search docs…" aria-label="Search">
+    </form>
+  </div>
+</header>
+
+<section class="hero" id="overview">
+  <div class="shell hero-in">
+    <p class="eyebrow">WordPress × Cloudflare · Static export + standalone CMS</p>
+    <h1>Turn WordPress<br><span class="grad">into a static site generator</span></h1>
+    <p class="lede">Single pages are exported to R2 as static HTML, while lists render live from D1. Move an existing WordPress site onto Cloudflare in one go — or leave WordPress behind and build with the built-in CMS.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://yuebin.uk/category/start/">Start in 5 minutes →</a>
+      <a class="btn btn-ghost" href="https://yuebin.uk/category/start/">Read the guides</a>
+    </div>
+    <dl class="stats">
+      <div><dt>0</dt><dd>servers to maintain</dd></div>
+      <div><dt>6 types</dt><dd>of page templates, switchable online</dd></div>
+      <div><dt>100K</dt><dd>free requests per day</dd></div>
+      <div><dt>2 ways</dt><dd>to build a site, one shared core</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="section">
+  <div class="shell">
+    <div class="sec-head">
+      <h2>Two paths, one core</h2>
+      <p>Keep WordPress, or start a brand-new site. Same data layer, same rendering layer.</p>
+    </div>
+    <div class="routes" id="routes">
+      <a class="route" href="https://yuebin.uk/category/extend/">
+        <span class="route-no">01 / PLUGIN</span>
+        <h3>WordPress Plugin</h3>
+        <p>Keep the editing experience you know. The plugin generates static pages, syncs to D1, uploads to R2, and can capture your current theme as a style pack.</p>
+        <span class="more">Explore the plugin →</span>
+      </a>
+      <a class="route" href="https://yuebin.uk/category/start/">
+        <span class="route-no">02 / CMS</span>
+        <h3>Standalone Worker CMS</h3>
+        <p>No WordPress required. D1 holds content, R2 holds single pages, and the admin ships with Markdown and rich-text editors, a media library, and comment moderation.</p>
+        <span class="more">Deploy the CMS →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="section alt">
+  <div class="shell">
+    <div class="sec-head">
+      <h2>Why this isn't just another static plugin</h2>
+      <p>Purely static is rigid; purely dynamic is slow. This splits the two so each does what it does best.</p>
+    </div>
+    <div class="feats" id="features">
+      <div class="feat"><div class="ico">S/D</div><h3>Static/Dynamic Split</h3><p>Posts are pre-rendered to HTML and stored in R2; lists, categories, tags, and archives query D1 live, so publishing updates instantly.</p></div>
+      <div class="feat"><div class="ico">3T</div><h3>Three-Tier Fallback</h3><p>Internal template render → front-end fetch → hardcoded fallback. Large exports no longer fail wholesale on a single timeout.</p></div>
+      <div class="feat"><div class="ico">SK</div><h3>Online Skinning</h3><p>A style is just a directory plus a tpl.json. Switching takes effect immediately, with 14 built-in styles ready to use.</p></div>
+      <div class="feat"><div class="ico">OUT</div><h3>Multi-Target Publishing</h3><p>Beyond Cloudflare, publish to S3, GitHub, Netlify, Vercel, FTP, WebDAV, or a local directory.</p></div>
+      <div class="feat"><div class="ico">CM</div><h3>Comments on a Static Site</h3><p>Comments live in D1 and are injected when the page is served. Approved comments appear instantly without a rebuild — and can sync back to WordPress.</p></div>
+      <div class="feat"><div class="ico">API</div><h3>Open Write API</h3><p>A subset of the WordPress REST write API plus application passwords. Obsidian plugins, scripts, and any HTTP client can publish.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell band-in">
+    <div>
+      <h2>Move your site to Cloudflare today</h2>
+      <p>The free tier is enough for a personal site. Install the plugin, fill in three IDs, hit publish.</p>
+    </div>
+    <a class="btn btn-light" href="https://yuebin.uk/category/start/">See Quick Start</a>
+  </div>
+</section>
+
+<footer class="foot">
+  <div class="shell foot-grid">
+    <div class="foot-brand">
+      <span class="logo-mark">CF</span>
+      <strong>Yuebin</strong>
+      <p>Static WordPress export plus a standalone Cloudflare CMS</p>
+    </div>
+    <div><h4>Links</h4><ul><li><a href="https://yuebin.uk/">中文首页</a></li><li><a href="https://yuebin.uk/category/start/">Quick Start (中文)</a></li><li><a href="https://yuebin.uk/feed/">RSS</a></li></ul></div>
+    <div><h4>Subscribe</h4><ul><li><a href="https://yuebin.uk/feed/">RSS feed</a></li></ul></div>
+  </div>
+  <div class="shell foot-bar">&copy; 2026 Yuebin · Built with CF Press</div>
+</footer>
+</body>
+</html>

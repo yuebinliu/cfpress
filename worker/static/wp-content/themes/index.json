@@ -1,0 +1,32 @@
+[
+  {
+    "id": "cfse-demo",
+    "name": "CF Press Premium · EN（cfse-demo）",
+    "updated": "2026-10-28 17:40:00",
+    "source": "builtin"
+  },
+  {
+    "id": "cfse-minimal",
+    "name": "CF Press Minimal · EN（cfse-minimal）",
+    "updated": "2026-10-28 17:40:00",
+    "source": "builtin"
+  },
+  {
+    "id": "docs-wiki",
+    "name": "文档壳（docs-wiki）",
+    "updated": "2026-10-28 17:40:00",
+    "source": "builtin"
+  },
+  {
+    "id": "twentyten",
+    "name": "Twenty Ten",
+    "updated": "2026-10-28 17:40:00",
+    "source": "builtin"
+  },
+  {
+    "id": "twentyeleven",
+    "name": "Twenty Eleven",
+    "updated": "2026-10-28 17:40:00",
+    "source": "builtin"
+  }
+]
