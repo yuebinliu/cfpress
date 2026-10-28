@@ -419,7 +419,7 @@
       '<button class="btn" type="button" id="btn-lib">📁 从媒体库选择</button><input type="file" id="f-file" accept="image/*" multiple hidden></div>' +
       '<div id="lib-mask" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99;">' +
       '<div style="max-width:780px;margin:7vh auto;background:#fff;border-radius:8px;padding:16px 18px;max-height:80vh;overflow:auto;">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;"><h1 style="font-size:17px;margin:0;">媒体库</h1><button class="btn btn-sm" id="lib-close">✕ 关闭</button></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;"><h2 class="dl-h" style="margin:0;font-size:17px;">媒体库</h2><button class="btn btn-sm" id="lib-close">✕ 关闭</button></div>' +
       '<div id="lib-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:12px;"></div>' +
       '<div style="margin-top:12px;"><button class="btn btn-sm" id="lib-more" style="display:none;">加载更多</button></div></div></div>' +
       '<div id="draft-banner" style="display:none;background:#fff4e5;border:1px solid #ffcf8a;border-radius:6px;padding:8px 12px;margin-bottom:12px;">检测到未保存的草稿 <button class="btn btn-sm" id="draft-restore">恢复</button> <button class="btn btn-sm" id="draft-discard">丢弃</button></div>' +
@@ -1300,12 +1300,12 @@
     var sec = document.getElementById('view-settings');
     var curCache = null;   // 设置页加载回来的 cache 全量（保存「批量任务」时合并用）
     sec.innerHTML = '<h1>设置</h1>' +
-      '<div class="card"><h1 style="font-size:16px;">账号资料</h1>' +
+      '<div class="card"><h2 class="dl-h">账号资料</h2>' +
       '<p class="muted" id="who-line">加载中…</p>' +
       '<div class="row"><div><label>昵称</label><input type="text" id="m-name"></div>' +
       '<div><label>邮箱</label><input type="email" id="m-email"></div></div>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="m-save">保存资料</button></div></div>' +
-      '<div class="card"><h1 style="font-size:16px;">站点信息</h1>' +
+      '<div class="card"><h2 class="dl-h">站点信息</h2>' +
       '<p class="muted">站名用于标题/页脚/侧边栏（保存即清缓存生效，历史静态单页需重建或全量导出）。站点描述用于 RSS 频道描述。</p>' +
       '<label>站点名</label><input type="text" id="s-name">' +
       '<label>站点描述（用于 RSS 频道，可选）</label><textarea id="s-desc" style="min-height:54px;"></textarea>' +
@@ -1322,16 +1322,16 @@
       '<p class="muted" style="margin:6px 0 0;">放 AdSense 验证 meta、统计代码等任意片段（原样输出，约 8KB 上限）。列表页保存即时生效；<b>已生成的静态单页</b>在访问时自动注入，无需重建。</p>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="s-save">保存站点信息</button> <span class="muted" id="img-note"></span>' +
       '<input type="file" id="img-file" accept="image/*" hidden></div></div>' +
-'<div class="card"><h1 style="font-size:16px;">🔗 社交账号</h1>' +
+'<div class="card"><h2 class="dl-h">社交账号</h2>' +
       '<p class="muted">渲染模板里的 <code>{{SOCIAL_LINKS}}</code>。每行一条：<code>平台|链接</code>（如 <code>facebook|https://facebook.com/xxx</code>）。平台名随意（facebook / twitter / instagram / github…）。</p>' +
       '<textarea id="soc-input" style="min-height:72px;font-family:monospace;" placeholder="facebook|https://facebook.com/xxx"></textarea>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="soc-save">保存社交账号</button> <span class="muted" id="soc-note"></span></div></div>' +
-      '<div class="card"><h1 style="font-size:16px;">🧭 导航菜单</h1>' +
+      '<div class="card"><h2 class="dl-h">导航菜单</h2>' +
       '<p class="muted">静态站的主导航，渲染模板里的 <code>{{MENU}}</code>。<b>与 WP 后台菜单不联动</b>（这里独立维护）。类型选「分类 / 标签」时第三列变成<b>下拉选择</b>（分类列出全部、标签只列最常用的 5 个），选完「显示文字」留空会自动填成它的名称；选「自定义链接 / 文章」沿用文本框（填 URL / slug）。「层级」用于二级菜单（层级比上一项深时自动挂到它下面）。</p>' +
       '<div id="menu-rows" style="display:flex;flex-direction:column;gap:6px;margin-top:8px;"></div>' +
       '<div style="margin-top:10px;"><button class="btn btn-sm" id="menu-add">＋ 添加菜单项</button> ' +
       '<button class="btn btn-primary" id="menu-save">保存菜单</button> <span class="muted" id="menu-note"></span></div></div>' +
-            '<div class="card"><h1 style="font-size:16px;">缓存策略</h1>' +
+            '<div class="card"><h2 class="dl-h">缓存策略</h2>' +
       '<p class="muted">控制动态页（列表页 / 侧边栏 / RSS）的缓存方式；文章单页始终直读 R2。<b>这些缓存都放在 Cloudflare 边缘缓存（Cache API）里，不消耗 KV 额度</b>（KV 现在只存站点设置）；数值 <b>0 = 直查 D1 不缓存</b>。保存后即时生效（会自动清一次相关缓存）。</p>' +
       '<div style="margin:8px 0;display:flex;gap:6px;flex-wrap:wrap;">' +
       '<button class="btn btn-sm" id="cp-preset-d1">预设：全 D1（最省资源）</button>' +
@@ -1345,12 +1345,12 @@
       '<div><label>列表每页文章数（1-100）</label><input type="number" id="c-per-page" min="1" max="100"></div></div>' +
       '<label style="margin-top:8px;display:block;"><input type="checkbox" id="c-purge"> 发布文章时清列表第一页/侧边栏缓存（走边缘缓存，<b>不消耗 KV</b>；想让「发布后立即刷新」就打开）</label>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-save">保存缓存策略</button> <span class="muted" id="c-note"></span></div></div>' +
-      '<div class="card"><h1 style="font-size:16px;">批量任务</h1>' +
+      '<div class="card"><h2 class="dl-h">批量任务</h2>' +
       '<p class="muted">「重建全部单页」「permalink 迁移」等批量任务共用。<b>批量大小</b> = 每次请求处理多少篇；<b>并发数</b> = 一批里同时处理几篇。</p>' +
       '<div class="row"><div><label>批量大小（1-100）</label><input type="number" id="c-task-batch" min="1" max="100"></div>' +
       '<div><label>并发数（1-16）</label><input type="number" id="c-task-conc" min="1" max="16"></div></div>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-task-save">保存批量任务设置</button> <span class="muted" id="c-task-note"></span></div></div>' +
-      '<div class="card"><h1 style="font-size:16px;">URL 结构（permalink）</h1>' +
+      '<div class="card"><h2 class="dl-h">URL 结构（permalink）</h2>' +
       '<p class="muted">决定文章单页的<b>地址形态</b>，同时也是它在 R2 里的<b>存储路径</b>（两者始终一致）。支持 <code>%postname%</code> <code>%year%</code> <code>%monthnum%</code> <code>%day%</code> <code>%post_id%</code> <code>%category%</code>（不支持 %author%）。<b>改结构后必须点「开始迁移」</b>，否则旧地址会 404（迁移会先把新结构复制一份、旧文件保留，全部完成才切换）。</p>' +
       '<label>当前</label><input type="text" id="pm-current" readonly>' +
       '<label>新结构（WP 风格，如 /%year%/%postname%/）</label><input type="text" id="pm-input" placeholder="/%postname%/">' +
@@ -1362,15 +1362,15 @@
       '<button class="btn" id="pm-orphans">清理孤儿文件</button> ' +
       '<span class="muted" id="pm-note"></span></div>' +
       '<pre id="pm-out" class="muted" style="margin-top:10px;white-space:pre-wrap;font-size:12px;"></pre></div>' +
-      '<div class="card"><h1 style="font-size:16px;">修改密码</h1>' +
+      '<div class="card"><h2 class="dl-h">修改密码</h2>' +
       '<label>原密码</label><input type="password" id="p-old" autocomplete="current-password">' +
       '<label>新密码（至少 8 位）</label><input type="password" id="p-new" autocomplete="new-password">' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="p-save">修改密码</button></div></div>' +
-      '<div class="card"><h1 style="font-size:16px;">内容维护</h1>' +
+      '<div class="card"><h2 class="dl-h">内容维护</h2>' +
       '<p class="muted">用当前单页壳重建全部文章的静态单页（用于改名 / 换模板后统一旧单页外观与站点信息）。分批执行，页数多时请稍候。</p>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="rb-btn">重建全部单页</button> ' +
       '<button class="btn" id="purge-btn">清空全站缓存</button> <span class="muted" id="rb-prog"></span></div></div>' +
-      '<div class="card"><h1 style="font-size:16px;">数据备份 / 恢复</h1>' +
+      '<div class="card"><h2 class="dl-h">数据备份 / 恢复</h2>' +
       '<p class="muted">导出全部文章为 JSON；导入时按 slug 跳过已存在的文章，其余新增。</p>' +
       '<div style="margin-top:10px;"><button class="btn" id="exp-btn">导出备份</button> ' +
       '<button class="btn" id="imp-btn">导入备份</button> ' +
@@ -1903,7 +1903,7 @@
       + '<div class="muted" id="st-note" style="margin-top:4px;font-size:12px;"></div>'
       + '<iframe id="st-frame" style="width:100%;height:560px;border:1px solid #e5e7eb;border-radius:8px;margin-top:8px;background:#fff;"></iframe></div>'
       + '<div class="card hidden" id="stm-upload">'
-      + '<h1 style="font-size:15px;">上传风格（选目录）</h1>'
+      + '<h2 class="dl-h">上传风格（选目录）</h2>'
       + '<p class="muted">选一个目录（含 <code>tpl.json</code> 及资源）→ 逐文件写入 <code>wp-content/themes/&lt;id&gt;/</code>（R2）。目录名或下方 id 即风格 id；写 <code>tpl.json</code> 会自动备份旧版为 <code>.bak</code>。</p>'
       + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
       + '<input type="file" id="st-dir" webkitdirectory multiple>'
@@ -2145,13 +2145,13 @@
     var sec = document.getElementById('view-comments');
     if (!sec) return;
     sec.innerHTML = '<h1>评论</h1>'
-      + '<div class="card"><h1 style="font-size:16px;">评论设置</h1>'
+      + '<div class="card"><h2 class="dl-h">评论设置</h2>'
       + '<p class="muted">静态站的评论呈现方式（与 WP 后台同名同义，谁后保存谁生效）。保存后<b>刷新页面即生效</b>：<code>native</code> = 主题骨架 + D1 自有数据；<code>embed</code> = 注入第三方片段；<code>off</code> = 隐藏评论区与提交表单。</p>'
       + '<label>模式</label><select id="cm-mode"><option value="off">off —— 隐藏评论区</option><option value="native">native —— 主题骨架 + 自有数据</option><option value="embed">embed —— 注入第三方片段</option></select>'
       + '<label>第三方注入片段（embed 模式用，原样输出到评论区）</label><textarea id="cm-embed" style="min-height:70px;font-family:monospace;font-size:12px;"></textarea>'
       + '<label>站外提交</label><select id="cm-accept"><option value="off">off —— 拒收（静态站前台不能提交）</option><option value="pending">pending —— 收下待审核（推荐）</option><option value="auto">auto —— 直接通过</option></select>'
       + '<div style="margin-top:10px;"><button class="btn btn-primary" id="cm-save">保存评论设置</button> <span class="muted" id="cm-note"></span></div></div>'
-      + '<div class="card"><h1 style="font-size:16px;">评论列表</h1>'
+      + '<div class="card"><h2 class="dl-h">评论列表</h2>'
       + '<p class="muted">这里管的是<b>读者从静态站提交、还没回拉到 WordPress</b> 的评论（审核状态会在 WP 拉取时生效）。已由 WP 接管的评论是只读的 —— 那边才是权威。</p>'
       + '<div style="margin:8px 0;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">'
       + '<button class="btn btn-sm" data-cmf="unpulled">未回拉</button>'
