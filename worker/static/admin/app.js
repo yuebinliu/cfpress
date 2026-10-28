@@ -1046,7 +1046,7 @@
       '<div class="mbar-main">' +
       '<button class="btn btn-sm btn-primary" id="media-up">上传图片</button>' +
       '<input type="file" id="media-up-file" accept="image/*" multiple hidden>' +
-      '<input type="search" id="media-q" name="media-filter" placeholder="筛选文件名…" autocomplete="off" spellcheck="false" style="min-width:150px;max-width:280px;">' +
+      '<input type="search" id="media-q" name="media-filter" placeholder="筛选文件名…" autocomplete="one-time-code" data-lpignore="true" spellcheck="false" style="min-width:150px;max-width:280px;">' +
       '</div>' +
       '<div class="mbar-extra">' +
       '<button class="btn btn-sm" id="media-selall">全选</button>' +
