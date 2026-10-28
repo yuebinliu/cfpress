@@ -2652,22 +2652,21 @@
     document.getElementById('view').style.display = 'none';
     document.getElementById('topbar').classList.add('hidden');
     card.innerHTML =
-      '<h1>🚀 初始化站点</h1>' +
-      '<p class="muted" style="margin:4px 0 12px;">本站还没有任何账号。填好下面几项：会建好数据库表并创建第一个管理员。</p>' +
-      '<div class="grid" style="max-width:440px;">' +
-      '<label>站点名<input id="su-name" placeholder="我的站"></label>' +
-      '<label>站点 URL<input id="su-url" placeholder="https://example.com"></label>' +
+      '<div class="setup-brand"><span class="logo">CF</span> CF Press</div>' +
+      '<h1>初始化站点</h1>' +
+      '<p class="muted setup-sub">填写站点信息并创建第一个管理员账号，完成后即可进入后台。</p>' +
+      '<label>站点名<input id="su-name" placeholder="CF Press"></label>' +
+      '<label>站点 URL<input id="su-url" placeholder="https://cfpress.org"></label>' +
       '<label>管理员用户名<input id="su-user" placeholder="admin"></label>' +
-      '<label>管理员密码（至少 8 位）<input id="su-pass" type="password"></label>' +
-      '<label>再次输入密码<input id="su-pass2" type="password"></label>' +
-      '<label>邮箱（可选）<input id="su-email"></label>' +
-      '<div><button class="btn btn-primary" id="su-go">创建并完成初始化</button></div>' +
-      '<div id="su-msg" class="muted" style="white-space:pre-wrap;"></div>' +
-      '</div>';
+      '<label>管理员密码<input id="su-pass" type="password" placeholder="至少 8 位"></label>' +
+      '<label>确认密码<input id="su-pass2" type="password"></label>' +
+      '<label>邮箱（可选）<input id="su-email" type="email"></label>' +
+      '<button class="btn btn-primary btn-block" id="su-go">创建并进入后台</button>' +
+      '<div id="su-msg" class="setup-msg"></div>';
     var msg = document.getElementById('su-msg');
     if (note) msg.textContent = note;
     document.getElementById('su-go').addEventListener('click', function () {
-      var name = document.getElementById('su-name').value.trim() || 'My Static Site';
+      var name = document.getElementById('su-name').value.trim() || 'CF Press';
       var siteUrl = document.getElementById('su-url').value.trim();
       var u = document.getElementById('su-user').value.trim();
       var p = document.getElementById('su-pass').value;
@@ -2710,9 +2709,15 @@
   function boot() {
     flash('flash-main', '', null);
     flash('flash-login', '', null);
-    if (!needAuth()) { setWho(); checkSetup(); return; }
-    setWho();
-    goNav();
+    var authed = needAuth();
+    if (authed) { setWho(); goNav(); return; }
+    // 未登录：先判断是否已初始化，避免"登录框闪一下再跳初始化"
+    var lc = document.getElementById('login-card');
+    lc.classList.add('hidden');
+    fetch('/api/setup/status').then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.initialized === false) { renderSetupWizard(''); }
+      else { setWho(); lc.classList.remove('hidden'); }
+    }).catch(function () { setWho(); lc.classList.remove('hidden'); });
   }
 
   bindLogin();
