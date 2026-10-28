@@ -30,7 +30,7 @@
   .btn-danger { color: #b42318; border-color: #f0b4b0; background: #fff; }
   .btn-danger:hover { background: #fcf0ef; }
   .btn-sm { padding: 4px 10px; font-size: 12px; }
-  input[type=text], input[type=password], input[type=email], input[type=url], textarea, select {
+  input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=hidden]):not([type=submit]), textarea, select {
     width: 100%; padding: 9px 11px; border: 1px solid #d4d4d8; border-radius: 8px; font-size: 14px; font-family: inherit; background: #fff; color: #17171a;
   }
   input:focus, textarea:focus, select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }

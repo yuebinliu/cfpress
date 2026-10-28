@@ -1159,10 +1159,10 @@
       var add = '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #eee;">' +
         '<h2 class="dl-h">新增用户</h2>' +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:8px;align-items:center;">' +
-        '<input placeholder="用户名" id="u-name">' +
+        '<input type="text" placeholder="用户名" id="u-name">' +
         '<input placeholder="密码（至少 8 位）" type="password" id="u-pass" autocomplete="new-password">' +
         '<input placeholder="邮箱" id="u-email" type="email">' +
-        '<input placeholder="昵称（可选）" id="u-disp">' +
+        '<input type="text" placeholder="昵称（可选）" id="u-disp">' +
         '<select id="u-role"><option value="editor">编辑</option><option value="author">作者</option><option value="admin">管理员</option><option value="subscriber">订阅者</option></select>' +
         '<button class="btn btn-primary" id="u-add" style="justify-self:start;">新增用户</button></div></div>';
       sec.innerHTML = '<h1>用户</h1><div class="card grid"><table><thead><tr><th>用户名</th><th>昵称</th><th>邮箱</th><th>角色</th><th>注册</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' + add + '</div>' +
