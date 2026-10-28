@@ -197,11 +197,15 @@ function cfseReplace(tpl, token, value) {
     return tpl.split(token).join(String(value == null ? '' : value));
 }
 
-/** 头部字标用词：站名以 "CF " 开头时取后半段（"CF Press" → "Press"），否则用全名 */
+/** 头部字标用词：站名以 CF（可选空格/连字符/下划线）开头时取后半段（"CF Press"/"CFPress" → "Press"），否则用全名 */
 function cfseBrandWord(name) {
     const n = String(name == null ? '' : name).trim();
-    const m = n.match(/^CF\s+(.+)$/i);
-    return m ? m[1].trim() : n;
+    const m = n.match(/^CF[\s_\-]*(.+)$/i);
+    if (m) {
+        const rest = m[1].trim();
+        if (rest.length >= 2) return rest;   // 避免 "CFO" → "O" 这类误伤
+    }
+    return n;
 }
 
 /**
