@@ -1025,7 +1025,13 @@
   function mediaSyncBar() {
     var keys = mediaSelKeys();
     var btn = document.getElementById('media-del-sel');
-    if (btn) { btn.style.display = keys.length ? '' : 'none'; btn.textContent = '删除选中（' + keys.length + '）'; }
+    if (btn) { btn.disabled = !keys.length; btn.textContent = keys.length ? ('删除选中（' + keys.length + '）') : '删除选中'; }
+    var all = document.getElementById('media-selall');
+    if (all) {
+      var cbs = document.querySelectorAll('#media-box input[data-mdel]');
+      var on = cbs.length && Array.prototype.every.call(cbs, function (c) { return c.checked; });
+      all.textContent = on ? '取消全选' : '全选';
+    }
     var info = document.getElementById('media-info');
     if (info) {
       var f = mediaFiltered();
@@ -1035,19 +1041,20 @@
 
   function renderMedia() {
     var sec = document.getElementById('view-media');
-    sec.innerHTML = '<h1>媒体库</h1>' + '<style>' + "/* 控件一行；窄屏把后半段折进「更多」 */.mbar{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;margin:0 0 12px;}.mbar .mbar-main{display:flex;gap:8px;align-items:center;min-width:0;flex:1 1 auto;}.mbar .mbar-extra{display:flex;gap:8px;align-items:center;flex:0 0 auto;}.mbar .mbar-info{flex:0 0 auto;}#mbar-more{display:none;}@media (max-width:1000px){  .mbar{flex-wrap:wrap;}  .mbar .mbar-extra{display:none;}  #mbar-more{display:inline-block;margin-left:auto;}  .mbar.open .mbar-extra{display:flex;flex-wrap:wrap;flex:1 1 100%;margin-top:8px;}  .mbar.open #mbar-more{margin-left:auto;}}.mbar input[type=text]{padding:7px 11px;border:1px solid #d5d9de;border-radius:6px;font-size:13px;outline:none;}.mbar select{padding:7px 9px;border:1px solid #d5d9de;border-radius:6px;font-size:13px;background:#fff;}.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;}.mcard{position:relative;border:1px solid #e3e5e8;border-radius:10px;overflow:hidden;background:#fff;}.mcard img{display:block;width:100%;height:130px;object-fit:cover;background:#f6f7f9;cursor:zoom-in;}.mcard .mname{font-size:12px;color:#555;padding:7px 9px 2px;word-break:break-all;line-height:1.35;}.mcard .mmeta{font-size:11px;color:#98a1ab;padding:0 9px 8px;display:flex;justify-content:space-between;gap:6px;}.mcard .mops{display:flex;gap:4px;padding:0 8px 9px;}.mcard .mops .btn{padding:3px 7px;font-size:11.5px;}.mcard .mchk{position:absolute;left:8px;top:8px;width:18px;height:18px;z-index:2;cursor:pointer;}.mcard.on{outline:2px solid #1d4ed8;outline-offset:-2px;}.mlight{position:fixed;inset:0;background:rgba(12,16,22,.82);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:24px;}.mlight img{max-width:92vw;max-height:80vh;border-radius:6px;background:#fff;}.mlight .mcap{color:#e8ecf1;font-size:13px;word-break:break-all;text-align:center;max-width:90vw;}.mlight .mclose{color:#fff;border:1px solid rgba(255,255,255,.5);background:transparent;border-radius:6px;padding:6px 16px;cursor:pointer;}.mbox{transition:background .15s;}.mbox.drag{background:#eef4ff;outline:2px dashed #9db8e8;}" + '</style>' +
+    sec.innerHTML = '<h1>媒体库</h1>' + '<style>' + "/* 控件一行；窄屏把后半段折进「更多」 */.mbar{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;margin:0 0 12px;}.mbar .mbar-main{display:flex;gap:8px;align-items:center;min-width:0;flex:1 1 auto;}.mbar .mbar-extra{display:flex;gap:8px;align-items:center;flex:0 0 auto;}.mbar .mbar-info{flex:0 0 auto;}#mbar-more{display:none;}@media (max-width:1000px){  .mbar{flex-wrap:wrap;}  .mbar .mbar-extra{display:none;}  #mbar-more{display:inline-block;margin-left:auto;}  .mbar.open .mbar-extra{display:flex;flex-wrap:wrap;flex:1 1 100%;margin-top:8px;}  .mbar.open #mbar-more{margin-left:auto;}}.mbar input[type=text]{padding:7px 11px;border:1px solid #d5d9de;border-radius:6px;font-size:13px;outline:none;}.mbar select{padding:7px 9px;border:1px solid #d5d9de;border-radius:6px;font-size:13px;background:#fff;}.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;}.mcard{position:relative;border:1px solid #e3e5e8;border-radius:10px;overflow:hidden;background:#fff;}.mcard img{display:block;width:100%;height:130px;object-fit:cover;background:#f6f7f9;cursor:zoom-in;}.mcard .mname{font-size:12px;color:#555;padding:7px 9px 2px;word-break:break-all;line-height:1.35;}.mcard .mmeta{font-size:11px;color:#98a1ab;padding:0 9px 8px;display:flex;justify-content:space-between;gap:6px;}.mcard .mops{display:flex;gap:4px;padding:0 8px 9px;}.mcard .mops .btn{padding:3px 7px;font-size:11.5px;}.mcard .mchk{position:absolute;left:8px;top:8px;width:18px;height:18px;z-index:2;cursor:pointer;background:#fff;border-radius:3px;box-shadow:0 0 0 1px rgba(0,0,0,.18);}.mcard.on{outline:2px solid #1d4ed8;outline-offset:-2px;}.mlight{position:fixed;inset:0;background:rgba(12,16,22,.82);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:24px;}.mlight img{max-width:92vw;max-height:80vh;border-radius:6px;background:#fff;}.mlight .mcap{color:#e8ecf1;font-size:13px;word-break:break-all;text-align:center;max-width:90vw;}.mlight .mclose{color:#fff;border:1px solid rgba(255,255,255,.5);background:transparent;border-radius:6px;padding:6px 16px;cursor:pointer;}.mbox{transition:background .15s;}.mbox.drag{background:#eef4ff;outline:2px dashed #9db8e8;}" + '</style>' +
       '<div class="mbar" id="media-bar">' +
       '<div class="mbar-main">' +
       '<button class="btn btn-sm btn-primary" id="media-up">📤 上传图片</button>' +
       '<input type="file" id="media-up-file" accept="image/*" multiple hidden>' +
       '<input type="text" id="media-q" placeholder="筛选文件名…" style="min-width:120px;max-width:220px;">' +
+      '<button class="btn btn-sm" id="media-selall">全选</button>' +
       '</div>' +
       '<div class="mbar-extra">' +
       '<select id="media-sort">' +
       '<option value="time">时间：新→旧</option><option value="time-asc">时间：旧→新</option>' +
       '<option value="size">大小：大→小</option><option value="name">名称 A→Z</option></select>' +
       '<select id="media-view"><option value="grid">网格</option><option value="table">列表</option></select>' +
-      '<button class="btn btn-sm btn-danger" id="media-del-sel" style="display:none;">删除选中</button>' +
+      '<button class="btn btn-sm btn-danger" id="media-del-sel" disabled>删除选中</button>' +
       '</div>' +
       '<span class="muted mbar-info" id="media-info"></span>' +
       '<button class="btn btn-sm" id="mbar-more">⋯ 更多</button>' +
@@ -1081,6 +1088,16 @@
     document.getElementById('media-q').addEventListener('input', function () { mstate.q = this.value.trim(); renderMediaList(); });
     document.getElementById('media-sort').addEventListener('change', function () { mstate.sort = this.value; renderMediaList(); });
     document.getElementById('media-view').addEventListener('change', function () { mstate.view = this.value; renderMediaList(); });
+    document.getElementById('media-selall').addEventListener('click', function () {
+      var cbs = document.querySelectorAll('#media-box input[data-mdel]');
+      var allOn = cbs.length && Array.prototype.every.call(cbs, function (c) { return c.checked; });
+      Array.prototype.forEach.call(cbs, function (c) { c.checked = !allOn; });
+      document.querySelectorAll('#media-box .mcard').forEach(function (card) {
+        var cb = card.querySelector('input[data-mdel]');
+        if (cb) card.classList.toggle('on', cb.checked);
+      });
+      mediaSyncBar();
+    });
     document.getElementById('media-del-sel').addEventListener('click', function () {
       var keys = mediaSelKeys();
       if (!keys.length) return;
@@ -1213,14 +1230,23 @@
     document.body.appendChild(d);
   }
 
+  // 请求序号：并发加载时只采纳最后一次响应，避免旧响应把同一批数据又 concat 一遍
+  var mediaReqSeq = 0;
   function loadMedia(reset) {
     var box = document.getElementById('media-box');
     if (reset) { mstate.items = []; mstate.cursor = null; mstate.truncated = false; }
     if (!mstate.loaded && box) box.textContent = '加载中…';
     var qs = mstate.cursor ? ('?cursor=' + encodeURIComponent(mstate.cursor)) : '?limit=100';
+    var mySeq = ++mediaReqSeq;
     api('/api/media' + qs).then(function (d) {
+      if (mySeq !== mediaReqSeq) return;   // 已有更新的请求发出，丢弃这次结果
       mstate.loaded = true;
-      mstate.items = mstate.items.concat(d.items || []);
+      // 按 key 去重：即使同一对象被返回两次（翻页边界/并发），列表里也只出现一次
+      var seen = Object.create(null);
+      mstate.items.forEach(function (it) { seen[it.key] = true; });
+      (d.items || []).forEach(function (it) {
+        if (it && it.key && !seen[it.key]) { seen[it.key] = true; mstate.items.push(it); }
+      });
       mstate.cursor = d.cursor || null;
       mstate.truncated = !!d.truncated;
       renderMediaList();
@@ -1231,6 +1257,7 @@
         if (more) more.addEventListener('click', function () { loadMedia(false); });
       }
     }).catch(function (e) {
+      if (mySeq !== mediaReqSeq) return;
       mstate.loaded = true;
       if (box) box.innerHTML = '';
       flash('flash-main', e.message, 'err');
