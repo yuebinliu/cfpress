@@ -2656,15 +2656,13 @@
       '<div class="setup-brand"><span class="logo">CF</span> CF Press</div>' +
       '<h1>初始化站点</h1>' +
       '<p class="muted setup-sub">填写站点信息并创建第一个管理员账号，完成后即可进入后台。</p>' +
-      '<div class="su-grid">' +
       '<label>站点名<input id="su-name" placeholder="CF Press" value="CF Press"></label>' +
       '<label>站点 URL<input id="su-url" placeholder="https://cfpress.org"></label>' +
-      '<label class="su-full">站点描述<input id="su-desc" placeholder="一句话介绍你的站点" value="A site built with CF Press."></label>' +
+      '<label>站点描述<input id="su-desc" placeholder="一句话介绍你的站点" value="A site built with CF Press."></label>' +
       '<label>管理员用户名<input id="su-user" placeholder="admin" value="admin"></label>' +
       '<label>邮箱（可选）<input id="su-email" type="email"></label>' +
       '<label>管理员密码<input id="su-pass" type="password" placeholder="至少 8 位"></label>' +
       '<label>确认密码<input id="su-pass2" type="password"></label>' +
-      '</div>' +
       '<button class="btn btn-primary btn-block" id="su-go">创建并进入后台</button>' +
       '<div id="su-msg" class="setup-msg"></div>';
     var msg = document.getElementById('su-msg');
