@@ -1103,10 +1103,12 @@
 
   function mediaUpload(files) {
     var info = document.getElementById('media-info');
-    var ok = 0, bad = [];
+    var ok = 0, reused = 0, bad = [];
     function next(i) {
       if (i >= files.length) {
-        if (info) info.textContent = '上传完成：成功 ' + ok + ' 个' + (bad.length ? ('，失败 ' + bad.length + ' 个（' + bad.join('、') + '）') : '');
+        if (info) info.textContent = '上传完成：成功 ' + ok + ' 个'
+          + (reused ? '（其中 ' + reused + ' 个内容已存在，直接复用，未重复存储）' : '')
+          + (bad.length ? ('，失败 ' + bad.length + ' 个（' + bad.join('、') + '）') : '');
         loadMedia(true);
         return;
       }
@@ -1114,7 +1116,10 @@
       if (info) info.textContent = '上传中 ' + (i + 1) + '/' + files.length + '：' + f.name;
       var fd = new FormData();
       fd.append('file', f);
-      api('/api/media', { method: 'POST', body: fd }).then(function () { ok++; })
+      api('/api/media', { method: 'POST', body: fd }).then(function (r) {
+        ok++;
+        if (r && r.reused) reused++;
+      })
         .catch(function () { bad.push(f.name); })
         .then(function () { next(i + 1); });
     }

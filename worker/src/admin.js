@@ -2465,14 +2465,9 @@ function sanitizeMenu(list, depth) {
         const allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
         if (!allowed.includes(ext)) return json({ error: '仅支持 jpg/png/gif/webp' }, 400);
         const contentType = file.type || ('image/' + (ext === 'jpg' ? 'jpeg' : ext));
-        const now = new Date();
-        const y = now.getUTCFullYear();
-        const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-        const rand = Math.random().toString(36).slice(2, 10);
         const safeBase = name.split('.').slice(0, -1).join('.').replace(/[\/\\:*?"<>|\x00-\x1f]+/g, '-').slice(0, 60) || 'img';
         // 存储 key 用中文原文（与 R2/S3 的解码语义一致）；返回给客户端的 URL 再逐段编码
         const asciiBase = safeBase;
-        const path = 'wp-content/uploads/' + y + '/' + mm + '/' + rand + '-' + asciiBase + '.' + ext;
         const buf = await file.arrayBuffer();
         // 魔数嗅探：防止伪装扩展名上传非图片（sniff 前若干字节）
         const head = new Uint8Array(buf, 0, 12);
@@ -2482,11 +2477,21 @@ function sanitizeMenu(list, depth) {
         const isGif = sig.slice(0, 4) === 'GIF8';
         const isWebp = sig.slice(0, 4) === 'RIFF' && sig.slice(8, 12) === 'WEBP';
         if (!isPng && !isJpeg && !isGif && !isWebp) return json({ error: '文件内容不是有效图片' }, 400);
+        // 内容寻址：key = <内容 SHA-256 前 12 位>/<原文件名>.<ext>
+        // 同一份内容再传一次 → 同一个 key → 直接复用，不再产生第二个副本。
+        const digest = await crypto.subtle.digest('SHA-256', buf);
+        const hex = Array.from(new Uint8Array(digest)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+        const path = 'wp-content/uploads/' + hex.slice(0, 12) + '/' + asciiBase + '.' + ext;
+        const site = await getSiteContext(env);
+        const mediaUrl = (site.url || '') + '/' + r2UrlPath(path);
+        try {
+            const exist = await env.R2_BUCKET.head(path);
+            if (exist) return json({ ok: true, path: path, url: mediaUrl, reused: true });
+        } catch (e) { /* head 失败就照常写入，不影响上传 */ }
         try {
             await env.R2_BUCKET.put(path, buf, { httpMetadata: { contentType: contentType } });
         } catch (e) { console.error('media put failed:', e); return json({ error: '上传失败' }, 500); }
-        const site = await getSiteContext(env);
-        return json({ ok: true, path: path, url: (site.url || '') + '/' + r2UrlPath(path) });
+        return json({ ok: true, path: path, url: mediaUrl });
     }
 
     // PUT /api/media?key=...（同 key 覆盖替换；正文引用 URL 不变即自动生效）
