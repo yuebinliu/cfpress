@@ -114,6 +114,69 @@
     }
   });
 
+  /* ---------- 我的账号（所有角色都能用：改自己的昵称/邮箱/登录密码） ---------- */
+  function openAccount() {
+    var panel = document.getElementById('acct-panel');
+    var mask = document.getElementById('acct-mask');
+    if (!panel || !mask) return;
+    panel.classList.remove('hidden');
+    mask.classList.remove('hidden');
+    var note = document.getElementById('acct-note');
+    if (note) note.textContent = '';
+    api('/api/me').then(function (u) {
+      var who = document.getElementById('acct-who');
+      if (who) who.textContent = (u.username || '') + (u.role ? ' · ' + u.role : '');
+      var d = document.getElementById('acct-disp');
+      var em = document.getElementById('acct-email');
+      if (d) d.value = u.displayName || '';
+      if (em) em.value = u.email || '';
+    }).catch(function (e) {
+      if (note) note.textContent = '读取失败：' + (e && e.message || e);
+    });
+  }
+  function closeAccount() {
+    var panel = document.getElementById('acct-panel');
+    var mask = document.getElementById('acct-mask');
+    if (panel) panel.classList.add('hidden');
+    if (mask) mask.classList.add('hidden');
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t) return;
+    if (t.closest && t.closest('#btn-account')) { openAccount(); return; }
+    if (t.id === 'acct-close' || t.id === 'acct-mask') { closeAccount(); return; }
+    if (t.id === 'acct-save') {
+      var note = document.getElementById('acct-note');
+      note.textContent = '保存中…';
+      api('/api/me', {
+        method: 'PUT',
+        body: {
+          display_name: document.getElementById('acct-disp').value.trim(),
+          email: document.getElementById('acct-email').value.trim(),
+        },
+      }).then(function () {
+        note.textContent = '已保存';
+        setWho();
+      }).catch(function (e) { note.textContent = '保存失败：' + (e && e.message || e); });
+      return;
+    }
+    if (t.id === 'acct-pass-save') {
+      var note2 = document.getElementById('acct-note');
+      var oldp = document.getElementById('acct-old').value;
+      var newp = document.getElementById('acct-new').value;
+      if (!oldp) { note2.textContent = '请先输入当前密码'; return; }
+      if (String(newp).length < 8) { note2.textContent = '新密码至少 8 位'; return; }
+      note2.textContent = '更新中…';
+      api('/api/me/password', { method: 'POST', body: { old_password: oldp, new_password: newp } }).then(function () {
+        clearTokens();
+        closeAccount();
+        flash('flash-login', '密码已更新，请用新密码重新登录', 'ok');
+        boot();
+      }).catch(function (e) { note2.textContent = '更新失败：' + (e && e.message || e); });
+      return;
+    }
+  });
+
   /* ---------- 文章列表 ---------- */
   var postsState = { page: 1, q: '', status: '', sort: 'date_desc', taxType: '', taxSlug: '', taxName: '' };
   var editorDirty = false;
@@ -209,6 +272,45 @@
         flash('flash-main', '重建失败：' + (e && e.message || e), 'err');
       });
     });
+    function doBatch(ids, action, extra) {
+      api('/api/posts/batch', { method: 'POST', body: Object.assign({ ids: ids, action: action }, extra || {}) }).then(function (d) {
+        flash('flash-main', (action === 'delete' ? '已删除 ' : '已处理 ') + d.done + ' 篇', 'ok');
+        loadPosts();
+      }).catch(function (e) { flash('flash-main', e.message, 'err'); });
+    }
+    // 设分类：多选面板（原来是 prompt 让用户手打逗号分隔，容易错也不好读）
+    function openCatsPicker(ids) {
+      var mask = document.getElementById('cats-mask');
+      var panel = document.getElementById('cats-panel');
+      var list = document.getElementById('cats-list');
+      var note = document.getElementById('cats-note');
+      if (!mask || !panel || !list) return;
+      document.getElementById('cats-sub').textContent = '把选中的 ' + ids.length + ' 篇文章设为下列分类（会替换原分类）：';
+      note.textContent = '';
+      list.innerHTML = '<span class="muted">加载中…</span>';
+      mask.classList.remove('hidden');
+      panel.classList.remove('hidden');
+      api('/api/categories').then(function (r) {
+        var cats = (r && r.items) || [];
+        if (!cats.length) { list.innerHTML = '<span class="muted">还没有分类</span>'; return; }
+        list.innerHTML = cats.map(function (c) {
+          return '<label style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid #f3f3f3;cursor:pointer;">' +
+            '<input type="checkbox" value="' + esc(c.slug) + '"> <span>' + esc(c.name || c.slug) + '</span>' +
+            '<span class="muted" style="margin-left:auto;font-family:ui-monospace,Menlo,monospace;font-size:11px;">' + esc(c.slug) +
+            '</span><span class="muted" style="font-size:11px;">' + (c.cnt || 0) + ' 篇</span></label>';
+        }).join('');
+      }).catch(function (e) { list.innerHTML = '<span class="muted">读取分类失败：' + esc(e && e.message || e) + '</span>'; });
+      function close() { mask.classList.add('hidden'); panel.classList.add('hidden'); }
+      document.getElementById('cats-cancel').onclick = close;
+      mask.onclick = close;
+      document.getElementById('cats-ok').onclick = function () {
+        var picked = [];
+        list.querySelectorAll('input[type=checkbox]:checked').forEach(function (c) { picked.push(c.value); });
+        if (!picked.length) { note.textContent = '至少选一个分类'; return; }
+        close();
+        doBatch(ids, 'setcats', { categories: picked });
+      };
+    }
     ['pub', 'draft', 'cats', 'del'].forEach(function (a) {
       document.getElementById('btn-batch-' + a).addEventListener('click', function () {
         var ids = [];
@@ -216,18 +318,8 @@
         if (!ids.length) return;
         var action = { pub: 'publish', cats: 'setcats', del: 'delete' }[a] || a;
         if (action === 'delete' && !confirm('删除选中的 ' + ids.length + ' 篇文章？')) return;
-        var extra = {};
-        if (action === 'setcats') {
-          var v = prompt('把选中的 ' + ids.length + ' 篇文章设为以下分类（逗号分隔，会替换原分类）：');
-          if (v === null) return;
-          v = v.trim();
-          if (!v) return;
-          extra.categories = splitNames(v);
-        }
-        api('/api/posts/batch', { method: 'POST', body: Object.assign({ ids: ids, action: action }, extra) }).then(function (d) {
-          flash('flash-main', (action === 'del' ? '已删除 ' : '已处理 ') + d.done + ' 篇', 'ok');
-          loadPosts();
-        }).catch(function (e) { flash('flash-main', e.message, 'err'); });
+        if (action === 'setcats') { openCatsPicker(ids); return; }
+        doBatch(ids, action, {});
       });
     });
     document.getElementById('view-posts').addEventListener('change', function (e) {
@@ -1152,6 +1244,7 @@
           '<td>' + esc(u.display_name || '') + '</td><td>' + esc(u.user_email || '') + '</td><td>' + esc(u.role || '') + '</td>' +
           '<td class="muted">' + esc(String(u.user_registered || '').slice(0, 10)) + '</td>' +
           '<td style="white-space:nowrap;"><button class="btn btn-sm" data-edit="' + u.id + '">编辑</button> ' +
+          '<button class="btn btn-sm" data-upw="' + u.id + '">改密码</button> ' +
           '<button class="btn btn-sm" data-tgl="' + u.id + '" data-status="' + u.user_status + '">' + (u.user_status === 1 ? '禁用' : '启用') + '</button> ' +
           '<button class="btn btn-sm" data-ap="' + u.id + '" data-apname="' + esc(u.user_login) + '">应用密码</button> ' +
           '<button class="btn btn-sm btn-danger" data-deluser="' + u.id + '">删除</button></td></tr>';
@@ -1167,6 +1260,7 @@
         '<button class="btn btn-primary" id="u-add" style="justify-self:start;">新增用户</button></div></div>';
       sec.innerHTML = '<h1>用户</h1><div class="card grid"><table><thead><tr><th>用户名</th><th>昵称</th><th>邮箱</th><th>角色</th><th>注册</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' + add + '</div>' +
         '<div class="card" id="ue-panel" style="margin-top:12px;display:none;"></div>' +
+        '<div class="card" id="up-panel" style="margin-top:12px;display:none;"></div>' +
         '<div class="card" id="ap-panel" style="margin-top:12px;display:none;"></div>';
       bindUserActions();
     }).catch(function (e) {
@@ -1191,6 +1285,9 @@
     });
     document.querySelectorAll('[data-edit]').forEach(function (b) {
       b.addEventListener('click', function () { renderUserEdit(b.getAttribute('data-edit')); });
+    });
+    document.querySelectorAll('[data-upw]').forEach(function (b) {
+      b.addEventListener('click', function () { renderUserPassword(b.getAttribute('data-upw')); });
     });
     document.querySelectorAll('[data-tgl]').forEach(function (b) {
       b.addEventListener('click', function () {
@@ -1229,6 +1326,8 @@
     if (!host) return;
     var u = usersCache.filter(function (x) { return String(x.id) === String(uid); })[0];
     if (!u) return;
+    var up0 = document.getElementById('up-panel'); if (up0) up0.style.display = 'none';
+    var ap0 = document.getElementById('ap-panel'); if (ap0) ap0.style.display = 'none';
     var roles = [['admin', '管理员'], ['editor', '编辑'], ['author', '作者'], ['subscriber', '订阅者']];
     host.style.display = 'block';
     host.innerHTML = '<h2 class="dl-h">编辑用户：' + esc(u.user_login) + '</h2>' +
@@ -1239,12 +1338,8 @@
       roles.map(function (r) {
         return '<option value="' + r[0] + '"' + (u.role === r[0] ? ' selected' : '') + '>' + r[1] + '</option>';
       }).join('') + '</select></div></div>' +
-      '<div class="row" style="margin-top:10px;">' +
-      '<div><label>新密码</label><input type="password" id="ue-pass" placeholder="留空则不修改" autocomplete="new-password"></div>' +
-      '<div><label>确认新密码</label><input type="password" id="ue-pass2" placeholder="再输一次" autocomplete="new-password"></div></div>' +
       '<p class="muted" style="margin-top:10px;">用户名 <b>' + esc(u.user_login) + '</b> 是登录标识，创建后不可改。' +
-      '上面的密码是<b>网页后台登录密码</b>（留空就不动）；给第三方编辑器（Obsidian 等）用的是另一个「应用密码」，' +
-      '在操作列的「应用密码」里单独生成 —— 改这里的密码不会影响它。</p>' +
+      '这里只改资料；<b>密码在操作列的「改密码」里单独设置</b>，第三方编辑器用的「应用密码」又是另一份凭据，两者互不影响。</p>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="ue-save">保存</button> ' +
       '<button class="btn btn-sm" id="ue-close">收起</button> <span class="muted" id="ue-note"></span></div>';
     document.getElementById('ue-disp').value = u.display_name || '';
@@ -1257,17 +1352,47 @@
         email: document.getElementById('ue-email').value.trim(),
         role: document.getElementById('ue-role').value,
       };
-      var pw = document.getElementById('ue-pass').value;
-      var pw2 = document.getElementById('ue-pass2').value;
-      if (pw || pw2) {
-        if (pw.length < 8) { note.textContent = '新密码至少 8 位'; return; }
-        if (pw !== pw2) { note.textContent = '两次输入的新密码不一致'; return; }
-        body.password = pw;   // 留空则不带，后端就不会动密码
-      }
       note.textContent = '保存中…';
       api('/api/users/' + uid, { method: 'PUT', body: body }).then(function () {
-        flash('flash-main', body.password ? '已保存，登录密码已更新（应用密码未受影响）' : '已保存', 'ok');
+        flash('flash-main', '已保存', 'ok');
         renderUsers();
+      }).catch(function (e) { note.textContent = '保存失败：' + (e && e.message || e); });
+    };
+  }
+
+  /* ---------- 改密码：管理员重置他人的「登录密码」 ---------- */
+  /* 与「应用密码」严格分开：这里动 users.user_pass，
+     app_passwords 表一个字节都不碰，所以不会让第三方编辑器掉线。 */
+  function renderUserPassword(uid) {
+    var host = document.getElementById('up-panel');
+    if (!host) return;
+    var u = usersCache.filter(function (x) { return String(x.id) === String(uid); })[0];
+    if (!u) return;
+    var ue = document.getElementById('ue-panel');
+    if (ue) ue.style.display = 'none';
+    var ap = document.getElementById('ap-panel');
+    if (ap) ap.style.display = 'none';
+    host.style.display = 'block';
+    host.innerHTML = '<h2 class="dl-h">改密码：' + esc(u.user_login) + '</h2>' +
+      '<p class="muted" style="margin:0 0 10px;">这是<b>网页后台登录密码</b>，管理员可直接重置，不需要原密码。' +
+      '它和第三方编辑器的「应用密码」是两份独立凭据 —— 改这里不会让 Obsidian 之类的客户端掉线。</p>' +
+      '<div class="row">' +
+      '<div><label>新密码</label><input type="password" id="up-pass1" placeholder="至少 8 位" autocomplete="new-password"></div>' +
+      '<div><label>确认新密码</label><input type="password" id="up-pass2" placeholder="再输一次" autocomplete="new-password"></div>' +
+      '</div>' +
+      '<div style="margin-top:10px;"><button class="btn btn-primary" id="up-save">保存新密码</button> ' +
+      '<button class="btn btn-sm" id="up-close">收起</button> <span class="muted" id="up-note"></span></div>';
+    document.getElementById('up-close').onclick = function () { host.style.display = 'none'; };
+    document.getElementById('up-save').onclick = function () {
+      var note = document.getElementById('up-note');
+      var p1 = document.getElementById('up-pass1').value;
+      var p2 = document.getElementById('up-pass2').value;
+      if (String(p1).length < 8) { note.textContent = '密码至少 8 位'; return; }
+      if (p1 !== p2) { note.textContent = '两次输入不一致'; return; }
+      note.textContent = '保存中…';
+      api('/api/users/' + uid, { method: 'PUT', body: { password: p1 } }).then(function () {
+        note.textContent = '已更新（应用密码未受影响）';
+        setTimeout(function () { host.style.display = 'none'; }, 1200);
       }).catch(function (e) { note.textContent = '保存失败：' + (e && e.message || e); });
     };
   }
@@ -1276,6 +1401,8 @@
   function renderAppPasswords(uid, uname) {
     var host = document.getElementById('ap-panel');
     if (!host) return;
+    var ue0 = document.getElementById('ue-panel'); if (ue0) ue0.style.display = 'none';
+    var up0 = document.getElementById('up-panel'); if (up0) up0.style.display = 'none';
     host.style.display = 'block';
     host.innerHTML = '<h2 class="dl-h">' + esc(uname) + ' 的应用密码</h2>' +
       '<p class="muted" style="margin:4px 0 10px;">给第三方编辑器（Obsidian / Ulysses / 脚本）用：认证 <b>Basic Auth</b>，用户名 = <b>' + esc(uname) +
@@ -1342,6 +1469,7 @@
     var sec = document.getElementById('view-settings');
     var curCache = null;   // 设置页加载回来的 cache 全量（保存「批量任务」时合并用）
     sec.innerHTML = '<h1>设置</h1>' +
+      '<h2 class="sg">站点</h2>' +
       '<div class="card"><h2 class="dl-h">站点信息</h2>' +
       '<p class="muted">站名用于标题/页脚/侧边栏（保存即清缓存生效，历史静态单页需重建或全量导出）。站点描述用于 RSS 频道描述。</p>' +
       '<label>站点名</label><input type="text" id="s-name">' +
@@ -1360,35 +1488,17 @@
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="s-save">保存站点信息</button> <span class="muted" id="img-note"></span>' +
       '<input type="file" id="img-file" accept="image/*" hidden></div></div>' +
 '<div class="card"><h2 class="dl-h">社交账号</h2>' +
-      '<p class="muted">渲染模板里的 <code>{{SOCIAL_LINKS}}</code>。每行一条：<code>平台|链接</code>（如 <code>facebook|https://facebook.com/xxx</code>）。平台名随意（facebook / twitter / instagram / github…）。</p>' +
+      '<p class="muted">站点页脚 / 侧栏的社交链接。每行一条，格式 <code>平台|链接</code>，例如 <code>facebook|https://facebook.com/xxx</code>。平台名随意写（facebook / twitter / github…）。</p>' +
       '<textarea id="soc-input" style="min-height:72px;font-family:monospace;" placeholder="facebook|https://facebook.com/xxx"></textarea>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="soc-save">保存社交账号</button> <span class="muted" id="soc-note"></span></div></div>' +
       '<div class="card"><h2 class="dl-h">导航菜单</h2>' +
-      '<p class="muted">静态站的主导航，渲染模板里的 <code>{{MENU}}</code>。<b>与 WP 后台菜单不联动</b>（这里独立维护）。类型选「分类 / 标签」时第三列变成<b>下拉选择</b>（分类列出全部、标签只列最常用的 5 个），选完「显示文字」留空会自动填成它的名称；选「自定义链接 / 文章」沿用文本框（填 URL / slug）。「层级」用于二级菜单（层级比上一项深时自动挂到它下面）。</p>' +
+      '<p class="muted">站点顶部的主导航，在这里独立维护。类型选「分类 / 标签」时第三列变成下拉选择，选完「显示文字」留空会自动填成它的名称；「自定义链接 / 文章」则填完整 URL 或 slug。「层级」用来做二级菜单：比上一项深就会自动挂到它下面。</p>' +
       '<div id="menu-rows" style="display:flex;flex-direction:column;gap:6px;margin-top:8px;"></div>' +
       '<div style="margin-top:10px;"><button class="btn btn-sm" id="menu-add">＋ 添加菜单项</button> ' +
       '<button class="btn btn-primary" id="menu-save">保存菜单</button> <span class="muted" id="menu-note"></span></div></div>' +
-            '<div class="card"><h2 class="dl-h">缓存策略</h2>' +
-      '<p class="muted">控制动态页（列表页 / 侧边栏 / RSS）的缓存方式；文章单页始终直读 R2。<b>这些缓存都放在 Cloudflare 边缘缓存（Cache API）里，不消耗 KV 额度</b>（KV 现在只存站点设置）；数值 <b>0 = 直查 D1 不缓存</b>。保存后即时生效（会自动清一次相关缓存）。</p>' +
-      '<div style="margin:8px 0;display:flex;gap:6px;flex-wrap:wrap;">' +
-      '<button class="btn btn-sm" id="cp-preset-d1">预设：全 D1（最省资源）</button>' +
-      '<button class="btn btn-sm" id="cp-preset-mix">预设：混合（侧边栏缓存）</button>' +
-      '<button class="btn btn-sm" id="cp-preset-kv">预设：全缓存（高流量）</button></div>' +
-      '<div class="row"><div><label>列表页 TTL（秒，0=直查 D1）</label><input type="number" id="c-ttl-list" min="0"></div>' +
-      '<div><label>侧边栏 TTL（秒，0=直查 D1）</label><input type="number" id="c-ttl-sidebar" min="0"></div>' +
-      '<div><label>站点信息 TTL（秒，0=不缓存；唯一仍用 KV 的项）</label><input type="number" id="c-ttl-site" min="0"></div>' +
-      '<div><label>Feed TTL（秒，0=不缓存；默认 4 小时）</label><input type="number" id="c-ttl-feed" min="0"></div>' +
-      '<div><label>Feed 输出条数（1-100）</label><input type="number" id="c-feed-count" min="1" max="100"></div>' +
-      '<div><label>列表每页文章数（1-100）</label><input type="number" id="c-per-page" min="1" max="100"></div></div>' +
-      '<label style="margin-top:8px;display:block;"><input type="checkbox" id="c-purge"> 发布文章时清列表第一页/侧边栏缓存（走边缘缓存，<b>不消耗 KV</b>；想让「发布后立即刷新」就打开）</label>' +
-      '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-save">保存缓存策略</button> <span class="muted" id="c-note"></span></div></div>' +
-      '<div class="card"><h2 class="dl-h">批量任务</h2>' +
-      '<p class="muted">「重建全部单页」「permalink 迁移」等批量任务共用。<b>批量大小</b> = 每次请求处理多少篇；<b>并发数</b> = 一批里同时处理几篇。</p>' +
-      '<div class="row"><div><label>批量大小（1-100）</label><input type="number" id="c-task-batch" min="1" max="100"></div>' +
-      '<div><label>并发数（1-16）</label><input type="number" id="c-task-conc" min="1" max="16"></div></div>' +
-      '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-task-save">保存批量任务设置</button> <span class="muted" id="c-task-note"></span></div></div>' +
+            '<h2 class="sg">内容</h2>' +
       '<div class="card"><h2 class="dl-h">URL 结构（permalink）</h2>' +
-      '<p class="muted">决定文章单页的<b>地址形态</b>，同时也是它在 R2 里的<b>存储路径</b>（两者始终一致）。支持 <code>%postname%</code> <code>%year%</code> <code>%monthnum%</code> <code>%day%</code> <code>%post_id%</code> <code>%category%</code>（不支持 %author%）。<b>改结构后必须点「开始迁移」</b>，否则旧地址会 404（迁移会先把新结构复制一份、旧文件保留，全部完成才切换）。</p>' +
+      '<p class="muted">决定文章页的地址格式，例如 <code>/%year%/%postname%/</code>。支持 <code>%postname%</code> <code>%year%</code> <code>%monthnum%</code> <code>%day%</code> <code>%post_id%</code> <code>%category%</code>（不支持 %author%）。<b>改完必须点「开始迁移」</b>，否则旧地址会 404 —— 迁移会先把新结构复制一份、旧文件原样保留，全部完成才切换。</p>' +
       '<label>当前</label><input type="text" id="pm-current" readonly>' +
       '<label>新结构（WP 风格，如 /%year%/%postname%/）</label><input type="text" id="pm-input" placeholder="/%postname%/">' +
       '<div style="margin-top:10px;">' +
@@ -1404,10 +1514,31 @@
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="rb-btn">重建全部单页</button> ' +
       '<button class="btn" id="purge-btn">清空全站缓存</button> <span class="muted" id="rb-prog"></span></div></div>' +
       '<div class="card"><h2 class="dl-h">数据备份 / 恢复</h2>' +
-      '<p class="muted">导出全部文章为 JSON；导入时按 slug 跳过已存在的文章，其余新增。</p>' +
+      '<p class="muted">导出一个 JSON：<b>文章正文、分类与标签定义、文档库索引、站点设置</b>（站名/菜单/URL 结构/缓存策略）。'
+      + '<b>不含</b>账号密码与 R2 里的媒体文件、文档原稿 —— 那些请另外备份。导入时按 slug 跳过已存在的文章；站点设置会再确认一次才覆盖。</p>' +
       '<div style="margin-top:10px;"><button class="btn" id="exp-btn">导出备份</button> ' +
       '<button class="btn" id="imp-btn">导入备份</button> ' +
       '<input type="file" id="imp-file" accept=".json,application/json" hidden>' +
+      '<h2 class="sg">高级</h2>' +
+      '<div class="card"><h2 class="dl-h">缓存策略</h2>' +
+      '<p class="muted">控制列表页 / 侧边栏 / RSS 的缓存时长，文章单页不受影响（始终直读存储）。缓存放在 Cloudflare 边缘节点，不额外计费；数值填 <b>0 就每次都实时查库</b>。保存后会自动清一次相关缓存。</p>' +
+      '<div style="margin:8px 0;display:flex;gap:6px;flex-wrap:wrap;">' +
+      '<button class="btn btn-sm" id="cp-preset-d1">预设：全 D1（最省资源）</button>' +
+      '<button class="btn btn-sm" id="cp-preset-mix">预设：混合（侧边栏缓存）</button>' +
+      '<button class="btn btn-sm" id="cp-preset-kv">预设：全缓存（高流量）</button></div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-top:8px;"><div><label>列表页 TTL（秒，0=直查 D1）</label><input type="number" id="c-ttl-list" min="0"></div>' +
+      '<div><label>侧边栏 TTL（秒，0=直查 D1）</label><input type="number" id="c-ttl-sidebar" min="0"></div>' +
+      '<div><label>站点信息 TTL（秒，0=不缓存；走 KV）</label><input type="number" id="c-ttl-site" min="0"></div>' +
+      '<div><label>Feed TTL（秒，0=不缓存；默认 4 小时）</label><input type="number" id="c-ttl-feed" min="0"></div>' +
+      '<div><label>Feed 输出条数（1-100）</label><input type="number" id="c-feed-count" min="1" max="100"></div>' +
+      '<div><label>列表每页文章数（1-100）</label><input type="number" id="c-per-page" min="1" max="100"></div></div>' +
+      '<label style="margin-top:8px;display:block;"><input type="checkbox" id="c-purge"> 发布文章时清列表第一页/侧边栏缓存（走边缘缓存，<b>不消耗 KV</b>；想让「发布后立即刷新」就打开）</label>' +
+      '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-save">保存缓存策略</button> <span class="muted" id="c-note"></span></div></div>' +
+      '<div class="card"><h2 class="dl-h">批量任务</h2>' +
+      '<p class="muted">「重建全部单页」「permalink 迁移」等批量任务共用。<b>批量大小</b> = 每次请求处理多少篇；<b>并发数</b> = 一批里同时处理几篇。</p>' +
+      '<div class="row"><div><label>批量大小（1-100）</label><input type="number" id="c-task-batch" min="1" max="100"></div>' +
+      '<div><label>并发数（1-16）</label><input type="number" id="c-task-conc" min="1" max="16"></div></div>' +
+      '<div style="margin-top:10px;"><button class="btn btn-primary" id="c-task-save">保存批量任务设置</button> <span class="muted" id="c-task-note"></span></div></div>' +
       '<span class="muted" id="bk-prog"></span></div></div>';
 
     // ---- 社交账号（{{SOCIAL_LINKS}}；每行 service|url）----
@@ -1820,12 +1951,16 @@
         var blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
         var a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'cfse-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+        a.download = 'cfpress-backup-' + new Date().toISOString().slice(0, 10) + '.json';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(a.href);
-        prog.textContent = '已导出 ' + d.total + ' 篇';
+        var bits = ['文章 ' + (d.total || 0) + ' 篇'];
+        if ((d.taxonomies || []).length) bits.push('分类标签 ' + d.taxonomies.length + ' 个');
+        if ((d.documents || []).length) bits.push('文档索引 ' + d.documents.length + ' 条');
+        if (d.site) bits.push('站点设置');
+        prog.textContent = '已导出：' + bits.join('、');
       }).catch(function (e) { prog.textContent = ''; flash('flash-main', e.message, 'err'); });
     });
     document.getElementById('imp-btn').addEventListener('click', function () {
@@ -1840,10 +1975,23 @@
       rd.onload = function () {
         var obj;
         try { obj = JSON.parse(rd.result); } catch (e) { prog.textContent = ''; flash('flash-main', '文件不是有效 JSON', 'err'); return; }
+        if (Array.isArray(obj)) obj = { posts: obj };   // 兼容只有文章数组的老备份
+        if (!obj || typeof obj !== 'object') { prog.textContent = ''; flash('flash-main', '备份格式不认识', 'err'); return; }
+        var restoreSite = false;
+        if (obj.site && typeof obj.site === 'object') {
+          restoreSite = confirm('这份备份里有站点设置（站名、菜单、URL 结构、缓存策略、文档库路由等）。\n\n'
+            + '确定 = 一并恢复，会覆盖当前设置；\n取消 = 只恢复文章、分类标签和文档索引。');
+        }
+        obj.restoreSite = restoreSite;
         prog.textContent = '导入中…';
         api('/api/import', { method: 'POST', body: obj }).then(function (d) {
-          var sk = (d.skipped || []).length ? '，跳过 ' + d.skipped.length + ' 篇' : '';
-          prog.textContent = '已导入 ' + d.imported + ' 篇' + sk;
+          var bits = ['文章 ' + (d.imported || 0) + ' 篇'];
+          var r = d.restored || {};
+          if (r.taxonomies) bits.push('分类标签 ' + r.taxonomies + ' 个');
+          if (r.documents) bits.push('文档索引 ' + r.documents + ' 条');
+          if (r.site) bits.push('站点设置已恢复');
+          if ((d.skipped || []).length) bits.push('跳过 ' + d.skipped.length + ' 篇（已存在）');
+          prog.textContent = '已导入：' + bits.join('、');
           flash('flash-main', '导入完成', 'ok');
         }).catch(function (e) { prog.textContent = ''; flash('flash-main', e.message, 'err'); });
       };

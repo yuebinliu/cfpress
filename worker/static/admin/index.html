@@ -61,6 +61,8 @@
   .setup-msg { margin-top: 12px; font-size: 13px; color: #8b8b93; white-space: pre-wrap; min-height: 1em; }
   .dl-sep { border-top: 1px solid #eee; margin: 22px 0 16px; }
   .dl-h { font-size: 15px; font-weight: 600; color: #111; margin: 0 0 14px; }
+  .sg { margin: 4px 0 10px; font-size: 11px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: #9c9488; }
+  .sg ~ .card { margin-top: 0; }
   #login-card.setup-mode { max-width: 460px; }
   .setup-mode label { margin: 0 0 14px; }
   .setup-mode label input { display: block; margin-top: 6px; }
@@ -87,7 +89,7 @@
   </nav>
   <span class="spacer"></span>
   <a href="/" target="_blank" class="btn btn-sm" style="color:#52525b;">查看站点 ↗</a>
-  <span id="who" style="color:#8b8b93;font-size:13px;"></span>
+  <button class="btn btn-sm" id="btn-account" title="我的账号"><span id="who"></span></button>
   <button class="btn btn-sm" id="btn-logout">退出</button>
 </header>
 
@@ -118,6 +120,42 @@
 <section id="view-comments" class="hidden"></section>
   </div>
 </main>
+
+<div id="cats-mask" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:60;"></div>
+<div id="cats-panel" class="hidden" style="position:fixed;z-index:61;top:50%;left:50%;transform:translate(-50%,-50%);width:min(460px,92vw);max-height:80vh;overflow:auto;background:#fff;border:1px solid #e6e6e9;border-radius:14px;padding:22px;">
+  <h2 class="dl-h">设置分类</h2>
+  <p class="muted" id="cats-sub" style="margin:0 0 12px;"></p>
+  <div id="cats-list" style="display:flex;flex-direction:column;"></div>
+  <div style="margin-top:14px;display:flex;gap:8px;align-items:center;">
+    <button class="btn btn-primary" id="cats-ok">应用</button>
+    <button class="btn" id="cats-cancel">取消</button>
+    <span class="muted" id="cats-note"></span>
+  </div>
+</div>
+
+<div id="acct-mask" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:60;"></div>
+<div id="acct-panel" class="hidden" style="position:fixed;z-index:61;top:50%;left:50%;transform:translate(-50%,-50%);width:min(440px,92vw);max-height:88vh;overflow:auto;background:#fff;border:1px solid #e6e6e9;border-radius:14px;padding:22px;">
+  <h2 class="dl-h">我的账号</h2>
+  <p class="muted" id="acct-who" style="margin:0 0 12px;"></p>
+  <div class="row">
+    <div><label>昵称</label><input type="text" id="acct-disp"></div>
+    <div><label>邮箱</label><input type="email" id="acct-email"></div>
+  </div>
+  <div style="margin-top:14px;"><button class="btn btn-primary" id="acct-save">保存资料</button></div>
+  <div style="margin-top:18px;padding-top:16px;border-top:1px solid #eee;">
+    <h2 class="dl-h">改密码</h2>
+    <p class="muted" style="margin:0 0 10px;">需要先验明当前密码。改的是<b>网页登录密码</b>；第三方编辑器用的「应用密码」不受影响。</p>
+    <div class="row">
+      <div><label>当前密码</label><input type="password" id="acct-old" autocomplete="current-password"></div>
+      <div><label>新密码</label><input type="password" id="acct-new" placeholder="至少 8 位" autocomplete="new-password"></div>
+    </div>
+    <div style="margin-top:10px;"><button class="btn btn-primary" id="acct-pass-save">更新密码</button></div>
+  </div>
+  <div style="margin-top:16px;display:flex;gap:8px;align-items:center;">
+    <button class="btn" id="acct-close">关闭</button>
+    <span class="muted" id="acct-note"></span>
+  </div>
+</div>
 
 <script src="/admin/vendor/marked.min.js"></script>
 <script src="/admin/app.js"></script>

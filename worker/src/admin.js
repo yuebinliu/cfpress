@@ -2606,7 +2606,31 @@ function sanitizeMenu(list, depth) {
     if (path === '/api/export' && method === 'GET') {
         if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
         const rows = await db.prepare('SELECT wp_id, slug, title, content, content_format, excerpt, date, modified, status, categories, tags, featured_image FROM posts ORDER BY date ASC').all();
-        return json({ exportedAt: nowDateTime(), total: (rows.results || []).length, posts: rows.results || [] });
+        // 备份要能「换个地方还原出一个同样的站」，所以除文章外还带上：
+        // 分类/标签定义（含没有文章引用的）、文档库元数据、站点设置（不含任何账号凭据）。
+        let tax = [], docs = [], site = null;
+        try {
+            const t = await db.prepare('SELECT type, slug, name FROM taxonomies ORDER BY type ASC, slug ASC').all();
+            tax = (t && t.results) || [];
+        } catch (e) { tax = []; }
+        try {
+            const d = await db.prepare('SELECT source_prefix, path, format, title, excerpt, status, date FROM documents ORDER BY source_prefix ASC, path ASC').all();
+            docs = (d && d.results) || [];
+        } catch (e) { docs = []; }
+        try {
+            const s = await db.prepare("SELECT v FROM settings WHERE k = 'site'").first();
+            site = JSON.parse((s && s.v) || '{}');
+        } catch (e) { site = null; }
+        return json({
+            format: 'cfpress-backup',
+            version: 2,
+            exportedAt: nowDateTime(),
+            total: (rows.results || []).length,
+            posts: rows.results || [],
+            taxonomies: tax,
+            documents: docs,
+            site: site,
+        });
     }
     if (path === '/api/import' && method === 'POST') {
         if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
@@ -2616,7 +2640,23 @@ function sanitizeMenu(list, depth) {
         const off = siteCtx.timezoneOffset || 0;
         const items = Array.isArray(body.posts) ? body.posts
             : (body.posts && Array.isArray(body.posts.posts) ? body.posts.posts : []);
-        if (!items.length) return json({ error: '没有可导入的文章' }, 400);
+        const taxItems = Array.isArray(body.taxonomies) ? body.taxonomies.slice(0, 3000) : [];
+        const docItems = Array.isArray(body.documents) ? body.documents.slice(0, 3000) : [];
+        if (!items.length && !taxItems.length && !docItems.length && !body.site) {
+            return json({ error: '备份文件里没有可恢复的内容' }, 400);
+        }
+        const restored = { taxonomies: 0, documents: 0, site: false };
+        // 先恢复分类/标签定义：文章导入会靠 syncTaxonomy 自动建，但「没有文章引用的分类」带不出来
+        for (const t of taxItems) {
+            const ty = t && t.type === 'tag' ? 'tag' : 'category';
+            const sl = String((t && t.slug) || '').trim();
+            if (!sl) continue;
+            try {
+                await db.prepare('INSERT INTO taxonomies (type, slug, name) VALUES (?, ?, ?) ON CONFLICT(type, slug) DO UPDATE SET name = excluded.name')
+                    .bind(ty, sl, String((t && t.name) || sl)).run();
+                restored.taxonomies++;
+            } catch (e) { /* 单条失败不阻断整体 */ }
+        }
         const baseId = Math.floor(Date.now()) * 1000000;
         let imported = 0;
         const skipped = [];
@@ -2643,7 +2683,28 @@ function sanitizeMenu(list, depth) {
             imported++;
         }
         if (imported) await purgeLists(env);
-        return json({ ok: true, imported: imported, skipped: skipped });
+        // 文档库元数据（正文原稿在 R2，这里只恢复目录索引；同路径已存在则跳过）
+        for (const d of docItems) {
+            const sp = String((d && d.source_prefix) || '').replace(/^\/+|\/+$/g, '');
+            const p = String((d && d.path) || '');
+            if (!sp || !p) continue;
+            try {
+                await db.prepare('INSERT INTO documents (source_prefix, path, format, title, excerpt, status, date, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_prefix, path) DO NOTHING')
+                    .bind(sp, p, String(d.format || 'md'), String(d.title || ''), String(d.excerpt || ''),
+                        String(d.status || 'published'), String(d.date || ''), localDateTime(off)).run();
+                restored.documents++;
+            } catch (e) { /* 表不存在或单条失败：忽略 */ }
+        }
+        // 站点设置（菜单/分类路由/缓存策略等）：只在显式要求时覆盖，避免误盖掉当前站的配置
+        if (body.site && typeof body.site === 'object' && body.restoreSite === true) {
+            try {
+                await db.prepare("INSERT INTO settings (k, v) VALUES ('site', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v")
+                    .bind(JSON.stringify(body.site)).run();
+                await touchSiteCtx(env);
+                restored.site = true;
+            } catch (e) { /* 恢复失败不阻断文章导入结果 */ }
+        }
+        return json({ ok: true, imported: imported, skipped: skipped, restored: restored });
     }
 
     // POST /api/cache/purge（admin：按前缀批量清 KV 缓存）
