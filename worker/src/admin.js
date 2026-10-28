@@ -1767,6 +1767,37 @@ function sanitizeMenu(list, depth) {
         }
 
         if (method === 'POST') {
+            // ---- ids 模式：只重建指定几篇（文章列表批量勾选后触发）----
+            //   与下面的全量分页模式互不干扰：传了非空 ids 就走这里，不做游标/进度。
+            let reqBody = {};
+            try { reqBody = await request.json(); } catch (e) { reqBody = {}; }
+            const idList = Array.isArray(reqBody && reqBody.ids)
+                ? reqBody.ids.map(function (x) { return parseInt(x, 10); }).filter(function (n) { return Number.isFinite(n) && n > 0; })
+                : [];
+            if (idList.length) {
+                const uniq = Array.from(new Set(idList)).slice(0, 200);
+                const ph = uniq.map(function () { return '?'; }).join(',');
+                const rows = await db.prepare("SELECT * FROM posts WHERE wp_id IN (" + ph + ")").bind(...uniq).all();
+                const list = (rows && rows.results) || [];
+                if (!list.length) {
+                    return json({ ok: true, rebuilt: 0, failed: 0, total: 0, requested: uniq.length, done: true, batch: batch, concurrency: concurrency });
+                }
+                const sharedIds = {
+                    site: await getSiteContext(env),
+                    sidebar: await getSidebarData(env.D1_DATABASE),
+                    tplSingle: await getActiveTplContent(env, 'single'),
+                    sidebarTpl: await getActiveSidebarTpl(env),
+                    commentsTpl: await getActiveCommentsTpl(env),
+                };
+                const resIds = await runBatchChunk(list, concurrency, async function (r) {
+                    return await writeSinglePage(env, r, sharedIds);
+                });
+                try { await purgeLists(env); } catch (e) { /* 清列表缓存失败不影响本批结果 */ }
+                return json({
+                    ok: true, rebuilt: resIds.ok, failed: resIds.failed, total: list.length,
+                    requested: uniq.length, done: true, batch: batch, concurrency: concurrency,
+                });
+            }
             if (url.searchParams.get('reset') === '1') {
                 await clearBatchProgress(env, JOB);
             }

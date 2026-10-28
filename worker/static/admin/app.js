@@ -177,7 +177,6 @@
       '<div class="muted" id="posts-stats" style="margin:2px 0 10px;"></div>' +
       '<div class="toolbar" style="flex-wrap:wrap;">' +
       '<button class="btn btn-primary" id="btn-new-post">＋ 新建文章</button>' +
-      '<button class="btn" id="btn-audit">🔍 质检报告</button>' +
       '<input type="text" id="post-search" placeholder="搜索标题/正文…" value="' + esc(postsState.q) + '">' +
       '<select id="post-status"><option value="">全部状态</option><option value="published"' + (postsState.status === 'published' ? ' selected' : '') + '>已发布</option><option value="draft"' + (postsState.status === 'draft' ? ' selected' : '') + '>草稿</option></select>' +
       '<select id="post-sort"><option value="date_desc"' + (postsState.sort === 'date_desc' ? ' selected' : '') + '>日期最新</option><option value="date_asc"' + (postsState.sort === 'date_asc' ? ' selected' : '') + '>日期最早</option><option value="title_asc"' + (postsState.sort === 'title_asc' ? ' selected' : '') + '>标题 A-Z</option></select>' +
@@ -185,21 +184,31 @@
       '<button class="btn btn-sm" id="btn-batch-pub" disabled>发布</button> ' +
       '<button class="btn btn-sm" id="btn-batch-draft" disabled>转草稿</button> ' +
       '<button class="btn btn-sm" id="btn-batch-cats" disabled>设分类</button> ' +
+      '<button class="btn btn-sm" id="btn-batch-rebuild" disabled title="重新生成选中文章的静态页">重建页</button> ' +
       '<button class="btn btn-sm btn-danger" id="btn-batch-del" disabled>删除</button>' +
       '<span class="muted" id="batch-count" style="margin-left:6px;"></span>' +
       '</div>' +
       (postsState.taxType && postsState.taxSlug ? '<div class="toolbar" style="margin-top:8px;"><span class="muted">筛选：' + (postsState.taxType === 'tag' ? '标签' : '分类') + '「' + esc(postsState.taxName || postsState.taxSlug) + '」</span> <button class="btn btn-sm" id="tax-clear">✕ 清除筛选</button></div>' : '') +
-      '<div class="card grid" id="audit-panel" style="display:none;"></div>' +
       '<div class="card grid" id="posts-box">加载中…</div>';
 
     document.getElementById('btn-new-post').addEventListener('click', function () { renderEditor(null); });
-    document.getElementById('btn-audit').addEventListener('click', function () {
-      var panel = document.getElementById('audit-panel');
-      var show = panel.style.display === 'none';
-      panel.style.display = show ? '' : 'none';
-      if (show) renderAudit();
-    });
     renderRecentChips();
+    // 批量重建：只重建勾选的这几篇（走 rebuild-single 的 ids 模式）
+    document.getElementById('btn-batch-rebuild').addEventListener('click', function () {
+      var ids = [];
+      document.querySelectorAll('[data-chk]:checked').forEach(function (c) { ids.push(Number(c.value)); });
+      if (!ids.length) return;
+      var b = this;
+      var old = b.innerHTML;
+      b.disabled = true; b.innerHTML = '重建中…';
+      api('/api/posts/rebuild-single', { method: 'POST', body: { ids: ids } }).then(function (r) {
+        b.disabled = false; b.innerHTML = old;
+        flash('flash-main', '已重建 ' + (r.rebuilt || 0) + ' 篇' + (r.failed ? '，失败 ' + r.failed + ' 篇' : ''), r.failed ? 'err' : 'ok');
+      }).catch(function (e) {
+        b.disabled = false; b.innerHTML = old;
+        flash('flash-main', '重建失败：' + (e && e.message || e), 'err');
+      });
+    });
     ['pub', 'draft', 'cats', 'del'].forEach(function (a) {
       document.getElementById('btn-batch-' + a).addEventListener('click', function () {
         var ids = [];
@@ -241,7 +250,7 @@
         return;
       }
       var cnt = document.querySelectorAll('[data-chk]:checked').length;
-      ['pub', 'draft', 'cats', 'del'].forEach(function (a) {
+      ['pub', 'draft', 'cats', 'rebuild', 'del'].forEach(function (a) {
         var b = document.getElementById('btn-batch-' + a);
         if (b) b.disabled = cnt === 0;
       });
@@ -1131,17 +1140,21 @@
     });
   }
   /* ---------- 用户管理（仅管理员可见有效操作） ---------- */
+  var usersCache = [];   // 用户页列表缓存（编辑面板按 id 取行）
+
   function renderUsers() {
     var sec = document.getElementById('view-users');
     sec.innerHTML = '<h1>用户</h1><div class="card grid" id="users-load">加载中…</div>';
     api('/api/users').then(function (d) {
-      var rows = (d.users || []).map(function (u) {
+      usersCache = d.users || [];
+      var rows = usersCache.map(function (u) {
         return '<tr><td><strong>' + esc(u.user_login) + '</strong>' + (u.user_status === 0 ? ' <span style="color:#b32d2e;">已禁用</span>' : '') + '</td>' +
           '<td>' + esc(u.display_name || '') + '</td><td>' + esc(u.user_email || '') + '</td><td>' + esc(u.role || '') + '</td>' +
           '<td class="muted">' + esc(String(u.user_registered || '').slice(0, 10)) + '</td>' +
-          '<td style="white-space:nowrap;"><button class="btn btn-sm" data-tgl="' + u.id + '" data-status="' + u.user_status + '">' + (u.user_status === 1 ? '禁用' : '启用') + '</button> ' +
-          '<button class="btn btn-sm" data-pw="' + u.id + '">重置密码</button> ' +
-          '<button class="btn btn-sm" data-ap="' + u.id + '" data-apname="' + esc(u.user_login) + '">🔑 应用密码</button> ' +
+          '<td style="white-space:nowrap;"><button class="btn btn-sm" data-edit="' + u.id + '">编辑</button> ' +
+          '<button class="btn btn-sm" data-tgl="' + u.id + '" data-status="' + u.user_status + '">' + (u.user_status === 1 ? '禁用' : '启用') + '</button> ' +
+          '<button class="btn btn-sm" data-pw="' + u.id + '" data-pwlogin="' + esc(u.user_login) + '">重置密码</button> ' +
+          '<button class="btn btn-sm" data-ap="' + u.id + '" data-apname="' + esc(u.user_login) + '">应用密码</button> ' +
           '<button class="btn btn-sm btn-danger" data-deluser="' + u.id + '">删除</button></td></tr>';
       }).join('');
       var add = '<div class="toolbar" style="margin-top:12px;border-top:1px solid #eee;padding-top:12px;">' +
@@ -1152,6 +1165,7 @@
         '<select id="u-role" style="max-width:100px;"><option value="editor">编辑</option><option value="author">作者</option><option value="admin">管理员</option><option value="subscriber">订阅者</option></select>' +
         '<button class="btn btn-primary" id="u-add">新增用户</button></div>';
       sec.innerHTML = '<h1>用户</h1><div class="card grid"><table><thead><tr><th>用户名</th><th>昵称</th><th>邮箱</th><th>角色</th><th>注册</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' + add + '</div>' +
+        '<div class="card" id="ue-panel" style="margin-top:12px;display:none;"></div>' +
         '<div class="card" id="ap-panel" style="margin-top:12px;display:none;"></div>';
       bindUserActions();
     }).catch(function (e) {
@@ -1174,6 +1188,9 @@
         renderUsers();
       }).catch(function (e) { flash('flash-main', e.message, 'err'); });
     });
+    document.querySelectorAll('[data-edit]').forEach(function (b) {
+      b.addEventListener('click', function () { renderUserEdit(b.getAttribute('data-edit')); });
+    });
     document.querySelectorAll('[data-tgl]').forEach(function (b) {
       b.addEventListener('click', function () {
         var id = b.getAttribute('data-tgl');
@@ -1187,10 +1204,13 @@
     document.querySelectorAll('[data-pw]').forEach(function (b) {
       b.addEventListener('click', function () {
         var id = b.getAttribute('data-pw');
-        var pw = prompt('输入该用户的新密码（至少 8 位）：');
+        var login = b.getAttribute('data-pwlogin') || '';
+        if (!confirm('重置「' + login + '」的登录密码？\n\n只影响网页后台登录，不会动已生成的应用密码 —— Obsidian 等第三方客户端仍然可用。')) return;
+        var pw = prompt('输入新的登录密码（至少 8 位）：');
         if (pw === null) return;
+        if (String(pw).length < 8) { flash('flash-main', '密码至少 8 位', 'err'); return; }
         api('/api/users/' + id, { method: 'PUT', body: { password: pw } }).then(function () {
-          flash('flash-main', '密码已重置', 'ok');
+          flash('flash-main', '登录密码已重置（应用密码未受影响）', 'ok');
         }).catch(function (e) { flash('flash-main', e.message, 'err'); });
       });
     });
@@ -1211,14 +1231,58 @@
     });
   }
 
+  /* ---------- 编辑用户：只改昵称/邮箱/角色 ---------- */
+  /* 刻意不提供密码字段：
+     · 网页登录密码 → 「重置密码」（PUT /api/users/:id 的 password）
+     · 第三方编辑器 → 「应用密码」（app_passwords 表，独立于 user_pass）
+     两者必须分开，混在一个表单里最容易让人以为“改密码会踢掉 Obsidian”。 */
+  function renderUserEdit(uid) {
+    var host = document.getElementById('ue-panel');
+    if (!host) return;
+    var u = usersCache.filter(function (x) { return String(x.id) === String(uid); })[0];
+    if (!u) return;
+    var roles = [['admin', '管理员'], ['editor', '编辑'], ['author', '作者'], ['subscriber', '订阅者']];
+    host.style.display = 'block';
+    host.innerHTML = '<h2 class="dl-h">编辑用户：' + esc(u.user_login) + '</h2>' +
+      '<div class="row">' +
+      '<div><label>昵称</label><input type="text" id="ue-disp"></div>' +
+      '<div><label>邮箱</label><input type="email" id="ue-email"></div>' +
+      '<div><label>角色</label><select id="ue-role">' +
+      roles.map(function (r) {
+        return '<option value="' + r[0] + '"' + (u.role === r[0] ? ' selected' : '') + '>' + r[1] + '</option>';
+      }).join('') + '</select></div></div>' +
+      '<p class="muted" style="margin-top:10px;">用户名 <b>' + esc(u.user_login) + '</b> 是登录标识，创建后不可改。' +
+      '这里<b>不修改密码</b>：网页登录密码用「重置密码」，第三方编辑器用的是「应用密码」，两者互相独立。</p>' +
+      '<div style="margin-top:10px;"><button class="btn btn-primary" id="ue-save">保存</button> ' +
+      '<button class="btn btn-sm" id="ue-close">收起</button> <span class="muted" id="ue-note"></span></div>';
+    document.getElementById('ue-disp').value = u.display_name || '';
+    document.getElementById('ue-email').value = u.user_email || '';
+    document.getElementById('ue-close').onclick = function () { host.style.display = 'none'; };
+    document.getElementById('ue-save').onclick = function () {
+      var note = document.getElementById('ue-note');
+      var body = {
+        display_name: document.getElementById('ue-disp').value.trim(),
+        email: document.getElementById('ue-email').value.trim(),
+        role: document.getElementById('ue-role').value,
+      };
+      note.textContent = '保存中…';
+      api('/api/users/' + uid, { method: 'PUT', body: body }).then(function () {
+        flash('flash-main', '已保存', 'ok');
+        renderUsers();
+      }).catch(function (e) { note.textContent = '保存失败：' + (e && e.message || e); });
+    };
+  }
+
   /* ---------- 应用密码（第三方 md 编辑器认证用）---------- */
   function renderAppPasswords(uid, uname) {
     var host = document.getElementById('ap-panel');
     if (!host) return;
     host.style.display = 'block';
-    host.innerHTML = '<h2 style="margin:6px 0;">🔑 ' + esc(uname) + ' 的应用密码</h2>' +
-      '<p class="muted" style="margin:4px 0 10px;">给第三方 md 编辑器（Obsidian / Ulysses / 脚本）用：认证 <b>Basic Auth</b>，用户名 = <b>' + esc(uname) +
-      '</b>，密码 = 下面生成的应用密码；接口路径 <code>/wp-json/wp/v2/</code>（文章写入默认按 Markdown 保存）。</p>' +
+    host.innerHTML = '<h2 class="dl-h">' + esc(uname) + ' 的应用密码</h2>' +
+      '<p class="muted" style="margin:4px 0 10px;">给第三方编辑器（Obsidian / Ulysses / 脚本）用：认证 <b>Basic Auth</b>，用户名 = <b>' + esc(uname) +
+      '</b>，密码 = 下面生成的那一串；接口路径 <code>/wp-json/wp/v2/</code>（文章写入默认按 Markdown 保存）。</p>' +
+      '<p class="muted" style="margin:0 0 10px;padding:8px 10px;border-left:2px solid #d8cfc0;background:#faf8f5;">' +
+      '这里的值<b>不是登录密码</b>：重置网页登录密码不会让应用密码失效，撤销应用密码也不会影响登录。可以按客户端分别生成、单独撤销。</p>' +
       '<table><thead><tr><th>名称</th><th>创建</th><th>最后使用</th><th>操作</th></tr></thead><tbody id="ap-tbody"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody></table>' +
       '<div class="toolbar" style="margin-top:10px;"><button class="btn btn-primary" id="ap-new">＋ 生成新密码</button>' +
       '<button class="btn btn-sm" id="ap-close">收起</button></div>' +
@@ -1272,28 +1336,7 @@
     if (cl) cl.addEventListener('click', function () { host.style.display = 'none'; });
   }
 
-  /* ---------- 质检报告 ---------- */
-  function renderAudit() {
-    var panel = document.getElementById('audit-panel');
-    panel.innerHTML = '加载中…';
-    api('/api/audit').then(function (d) {
-      function seg(title, n, items) {
-        var rows = (items || []).map(function (it) {
-          return '<div style="padding:5px 0;border-bottom:1px solid #f3f3f3;"><a href="#" data-open="' + it.wp_id + '">' + esc(it.title) + '</a> <span class="muted">/' + esc(it.slug) + '/</span></div>';
-        }).join('');
-        return '<div style="margin-bottom:16px;"><strong>' + title + '（' + n + '）</strong>' + (rows || '<div class="muted" style="padding:4px 0;">无</div>') + '</div>';
-      }
-      panel.innerHTML = seg('未设置分类', d.noCat, d.noCatItems) +
-        seg('缺封面图', d.noFeature, d.noFeatureItems) +
-        seg('标题超 80 字', d.longTitle, d.longTitleItems);
-      panel.querySelectorAll('[data-open]').forEach(function (a) {
-        a.addEventListener('click', function (e) {
-          e.preventDefault();
-          api('/api/posts/' + a.getAttribute('data-open')).then(function (row) { renderEditor(row); }).catch(function (err) { flash('flash-main', err.message, 'err'); });
-        });
-      });
-    }).catch(function (e) { panel.innerHTML = ''; flash('flash-main', e.message, 'err'); });
-  }
+  /* ---------- 批量重建选中文章的静态页 ---------- */
 
   /* ---------- 设置（站点名 / 改密 / 内容维护） ---------- */
   function renderSettings() {
@@ -1362,10 +1405,6 @@
       '<button class="btn" id="pm-orphans">清理孤儿文件</button> ' +
       '<span class="muted" id="pm-note"></span></div>' +
       '<pre id="pm-out" class="muted" style="margin-top:10px;white-space:pre-wrap;font-size:12px;"></pre></div>' +
-      '<div class="card"><h2 class="dl-h">修改密码</h2>' +
-      '<label>原密码</label><input type="password" id="p-old" autocomplete="current-password">' +
-      '<label>新密码（至少 8 位）</label><input type="password" id="p-new" autocomplete="new-password">' +
-      '<div style="margin-top:10px;"><button class="btn btn-primary" id="p-save">修改密码</button></div></div>' +
       '<div class="card"><h2 class="dl-h">内容维护</h2>' +
       '<p class="muted">用当前单页壳重建全部文章的静态单页（用于改名 / 换模板后统一旧单页外观与站点信息）。分批执行，页数多时请稍候。</p>' +
       '<div style="margin-top:10px;"><button class="btn btn-primary" id="rb-btn">重建全部单页</button> ' +
@@ -1751,16 +1790,7 @@
       }).catch(function (err) { flash('flash-main', err.message, 'err'); });
     });
 
-    document.getElementById('p-save').addEventListener('click', function () {
-      var oldp = document.getElementById('p-old').value;
-      var newp = document.getElementById('p-new').value;
-      if (newp.length < 8) { flash('flash-main', '新密码至少 8 位', 'err'); return; }
-      api('/api/me/password', { method: 'POST', body: { old_password: oldp, new_password: newp } }).then(function () {
-        clearTokens();
-        flash('flash-login', '密码已修改，请用新密码重新登录', 'ok');
-        boot();
-      }).catch(function (err) { flash('flash-main', err.message, 'err'); });
-    });
+    // 个人密码已移到「用户」页（管理员重置）——settings 不再保留改密入口
 
     document.getElementById('rb-btn').addEventListener('click', function () {
       var btn = document.getElementById('rb-btn');
