@@ -2492,7 +2492,7 @@
     // ---- 大类 tab 切换 ----
     function setDlTab(name) {
       st.tab = name;
-      ['routes', 'docs'].forEach(function (k) {
+      ['routes', 'docs', 'shell'].forEach(function (k) {
         var el = document.getElementById('dltab-' + k);
         if (el) el.classList.toggle('hidden', k !== name);
       });
