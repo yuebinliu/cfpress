@@ -44,7 +44,7 @@ export const DEFAULT_DOC_SHELL = `<!DOCTYPE html>
 <meta name="description" content="{{SITE_DESC}}">
 <link rel="stylesheet" href="{{CSS_URL}}">
 <style>
-.doc-wrap{display:flex;align-items:flex-start;gap:52px;max-width:var(--maxw,1080px);margin:0 auto;padding:46px 28px 90px}
+.doc-wrap{display:flex;align-items:flex-start;gap:52px;max-width:var(--maxw,1080px);margin:0 auto;padding:46px 28px 44px}
 .doc-side-col{flex:0 0 224px;position:sticky;top:86px;max-height:calc(100vh - 112px);overflow:auto}
 .doc-side-title{margin:0 0 12px;padding-left:9px;font-size:10.5px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3,#9c9488)}
 .doc-main{flex:1;min-width:0;max-width:718px}
@@ -77,8 +77,8 @@ export const DEFAULT_DOC_SHELL = `<!DOCTYPE html>
 .doc-body th{background:var(--surface-2,#f4f0e9);font-family:var(--serif,serif);font-weight:600;color:var(--ink,#17140f)}
 .doc-body img{max-width:100%;height:auto;border:1px solid var(--line,#e8e2d8);border-radius:8px}
 .doc-body hr{margin:2.4em 0;border:0;border-top:1px solid var(--line,#e8e2d8)}
-.doc-foot{display:flex;justify-content:space-between;gap:12px;margin-top:64px;padding-top:22px;border-top:1px solid var(--line,#e8e2d8);font-size:13px;color:var(--ink-3,#9c9488)}
-.doc-foot a{color:var(--ink-2,#5c564d)}
+.foot-grid{grid-template-columns:2fr 1fr 1fr;gap:32px}
+.foot-bar{font-size:13px;color:var(--ink-3,#9c9488)}
 @media(max-width:900px){
 .doc-wrap{flex-direction:column;gap:22px;padding:28px 20px 64px}
 .doc-side-col{position:static;order:-1;width:100%;max-height:none;flex:none;padding-bottom:16px;border-bottom:1px solid var(--line,#e8e2d8)}
@@ -101,9 +101,20 @@ export const DEFAULT_DOC_SHELL = `<!DOCTYPE html>
   <main class="doc-main">
     <h1 class="doc-title">{{DOC_TITLE}}</h1>
     <article class="doc-body">{{CONTENT}}</article>
-    <footer class="doc-foot"><span>{{SITE_NAME}}</span><a href="{{SITE_URL}}/">Home</a></footer>
   </main>
 </div>
+<footer class="foot">
+  <div class="shell foot-grid">
+    <div class="foot-brand">
+      <span class="logo-mark">{{BRAND_MARK}}</span>
+      <strong>{{SITE_NAME}}</strong>
+      <p>{{SITE_DESC}}</p>
+    </div>
+    <div><h4>Site</h4><ul>{{FOOTER_NAV}}</ul></div>
+    <div><h4>Subscribe</h4><ul><li><a href="{{SITE_URL}}/feed/">RSS feed</a></li></ul></div>
+  </div>
+  <div class="shell foot-bar">{{SITE_FOOTER}}</div>
+</footer>
 </body>
 </html>`;
 
@@ -420,6 +431,7 @@ export async function renderDocument(env, route, doc, shared) {
     const cssUrl = String(site.url || '').replace(/\/+$/, '') + '/wp-content/themes/' + styleId + '/style.css';
     const menuHtml = cfseMenuHtml(site);
     const siteNav = menuHtml ? '<nav class="nav">' + menuHtml + '</nav>' : '';
+    const footerNav = docFooterNav(site, String(site.url || '').replace(/\/+$/, ''));
     function repVal(v) {
         if (v === 'DOC_TITLE') return escHtml(docTitleFromPath(path, doc.title));
         if (v === 'CONTENT') return bodyHtml;
@@ -431,12 +443,14 @@ export async function renderDocument(env, route, doc, shared) {
         if (v === 'BRAND_MARK') return escHtml(cfseBrandMark(site.name || ''));
         if (v === 'CSS_URL') return escUrl(cssUrl);
         if (v === 'SITE_NAV') return siteNav;
+        if (v === 'FOOTER_NAV') return footerNav;
+        if (v === 'SITE_FOOTER') return site.footerHtml || '';
         return '';
     }
     // 顺序很重要：**先把壳里未实现的占位符清掉，再注入正文**。
     // 旧实现是「注入正文 → 全局兜底清理」，会把正文（md 原稿）里形如 {{POST_TITLE}}
     // 的字面量一起删掉 —— 一旦文档讲解占位符本身，正文就会被吃空。
-    const DOC_KEYS = ['DOC_TITLE', 'CONTENT', 'DOC_SIDEBAR', 'SITE_NAME', 'SITE_URL', 'SITE_DESC', 'BRAND_WORD', 'BRAND_MARK', 'CSS_URL', 'SITE_NAV'];
+    const DOC_KEYS = ['DOC_TITLE', 'CONTENT', 'DOC_SIDEBAR', 'SITE_NAME', 'SITE_URL', 'SITE_DESC', 'BRAND_WORD', 'BRAND_MARK', 'CSS_URL', 'SITE_NAV', 'FOOTER_NAV', 'SITE_FOOTER'];
     let h = shellTpl;
     // 壳里的已知占位符先换成哨兵（NUL 包裹；正文里不可能出现该串）
     DOC_KEYS.forEach(function (k, i) { h = h.split('{{' + k + '}}').join('\u0000cfseDoc' + i + '\u0000'); });
@@ -446,6 +460,26 @@ export async function renderDocument(env, route, doc, shared) {
     DOC_KEYS.forEach(function (k, i) { h = h.split('\u0000cfseDoc' + i + '\u0000').join(repVal(k)); });
     // head 自定义 HTML（AdSense meta 等）：与文章页一致，注入 </head> 前
     return cfseInjectHead(h, site.headExtra);
+}
+
+/** 文档页 footer 的链接列：优先用站点菜单，菜单为空时回退到各文档库入口 */
+function docFooterNav(site, home) {
+    const out = [];
+    const menu = (site && Array.isArray(site.menu)) ? site.menu : [];
+    for (const it of menu) {
+        const t = String((it && it.target) || '').trim();
+        if (!t) continue;
+        out.push('<li><a href="' + escUrl(t) + '">' + escHtml(String((it && it.title) || t)) + '</a></li>');
+    }
+    if (!out.length) {
+        const routes = (site && Array.isArray(site.docRoutes)) ? site.docRoutes : [];
+        for (const r of routes) {
+            const xyz = String((r && r.xyz) || '').replace(/^\/+|\/+$/g, '');
+            if (!xyz) continue;
+            out.push('<li><a href="' + escUrl(home + '/' + xyz + '/') + '">' + escHtml(xyz.charAt(0).toUpperCase() + xyz.slice(1)) + '</a></li>');
+        }
+    }
+    return out.join('');
 }
 
 function escHtml(s) {
@@ -490,7 +524,7 @@ export async function renderDocIndex(env, route) {
 <meta name="description" content="${escHtml(site.description || '')}">
 <link rel="stylesheet" href="${escHtml(cssUrl)}">
 <style>
-.doc-index-wrap{max-width:var(--maxw,1080px);margin:0 auto;padding:56px 28px 96px}
+.doc-index-wrap{max-width:var(--maxw,1080px);margin:0 auto;padding:56px 28px 44px}
 .doc-index-head h1{margin:0 0 10px;font-family:var(--serif,serif);font-size:clamp(28px,3.4vw,36px);font-weight:600;line-height:1.2;letter-spacing:-0.02em}
 .doc-index-head p{margin:0 0 34px;color:var(--ink-3,#9c9488);font-size:14.5px}
 .doc-index{list-style:none;margin:0;padding:0;max-width:760px;border-top:1px solid var(--line,#e8e2d8)}
@@ -500,6 +534,8 @@ export async function renderDocIndex(env, route) {
 .doc-path{font-family:var(--mono,monospace);font-size:11.5px;color:var(--ink-3,#9c9488);flex:none}
 .doc-index .empty{color:var(--ink-3,#9c9488);justify-content:flex-start;font-size:14.5px}
 @media(max-width:640px){.doc-index li{flex-direction:column;gap:2px}}
+.foot-grid{grid-template-columns:2fr 1fr 1fr;gap:32px}
+.foot-bar{font-size:13px;color:var(--ink-3,#9c9488)}
 </style>
 </head>
 <body>
@@ -519,6 +555,18 @@ export async function renderDocIndex(env, route) {
   </div>
   <ul class="doc-index">${items || '<li class="empty">No documents yet.</li>'}</ul>
 </main>
+<footer class="foot">
+  <div class="shell foot-grid">
+    <div class="foot-brand">
+      <span class="logo-mark">${escHtml(cfseBrandMark(site.name || ''))}</span>
+      <strong>${escHtml(site.name || '')}</strong>
+      <p>${escHtml(site.description || '')}</p>
+    </div>
+    <div><h4>Site</h4><ul>${docFooterNav(site, home)}</ul></div>
+    <div><h4>Subscribe</h4><ul><li><a href="${home}/feed/">RSS feed</a></li></ul></div>
+  </div>
+  <div class="shell foot-bar">${site.footerHtml || ''}</div>
+</footer>
 </body>
 </html>`, site.headExtra);
 }
