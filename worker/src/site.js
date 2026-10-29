@@ -144,6 +144,8 @@ export async function getSiteContext(env) {
                     // 文档库映射（{{DOC_*}} 渲染的数据源）：权威存 D1 site 行，site:ctx 是快照
                     // [{abc, xyz, styleId, docNav, docIndex}]（见 docs/document-library.md）
                     if (Array.isArray(parsed.docRoutes)) { ctx.docRoutes = parsed.docRoutes; }
+                    // 文档页 HTML 模板（只影响文档页；为空则用 documents.js 的 DEFAULT_DOC_SHELL）
+                    if (parsed.docShell !== undefined) { ctx.docShell = String(parsed.docShell || ''); }
                 } catch (e) {}
             } else if (r.k === 'cache' && r.v) {
                 try { cacheRaw = JSON.parse(r.v); } catch (e) {}

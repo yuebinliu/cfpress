@@ -530,7 +530,7 @@ export async function handleRequest(request, env) {
                                 await env.R2_BUCKET.put(outKey(dm.route.xyz, doc.path), html, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
                             } catch (e) { /* 回写失败不影响返回 */ }
                             return new Response(html, {
-                                headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=60', 'X-CFSE-Doc': 'render' },
+                                headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=60', 'X-CFSE-Doc': 'render', 'X-Doc-Shell': String((siteCtx0 && siteCtx0.docShell) || '').trim() ? 'custom' : 'default' },
                             });
                         }
                     }

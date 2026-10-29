@@ -2441,7 +2441,8 @@
       + '<div class="card">'
       + '<div style="display:flex;gap:6px;border-bottom:1px solid #eee;padding-bottom:8px;margin-bottom:14px;">'
       + '<button class="btn btn-sm" data-dltab="routes">文档库</button>'
-      + '<button class="btn btn-sm" data-dltab="docs">文档与上传</button></div>'
+      + '<button class="btn btn-sm" data-dltab="docs">文档与上传</button>'
+      + '<button class="btn btn-sm" data-dltab="shell">文档模板</button></div>'
       + '<section id="dltab-routes">'
       + '<p class="muted">每条 = 一个文档库。保存后约 60 秒生效（站点缓存刷新）。</p>'
       + '<div id="doc-route-rows" style="display:flex;flex-direction:column;gap:8px;"></div>'
@@ -2472,6 +2473,17 @@
       + '<button class="btn btn-primary" id="doc-bulk-go">批量导入</button> <span class="muted" id="doc-bulk-note"></span></div>'
       + '<p class="muted" style="margin-top:6px;">单次请求体上限 25MB；目录很大时建议分批导入。</p>'
       + '</section>'
+      + '<section id="dltab-shell" class="hidden">'
+      + '<p class="muted">文档页的 HTML 模板。<b>只影响文档页</b>；文章、首页、列表用的是「模板」页那一套，互不相干。</p>'
+      + '<p class="muted">可用占位符：<code>{{DOC_TITLE}}</code> <code>{{CONTENT}}</code> <code>{{DOC_SIDEBAR}}</code> '
+      + '<code>{{SITE_NAME}}</code> <code>{{SITE_URL}}</code> <code>{{SITE_DESC}}</code> <code>{{BRAND_WORD}}</code> '
+      + '<code>{{BRAND_MARK}}</code> <code>{{SITE_NAV}}</code> <code>{{FOOTER_NAV}}</code> <code>{{SITE_FOOTER}}</code>。'
+      + '样式仍跟着当前主题，要加文档专用样式就在壳里写 <code>&lt;style&gt;</code>。</p>'
+      + '<textarea id="doc-shell-ta" spellcheck="false" style="min-height:340px;width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.6;"></textarea>'
+      + '<div style="margin-top:8px;"><button class="btn btn-primary" id="doc-shell-save">保存</button> '
+      + '<button class="btn btn-sm" id="doc-shell-reset">恢复默认</button> '
+      + '<button class="btn btn-sm" id="doc-shell-reload">重新载入</button> '
+      + '<span class="muted" id="doc-shell-note"></span></div></section>'
       + '</div>';
 
     var note = document.getElementById('doc-route-note');
@@ -2708,6 +2720,46 @@
           .catch(function (e) { bkNote.textContent = '导入失败：' + (e && e.message || e); });
       }
     };
+    // ---- 文档模板（站点级一个 docShell，存 settings.site.docShell）----
+    function loadDocShell() {
+      var ta = document.getElementById('doc-shell-ta');
+      if (!ta) return;
+      var n = document.getElementById('doc-shell-note');
+      if (n) n.textContent = '载入中…';
+      api('/api/documents/shell').then(function (r) {
+        ta.value = r.docShell || '';
+        if (n) n.textContent = r.isDefault ? '当前：内置默认模板' : '当前：自定义模板';
+      }).catch(function (e) {
+        if (n) n.textContent = '载入失败：' + ((e && e.message) || e);
+      });
+    }
+    var shellSaveBtn = document.getElementById('doc-shell-save');
+    if (shellSaveBtn) shellSaveBtn.onclick = function () {
+      var ta = document.getElementById('doc-shell-ta');
+      var n = document.getElementById('doc-shell-note');
+      if (n) n.textContent = '保存中…';
+      api('/api/documents/shell', { method: 'PUT', body: { docShell: ta.value } }).then(function () {
+        if (n) n.textContent = '已保存。清一次缓存后生效（旧成品会按需重建）';
+        flash('flash-main', '文档模板已保存', 'ok');
+      }).catch(function (e) {
+        if (n) n.textContent = '保存失败：' + ((e && e.message) || e);
+      });
+    };
+    var shellResetBtn = document.getElementById('doc-shell-reset');
+    if (shellResetBtn) shellResetBtn.onclick = function () {
+      if (!confirm('恢复内置默认模板？当前自定义内容会被清空。')) return;
+      var n = document.getElementById('doc-shell-note');
+      api('/api/documents/shell', { method: 'DELETE' }).then(function () {
+        if (n) n.textContent = '已恢复默认';
+        loadDocShell();
+      }).catch(function (e) {
+        if (n) n.textContent = '失败：' + ((e && e.message) || e);
+      });
+    };
+    var shellReloadBtn = document.getElementById('doc-shell-reload');
+    if (shellReloadBtn) shellReloadBtn.onclick = loadDocShell;
+    loadDocShell();
+
     setDlTab('routes');
     refreshAbc();
   }

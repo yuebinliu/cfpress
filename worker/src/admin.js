@@ -218,6 +218,37 @@ async function purgeAncestorIndexes(env, xyz, docPaths) {
     }));
 }
 
+/**
+ * 换壳后清空所有文档成品。
+ * 壳变了，每一页的成品都过期了；不清它们，改完模板访问还是旧样子（"改了没生效"）。
+ * 限量 + 按库前缀扫，删完由访问按需重建 —— 这是「删 key 不渲染」的同一原则。
+ */
+async function purgeAllDocPages(env, docRoutes, limit) {
+    const max = Math.max(0, Number(limit) || 300);
+    let done = 0;
+    for (const r of (Array.isArray(docRoutes) ? docRoutes : [])) {
+        const xyz = String((r && r.xyz) || '').replace(/^\/+|\/+$/g, '');
+        if (!xyz) continue;
+        let cursor = null;
+        do {
+            let page;
+            try {
+                page = await env.R2_BUCKET.list({ prefix: P_PAGES + '/' + xyz + '/', cursor: cursor || undefined, limit: 500 });
+            } catch (e) { break; }
+            const keys = ((page && page.objects) || []).map(function (o) { return o.key; }).slice(0, Math.max(0, max - done));
+            if (keys.length) {
+                await Promise.all(keys.map(function (k) {
+                    return env.R2_BUCKET.delete(k).catch(function () {});
+                }));
+                done += keys.length;
+            }
+            cursor = (page && page.truncated) ? page.cursor : null;
+        } while (cursor && done < max);
+        if (done >= max) break;
+    }
+    return done;
+}
+
 async function ensureCoreSchema(env) {
     const ddl = [
         "CREATE TABLE IF NOT EXISTS posts (wp_id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, content TEXT, content_format TEXT DEFAULT 'html', excerpt TEXT, date DATETIME NOT NULL, modified DATETIME, status TEXT DEFAULT 'published', comment_status TEXT DEFAULT 'open', categories TEXT, tags TEXT, featured_image TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
@@ -1471,80 +1502,43 @@ function sanitizeMenu(list, depth) {
     }
 
     // GET /api/documents/shell?id=<styleId>  读文档壳（无 id / 无 docShell → 返回内置默认）
+        // ---- 文档壳（文档页的 HTML 模板）------------------------------------
+    // 存储只有一处：settings.site.docShell（D1）。KV 的 site:ctx 只是它的缓存。
+    // 不做多壳、不绑定到某个库、不登记进风格列表 —— 那些复杂度正是
+    // "保存了不生效" 与 "文档壳被误选成站点主题导致白屏" 的来源。
     if (path === '/api/documents/shell' && method === 'GET') {
-        const id = String(url.searchParams.get('id') || '').trim();
-        if (!id) return json({ id: '', name: '（默认文档壳）', docShell: DEFAULT_DOC_SHELL });
-        let docShell = '', name = id;
-        try {
-            const j = await readStyleTpl(env, id);
-            if (j) { name = String(j.name || id); docShell = String(j.docShell || ''); }
-        } catch (e) { /* ignore */ }
-        return json({ id: id, name: name, docShell: docShell || DEFAULT_DOC_SHELL });
+        const siteCtx = await getSiteContext(env);
+        const cur = String((siteCtx && siteCtx.docShell) || '').trim();
+        return json({ ok: true, docShell: cur || DEFAULT_DOC_SHELL, isDefault: !cur });
     }
 
-    // GET /api/documents/shells  列出所有「文档壳」（tpl.json 含 docShell 字段的风格）
-    if (path === '/api/documents/shells' && method === 'GET') {
-        const out = [];
-        try {
-            const idx = await styleIndex(env);
-            for (const s of idx) {
-                if (!s || !s.id) continue;
-                const j = await readStyleTpl(env, s.id);
-                if (j && j.docShell) out.push({ id: s.id, name: s.name || s.id, source: s.source || 'user' });
-            }
-        } catch (e) { /* ignore */ }
-        return json({ ok: true, shells: out });
-    }
-
-    // POST /api/documents/shell/save  保存文档壳（写 D1 styles 的 tpl_json.docShell）
-    //   body: { id?, name?, docShell, applyTo? }   applyTo=abc 时顺带把该库 styleId 指向此壳
-    if (path === '/api/documents/shell/save' && method === 'POST') {
+    if (path === '/api/documents/shell' && (method === 'PUT' || method === 'POST')) {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
         let body = {};
         try { body = await request.json(); } catch (e) { return json({ error: '无效请求体' }, 400); }
-        const docShell = String(body.docShell || '').trim();
-        if (!docShell) return json({ error: '壳内容为空' }, 400);
-        if (docShell.length > 300 * 1024) return json({ error: '壳内容过大（>300KB）' }, 400);
-        let id = String(body.id || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
-        const name = String(body.name || '').trim().slice(0, 40) || ('文档壳 ' + new Date().toISOString().slice(0, 16).replace('T', ' '));
-        if (!id) id = 'docshell' + Date.now().toString(36);
-        // 写 R2 wp-content/themes/<id>/tpl.json（保留该风格已有 6 类模板等，仅更新 docShell）→ 备份 .bak
-        const key = 'wp-content/themes/' + id + '/tpl.json';
-        let cur = null;
-        try { const o = await env.R2_BUCKET.get(key); if (o) cur = JSON.parse(await o.text()); } catch (e) { cur = null; }
-        if (cur && typeof cur === 'object') {
-            try { await env.R2_BUCKET.put('wp-content/themes/' + id + '/tpl.json.bak', JSON.stringify(cur), { httpMetadata: { contentType: 'application/json; charset=utf-8' } }); } catch (e) { /* ignore */ }
-        }
-        const next = (cur && typeof cur === 'object') ? cur : {};
-        next.name = (cur && cur.name) || name;
-        next.docShell = docShell;
-        try {
-            await env.R2_BUCKET.put(key, JSON.stringify(next), { httpMetadata: { contentType: 'application/json; charset=utf-8' } });
-        } catch (e) { return json({ error: '写入失败：' + ((e && e.message) || e) }, 500); }
-        // 记入用户风格索引（首次上传）
-        const st = await getStyleSetting(db);
-        if (!st.user.some(function (x) { return x && x.id === id; })) {
-            st.user.push({ id: id, name: next.name || id });
-            await setStyleSetting(db, st);
-        }
+        const shell = String(body.docShell == null ? '' : body.docShell);
+        if (!shell.trim()) return json({ error: '壳内容为空；要回默认请点「恢复默认」' }, 400);
+        if (shell.length > 300 * 1024) return json({ error: '壳内容过大（>300KB）' }, 400);
+        // 缺这两个占位符会让文档页整页空白，必须拦在保存前
+        if (shell.indexOf('{{CONTENT}}') === -1) return json({ error: '缺少 {{CONTENT}}：保存后所有文档页都会是空白页' }, 400);
+        if (shell.indexOf('{{DOC_TITLE}}') === -1) return json({ error: '缺少 {{DOC_TITLE}}：文档标题会消失' }, 400);
+        await db.prepare("UPDATE settings SET v = json_set(v, '$.docShell', ?) WHERE k = 'site'").bind(shell).run();
         await touchSiteCtx(env);
-        // 可选：把该壳应用到指定库（更新 docRoutes.styleId）——否则「保存」只写壳、库不会变
-        let applied = false;
-        const applyTo = String(body.applyTo || '').replace(/^\/+|\/+$/g, '');
-        if (applyTo) {
-            const srow = await db.prepare("SELECT v FROM settings WHERE k = 'site'").first();
-            let site = {};
-            try { site = JSON.parse((srow && srow.v) || '{}'); } catch (e) { site = {}; }
-            const routes = Array.isArray(site.docRoutes) ? site.docRoutes : [];
-            let hit = false;
-            for (const r of routes) { if (r && r.abc === applyTo) { r.styleId = id; hit = true; } }
-            if (hit) {
-                site.docRoutes = routes;
-                await db.prepare("INSERT INTO settings (k, v) VALUES ('site', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(JSON.stringify(site)).run();
-                await touchSiteCtx(env);
-                applied = true;
-            }
-        }
-        return json({ ok: true, id: id, name: next.name || name, applied: applied });
+        // 壳变了 ⇒ 现存文档成品全部过期；删掉（限量），访问时按需重建
+        const siteCtx = await getSiteContext(env);
+        const routesNow = Array.isArray(siteCtx && siteCtx.docRoutes) ? siteCtx.docRoutes : [];
+        const cleared = await purgeAllDocPages(env, routesNow, 300).catch(function () { return 0; });
+        return json({ ok: true, cleared: cleared });
+    }
+
+    if (path === '/api/documents/shell' && method === 'DELETE') {
+        if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
+        await db.prepare("UPDATE settings SET v = json_remove(v, '$.docShell') WHERE k = 'site'").run();
+        await touchSiteCtx(env);
+        const siteCtxDel = await getSiteContext(env);
+        const routesDel = Array.isArray(siteCtxDel && siteCtxDel.docRoutes) ? siteCtxDel.docRoutes : [];
+        const clearedDel = await purgeAllDocPages(env, routesDel, 300).catch(function () { return 0; });
+        return json({ ok: true, cleared: clearedDel });
     }
 
     // ---- 文章 ----

@@ -416,24 +416,16 @@ export async function renderDocument(env, route, doc, shared) {
         sidebarHtml = sidebarTreeHtml(list, xyz, path);
     }
 
-    // 5. 取壳（D1 styles 最新版）
-    let shell = (shared && shared.shell) || null;
-    if (!shell && route.styleId) {
-        try {
-            const row = await env.D1_DATABASE.prepare(
-                "SELECT tpl_json FROM styles WHERE id = ? ORDER BY version DESC LIMIT 1"
-            ).bind(String(route.styleId)).first();
-            if (row) { try { shell = JSON.parse(row.tpl_json || '{}'); } catch (e) { shell = null; } }
-        } catch (e) { shell = null; }
-    }
+    // 5. 取站点上下文（文档壳跟着站点设置走：settings.site.docShell）
+    const { getSiteContext } = await import('./site');
+    const site = await getSiteContext(env);
     // 壳模板：只认 docShell（文档壳）——**不**回退到文章 single 壳
     // （文章壳占位符是 {{POST_CONTENT}} 等，与文档的 {{CONTENT}} 不同 ⇒ 会用成空正文）
-    let shellTpl = (shell && typeof shell === 'object' && shell.docShell) ? String(shell.docShell) : '';
+    // 存储只有一个地方：站点设置的 docShell 字段；为空就用内置默认壳。
+    let shellTpl = String((site && site.docShell) || '').trim();
     if (!shellTpl) shellTpl = DEFAULT_DOC_SHELL;
 
     // 6. 填占位符
-    const { getSiteContext } = await import('./site');
-    const site = await getSiteContext(env);
     const { cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
     // 主题 CSS：与主站共用同一份 style.css（文档库不再自带一套内嵌皮肤）
     // 皮肤永远跟站点当前主题走 —— route.styleId 只用于取自定义 docShell（HTML 结构），
