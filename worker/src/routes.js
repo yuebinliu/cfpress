@@ -19,7 +19,7 @@ import { handleStylePreview } from './preview';
 import { handleAdminRequest, handleWpV2, renderSinglePageOnDemand } from './admin';
 import { createComment, commentRateAllowed, injectComments } from './comments';
 import { getSiteContext, clearSiteCtxMemo } from './site';
-import { matchDocRoute, renderDocument, renderDocIndex, outKey } from './documents';
+import { matchDocRoute, renderDocument, renderDocIndex, outKey, P_PAGES } from './documents';
 import { getCacheConfig } from './cacheconfig';
 import { mdToHtml } from './md';
 
@@ -393,25 +393,52 @@ export async function handleRequest(request, env) {
         return await handleDelete(request, env);
     }
 
+    // 规范 URL：/x/index.html → 301 /x/
+    //   成品与目录页共用同一个 index.html key（文档的 index.md 成品 / 自动目录列表），
+    //   对外只保留目录形式一种写法，避免同一内容两个 URL。
+    if (/\/index\.html?$/i.test(path)) {
+        const dirPath = path.replace(/index\.html?$/i, '');
+        return new Response(null, { status: 301, headers: { Location: dirPath } });
+    }
+
+    // 目录页分页：成品只缓存第 1 页，?page>1 必须绕过静态直出（否则永远拿到第 1 页）
+    const reqPage = Math.max(1, Number(url.searchParams.get('page')) || 1);
+    const skipStaticForPage = reqPage > 1 && path.endsWith('/');
+
     // 静态资源（图片/css/js/字体/文档等）
     //   注意：未命中时**不直接 404**，而是继续往下匹配（可能是 slug 正好带后缀，或显式 index.html）
-    if (path.match(/\.(css|js|png|jpg|jpeg|gif|svg|webp|avif|ico|woff2?|ttf|eot|html?|xml|txt|json|map|webmanifest|pdf)$/)) {
-        const file = await getFromR2(env.R2_BUCKET, r2KeyFromPath(path));
+    if (!skipStaticForPage && path.match(/\.(css|js|png|jpg|jpeg|gif|svg|webp|avif|ico|woff2?|ttf|eot|html?|xml|txt|json|map|webmanifest|pdf)$/)) {
+        // 文档成品在 _pages/ 下（源/成品分家）；HTML 先探这里，再回退到原路径
+        // （文章单页仍在 {slug}/index.html，wp-content 静态资源也走原路径）
+        const baseKey = r2KeyFromPath(path);
+        let file = null;
+        if (baseKey && /\.html?$/i.test(baseKey)) {
+            file = await getFromR2(env.R2_BUCKET, P_PAGES + '/' + baseKey);
+        }
+        if (!file) file = await getFromR2(env.R2_BUCKET, baseKey);
         if (file) {
             const isDoc = /\.html?$/i.test(path);
             const isJson = /\.json$/i.test(path);   // tpl.json 等会被改写（风格），不能 immutable 长缓存
-            // HTML（文档成品等固化在 R2 的页面）：head 自定义注入（AdSense meta 等）——改配置访问即生效
+            // HTML（文档成品 / 文章单页等固化在 R2 的页面）：head 自定义注入（AdSense meta 等）。
+            //   ★ headExtra 为空是常态 ⇒ 直接流式返回，**绝不做全量 decode**
+            //     （旧实现无条件 TextDecoder 解码整篇，纯 CPU 浪费）。
+            //   ★ 非空时用 HTMLRewriter 流式改写，同样不解码正文；
+            //     成品里不再预先注入（渲染侧已改），因此不会重复插入。
             if (isDoc && file.contentEncoding !== 'gzip') {
-                const text0 = (typeof file.body === 'string') ? file.body : new TextDecoder().decode(file.body);
-                const withHead = await injectHeadInto(env, text0);
-                if (withHead !== null) {
-                    return new Response(withHead, {
-                        headers: {
-                            'Content-Type': file.contentType || getContentType(path),
-                            'Cache-Control': 'public, max-age=60',
-                            'X-CFSE-Head': 'injected',
-                        }
-                    });
+                const siteMeta = await getSiteContext(env);
+                const extra = String((siteMeta && siteMeta.headExtra) || '').trim();
+                if (extra) {
+                    try {
+                        return new HTMLRewriter()
+                            .on('head', { element(el) { el.append(extra, { html: true }); } })
+                            .transform(new Response(file.body, {
+                                headers: {
+                                    'Content-Type': file.contentType || getContentType(path),
+                                    'Cache-Control': 'public, max-age=60',
+                                    'X-CFSE-Head': 'injected',
+                                }
+                            }));
+                    } catch (e) { console.error('head rewrite failed:', e); }
                 }
             }
             return new Response(file.body, {
@@ -463,8 +490,9 @@ export async function handleRequest(request, env) {
     //   仅当命中 docRoutes 里的 xyz 前缀才处理（site:ctx 读取，D9：仅在 miss 后）
     // ============================================
     {
-        // 先做廉价路径预判（多级 .html 或 /xxx/ 目录形态），避免每个请求都读 site:ctx（D9：KV 只在 miss 后）
-        const looksDoc = (path.indexOf('/', 1) > 0 && /\.html?$/i.test(path)) || (/^\/[^/]+\/$/.test(path) && path !== '/');
+        // 先做廉价路径预判（多级 .html 或 /xxx/ 目录形态，含任意层级 /a/b/），
+        // 避免每个请求都读 site:ctx（D9：KV 只在 miss 后）
+        const looksDoc = (path.indexOf('/', 1) > 0 && /\.html?$/i.test(path)) || (/^\/.+\/$/.test(path) && path !== '/');
         if (looksDoc) {
             const siteCtx0 = await getSiteContext(env);
             const docRoutes = Array.isArray(siteCtx0.docRoutes) ? siteCtx0.docRoutes : [];
@@ -472,12 +500,18 @@ export async function handleRequest(request, env) {
                 const dm = matchDocRoute(path, docRoutes);
             if (dm) {
                 if (dm.kind === 'index' && dm.route.docIndex) {
-                    // 目录页 /xyz/：优先静态分支已命中（index.html）；miss 则渲染
-                    const idxHtml = await renderDocIndex(env, dm.route);
+                    // 目录页 /xyz/ 或 /xyz/a/b/：优先静态分支已命中（该层 index.html）；
+                    // miss 则渲染 —— 这一层若有 index 文档，renderDocIndex 会优先返回它渲染的结果。
+                    const idxHtml = await renderDocIndex(env, dm.route, dm.dir, reqPage);
                     if (idxHtml) {
-                        try {
-                            await env.R2_BUCKET.put(String(dm.route.xyz).replace(/^\/+|\/+$/g, '') + '/index.html', idxHtml, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
-                        } catch (e) { /* 回写失败不影响返回 */ }
+                        // 只缓存第 1 页：分页页 (?page=N) 每次都现算，不落成品（避免一个目录 N 份缓存）
+                        if (reqPage === 1) {
+                            try {
+                                const idxXyz = String(dm.route.xyz).replace(/^\/+|\/+$/g, '');
+                                const idxDir = String(dm.dir || '').replace(/^\/+|\/+$/g, '');
+                                await env.R2_BUCKET.put(P_PAGES + '/' + idxXyz + (idxDir ? '/' + idxDir : '') + '/index.html', idxHtml, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
+                            } catch (e) { /* 回写失败不影响返回 */ }
+                        }
                         return new Response(idxHtml, {
                             headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=60' },
                         });

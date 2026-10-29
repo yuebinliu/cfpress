@@ -139,10 +139,8 @@ export function validateDocPath(path) {
         if (seg.indexOf('\0') !== -1) return { ok: false, error: '路径含非法字符' };
     }
     if (!/\.(md|html?)$/i.test(s)) return { ok: false, error: '仅支持 .md / .html / .htm 文件' };
-    // 末段不能是 index（成品 key 会与目录页 xyz/index.html 冲突）
-    const base = s.replace(/\.(md|html?)$/i, '');
-    const last = base.split('/').pop() || '';
-    if (last.toLowerCase() === 'index') return { ok: false, error: '原稿路径最后一段不能是 index（与目录页冲突）' };
+    // 末段允许 index：它就是这个目录的首页（成品 key 与目录页共用 index.html，
+    // 由「有 index 用它、没有则自动生成」的优先级决定，不再禁止）
     return { ok: true, value: s, format: (/\.md$/i.test(s) ? 'md' : 'html') };
 }
 
@@ -160,24 +158,37 @@ export function docTitleFromPath(path, title) {
     return file;
 }
 
-/** 原稿 R2 key = abc/<路径> */
+/** R2 前缀：原稿与成品彻底分家 —— 源树里永远不会有成品，成品树里永远不会有源。
+ *  好处：删原稿不会误删成品；sweep 能按前缀一刀切；备份只需 _src。
+ *  注意：这两个前缀**不进 URL**，URL 仍由 xyz + path 决定。 */
+export const P_SRC = '_src';
+export const P_PAGES = '_pages';
+
+/** 原稿 R2 key = _src/<abc>/<path> */
 export function sourceKey(abc, path) {
-    return String(abc || '').replace(/^\/+|\/+$/g, '') + '/' + String(path || '');
+    return P_SRC + '/' + String(abc || '').replace(/^\/+|\/+$/g, '') + '/' + String(path || '');
 }
 
 /** 成品 R2 key = xyz/<路径去扩展名>.html */
 export function outKey(xyz, path) {
-    return String(xyz || '').replace(/^\/+|\/+$/g, '') + '/' + docPathToOutKey(path);
+    return P_PAGES + '/' + String(xyz || '').replace(/^\/+|\/+$/g, '') + '/' + docPathToOutKey(path);
 }
 
 /** 成品 URL（用于 href）= /xyz/<路径去扩展名>.html，各段 percent-encoded（中文/空格安全）；
  *  注意与 outKey（R2 存储 key，原文）区分：R2 key 不解码，href 要编码。 */
 export function outUrl(xyz, path) {
     const x = String(xyz || '').replace(/^\/+|\/+$/g, '');
-    const rel = docPathToOutKey(path).split('/').map(function (s) {
+    const encSeg = function (s) {
         try { return encodeURIComponent(decodeURIComponent(s)); } catch (e) { return encodeURIComponent(s); }
-    }).join('/');
-    return '/' + x + '/' + rel;
+    };
+    const segs = docPathToOutKey(path).split('/');
+    // index 文档的成品就是这一层的目录页 ⇒ URL 用目录形式（/plugin/），不留 /plugin/index.html
+    if (segs.length && String(segs[segs.length - 1]).toLowerCase() === 'index.html') {
+        segs.pop();
+        const dir = segs.map(encSeg).join('/');
+        return '/' + x + '/' + (dir ? dir + '/' : '');
+    }
+    return '/' + x + '/' + segs.map(encSeg).join('/');
 }
 
 /** 目录页 URL = /xyz/ */
@@ -423,7 +434,7 @@ export async function renderDocument(env, route, doc, shared) {
     // 6. 填占位符
     const { getSiteContext } = await import('./site');
     const site = await getSiteContext(env);
-    const { cfseInjectHead, cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
+    const { cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
     // 主题 CSS：与主站共用同一份 style.css（文档库不再自带一套内嵌皮肤）
     // 皮肤永远跟站点当前主题走 —— route.styleId 只用于取自定义 docShell（HTML 结构），
     // 它指向的往往是「只有 tpl.json、没有 style.css」的壳包，拿它拼 CSS 会 404。
@@ -458,8 +469,9 @@ export async function renderDocument(env, route, doc, shared) {
     h = h.replace(/\{\{[#/]?[A-Z][A-Z0-9_]*\}\}/g, '');
     // 哨兵换成真实值（CONTENT = 正文 HTML）
     DOC_KEYS.forEach(function (k, i) { h = h.split('\u0000cfseDoc' + i + '\u0000').join(repVal(k)); });
-    // head 自定义 HTML（AdSense meta 等）：与文章页一致，注入 </head> 前
-    return cfseInjectHead(h, site.headExtra);
+    // headExtra 不在这里注入：成品保持纯净，改由访问时（routes.js 静态分支）用 HTMLRewriter
+    // 统一注入 —— 避免"渲染注入一次 + 访问再注入一次"的重复，也避免每次回源全量解码。
+    return h;
 }
 
 /** 文档页 footer 的链接列：优先用站点菜单，菜单为空时回退到各文档库入口 */
@@ -494,33 +506,113 @@ function escUrl(s) {
 // 目录页（docIndex=true）：/xyz/ → 文档列表
 // ============================================================
 
-export async function renderDocIndex(env, route) {
+/**
+ * 目录页（docIndex=true）：/xyz/ 或任意层 /xyz/a/b/
+ *   ① 这一层若有 index 文档（index.md / index.html）⇒ 直接渲染它当首页（走文档管线、用文档壳）
+ *   ② 否则生成目录列表：子目录（可点）+ 本层文件（分页，默认 50/页）
+ *
+ * "有 index 就用它，没有就生成" 之所以不需要额外状态：两者写的是**同一个 R2 key**
+ * （pages/<xyz>/[<dir>/]index.html），谁写谁生效；访问时成品优先，miss 才走到这里。
+ *
+ * @param {object} env
+ * @param {object} route {abc, xyz, docIndex, docNav, styleId}
+ * @param {string} [dir] 集合内相对目录（'' / 不传 = 集合根）
+ * @param {number} [page] 页码，从 1 开始
+ */
+export async function renderDocIndex(env, route, dir, page) {
     const abc = String(route.abc || '').replace(/^\/+|\/+$/g, '');
     const xyz = String(route.xyz || '').replace(/^\/+|\/+$/g, '');
-    let docs = [];
+    const dirRel = String(dir || '').replace(/^\/+|\/+$/g, '');
+    const pageNo = Math.max(1, Number(page) || 1);
+    const PAGE_SIZE = 50;
+
+    // ① 本层的 index 文档
     try {
+        const idxBase = dirRel ? dirRel + '/index' : 'index';
+        const idxDoc = await env.D1_DATABASE.prepare(
+            "SELECT * FROM documents WHERE source_prefix = ? AND status = 'published'"
+            + " AND (path = ? OR path = ? OR path = ?) LIMIT 1"
+        ).bind(abc, idxBase + '.md', idxBase + '.html', idxBase + '.htm').first();
+        if (idxDoc) return await renderDocument(env, route, idxDoc, null);
+    } catch (e) { console.error('renderDocIndex index lookup:', e); }
+
+    // ② 本层列表：一次查本层全部，在内存里分「子目录 / 文件」
+    const prefix = dirRel ? dirRel + '/' : '';
+    let rows = [];
+    try {
+        const like = prefix.replace(/[\\%_]/g, '\\$&') + '%';
         const res = await env.D1_DATABASE.prepare(
-            "SELECT path, title FROM documents WHERE source_prefix = ? AND status = 'published' ORDER BY path"
-        ).bind(abc).all();
-        docs = (res && res.results) || [];
-    } catch (e) { docs = []; }
-    const items = docs.map(function (d) {
-        return '<li><a href="' + outUrl(xyz, d.path) + '">' + escHtml(d.title || d.path) + '</a> <span class="doc-path">' + escHtml(d.path) + '</span></li>';
+            "SELECT path, title, excerpt FROM documents WHERE source_prefix = ? AND status = 'published'"
+            + " AND path LIKE ? ESCAPE '\\' ORDER BY path"
+        ).bind(abc, like).all();
+        rows = (res && res.results) || [];
+    } catch (e) { rows = []; }
+
+    const files = [];
+    const dirNames = [];
+    const dirCount = Object.create(null);
+    for (const r of rows) {
+        const rel = String((r && r.path) || '').slice(prefix.length);
+        if (!rel) continue;
+        const slash = rel.indexOf('/');
+        if (slash > -1) {
+            const seg = rel.slice(0, slash);
+            if (!(seg in dirCount)) { dirCount[seg] = 0; dirNames.push(seg); }
+            dirCount[seg] += 1;
+        } else if (!/^index\.(md|html?)$/i.test(rel)) {
+            files.push(r);
+        }
+    }
+    dirNames.sort(function (a, b) { return a.localeCompare(b); });
+
+    // 文件分页
+    const total = files.length;
+    const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const curPage = Math.min(pageNo, pageCount);
+    const pageFiles = files.slice((curPage - 1) * PAGE_SIZE, curPage * PAGE_SIZE);
+
+    const dirUrlOf = function (seg) {
+        return '/' + xyz + '/' + (dirRel ? dirRel + '/' : '') + encodeURIComponent(seg) + '/';
+    };
+    const subItems = dirNames.map(function (seg) {
+        return '<li class="doc-sub"><a href="' + dirUrlOf(seg) + '">' + escHtml(seg) + '/</a>'
+            + '<span class="doc-path">' + dirCount[seg] + ' item' + (dirCount[seg] === 1 ? '' : 's') + '</span></li>';
     }).join('\n');
+    const fileItems = pageFiles.map(function (d) {
+        return '<li><a href="' + outUrl(xyz, d.path) + '">' + escHtml(d.title || d.path) + '</a>'
+            + '<span class="doc-path">' + escHtml(String(d.path || '').slice(prefix.length)) + '</span></li>';
+    }).join('\n');
+
+    // 分页条（只在多于 1 页时出现）
+    const baseUrl = '/' + xyz + '/' + (dirRel ? dirRel + '/' : '');
+    const pager = pageCount > 1
+        ? '<nav class="doc-pager">'
+        + (curPage > 1 ? '<a href="' + baseUrl + (curPage === 2 ? '' : '?page=' + (curPage - 1)) + '">← Previous</a>' : '<span></span>')
+        + '<span class="doc-pager-info">Page ' + curPage + ' of ' + pageCount + '</span>'
+        + (curPage < pageCount ? '<a href="' + baseUrl + '?page=' + (curPage + 1) + '">Next →</a>' : '<span></span>')
+        + '</nav>'
+        : '';
+
     const { getSiteContext } = await import('./site');
     const site = await getSiteContext(env);
-    const { cfseInjectHead, cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
+    const { cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
     const home = String(site.url || '').replace(/\/+$/, '');
     const styleId = String((site && site.activeStyleId) || 'cfse-demo');
     const cssUrl = home + '/wp-content/themes/' + styleId + '/style.css';
     const menuHtml = cfseMenuHtml(site);
     const siteNav = menuHtml ? '<nav class="nav">' + menuHtml + '</nav>' : '';
-    return cfseInjectHead(`<!DOCTYPE html>
+
+    // 标题：子目录用目录名，集合根用集合名
+    const dirLabel = dirRel ? dirRel.split('/').pop() : '';
+    const headTitle = dirLabel || 'Documentation';
+    const docCount = total + dirNames.length;
+
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escHtml(site.name || 'Documentation')} · Documentation</title>
+<title>${escHtml(headTitle)}${dirRel ? ' · ' + escHtml(site.name || '') : ''} · ${escHtml(site.name || 'Documentation')}</title>
 <meta name="description" content="${escHtml(site.description || '')}">
 <link rel="stylesheet" href="${escHtml(cssUrl)}">
 <style>
@@ -531,8 +623,14 @@ export async function renderDocIndex(env, route) {
 .doc-index li{display:flex;align-items:baseline;gap:12px;justify-content:space-between;padding:14px 2px;border-bottom:1px solid var(--line,#e8e2d8)}
 .doc-index a{font-family:var(--serif,serif);font-size:16.5px;font-weight:600;color:var(--ink,#17140f);letter-spacing:-0.005em}
 .doc-index a:hover{color:var(--accent-ink,#6f5233)}
+.doc-index .doc-sub a{color:var(--accent-ink,#6f5233)}
 .doc-path{font-family:var(--mono,monospace);font-size:11.5px;color:var(--ink-3,#9c9488);flex:none}
 .doc-index .empty{color:var(--ink-3,#9c9488);justify-content:flex-start;font-size:14.5px}
+.doc-bc{margin:0 0 18px;font-size:13px;color:var(--ink-3,#9c9488)}
+.doc-bc a{color:var(--ink-2,#5c564d)}
+.doc-pager{display:flex;align-items:center;justify-content:space-between;max-width:760px;margin:22px 0 0;font-size:14px}
+.doc-pager a{color:var(--ink-2,#5c564d)}
+.doc-pager-info{font-family:var(--mono,monospace);font-size:11.5px;color:var(--ink-3,#9c9488)}
 @media(max-width:640px){.doc-index li{flex-direction:column;gap:2px}}
 .foot-grid{grid-template-columns:2fr 1fr 1fr;gap:32px}
 .foot-bar{font-size:13px;color:var(--ink-3,#9c9488)}
@@ -549,11 +647,18 @@ export async function renderDocIndex(env, route) {
   </div>
 </header>
 <main class="doc-index-wrap">
+  ${dirRel ? '<p class="doc-bc"><a href="/' + xyz + '/">' + escHtml(xyz) + '</a> / ' + dirRel.split('/').map(function (s, i, arr) {
+        const up = arr.slice(0, i + 1).join('/');
+        return i === arr.length - 1
+            ? escHtml(s)
+            : '<a href="/' + xyz + '/' + up + '/">' + escHtml(s) + '</a>';
+    }).join(' / ') + '</p>' : ''}
   <div class="doc-index-head">
-    <h1>Documentation</h1>
-    <p>${docs.length} document${docs.length === 1 ? '' : 's'} in this library.</p>
+    <h1>${escHtml(headTitle)}</h1>
+    <p>${docCount} item${docCount === 1 ? '' : 's'} in this ${dirRel ? 'folder' : 'library'}${pageCount > 1 ? ' · page ' + curPage + ' of ' + pageCount : ''}</p>
   </div>
-  <ul class="doc-index">${items || '<li class="empty">No documents yet.</li>'}</ul>
+  <ul class="doc-index">${(subItems + (subItems && fileItems ? '\n' : '') + fileItems) || '<li class="empty">Nothing here yet.</li>'}</ul>
+  ${pager}
 </main>
 <footer class="foot">
   <div class="shell foot-grid">
@@ -568,8 +673,9 @@ export async function renderDocIndex(env, route) {
   <div class="shell foot-bar">${site.footerHtml || ''}</div>
 </footer>
 </body>
-</html>`, site.headExtra);
+</html>`;
 }
+
 
 /** 判断请求路径是否为某库的文档路径（<xyz>/<多级>.html 或 <xyz>/）；
  *  doc 分支返回 { base }：已解码、去扩展名的相对路径（用于按 .md/.html/.htm 查 documents） */
@@ -580,8 +686,12 @@ export function matchDocRoute(path, routes) {
         const xyz = String((r && r.xyz) || '').replace(/^\/+|\/+$/g, '');
         if (!xyz) continue;
         const prefix = '/' + xyz;
-        // 目录页 /xyz/
-        if (p === prefix + '/') return { route: r, kind: 'index', base: '' };
+        // 目录页 /xyz/ 或任意层 /xyz/a/b/（dir = 集合内相对目录，'' = 集合根）
+        if (p === prefix + '/' || (p.startsWith(prefix + '/') && p.endsWith('/'))) {
+            let dir = p.slice(prefix.length + 1, -1);
+            try { dir = decodeURIComponent(dir); } catch (e) { /* 保持原样 */ }
+            return { route: r, kind: 'index', base: '', dir: dir };
+        }
         // 文档 /xyz/xxx.html（URL 侧一律 .html；原稿可能是 .md/.html/.htm）
         if (p.startsWith(prefix + '/') && /\.html?$/i.test(p)) {
             let rel = p.slice(prefix.length + 1);

@@ -5,7 +5,7 @@
  */
 import { authenticate, signJwt, verifyJwt, bearerToken, loginRateLimit, accountLocked, accountFail, accountClear, hashPassword, verifyPassword } from './auth';
 import { deleteCache, edgeDelete, edgePurge } from './cache';
-import { CFSE_SINGLE_TPL, renderHomepage, renderCategoryPage, renderTagPage, renderArchivePage, cfseSidebarCategoryItems, cfseSidebarArchiveItems, cfseSidebarTagItems, cfseInjectHead } from './template-engine';
+import { CFSE_SINGLE_TPL, renderHomepage, renderCategoryPage, renderTagPage, renderArchivePage, cfseSidebarCategoryItems, cfseSidebarArchiveItems, cfseSidebarTagItems } from './template-engine';
 import { mdToHtml, mdToText } from './md';
 import { getSiteContext, clearSiteCtxMemo, getStyleIndex, clearStyleIndexMemo } from './site';
 import { getActiveTpl } from './tplstore';
@@ -14,7 +14,7 @@ import { getPostComments, cfseCommentItems, createComment } from './comments';
 import { getCacheConfig } from './cacheconfig';
 import { r2KeyFromPath, r2UrlPath } from './r2key';
 import { getSidebarData } from './database';
-import { validateRoutePrefix, validateDocPath, sourceKey, outKey, renderDocIndex, renderDocument, extractDocTitle, extractDocExcerpt, DEFAULT_DOC_SHELL } from './documents';
+import { validateRoutePrefix, validateDocPath, sourceKey, outKey, renderDocIndex, renderDocument, extractDocTitle, extractDocExcerpt, DEFAULT_DOC_SHELL, P_PAGES } from './documents';
 
 const ACCESS_TTL = 15 * 60;   // 15 min
 const REFRESH_TTL = 7 * 86400; // 7 d
@@ -193,6 +193,31 @@ async function pruneStyleVersions(env, id, keep) { /* no-op（无多版本回退
 
 /** 确保 styles 表存在（幂等；WP 端 schema 迁移也会建，这里兜底） */
 /** 核心表结构（与 WP 插件 ensure_d1_schema 的 DDL 保持一致，便于两端混用）。幂等。 */
+/**
+ * 目录页成品失效：删掉该文档路径所有祖先目录的 index.html。
+ *
+ * 目录列表是「派生数据」——增删文档、改标题后必须让它重建，否则列表停在旧内容。
+ * 这里只删 key、不渲染：真正的重建推迟到下一次访问（懒失效），
+ * 且一次只重建一层、一页，不会因为批量导入就把整库重算一遍。
+ */
+async function purgeAncestorIndexes(env, xyz, docPaths) {
+    const x = String(xyz || '').replace(/^\/+|\/+$/g, '');
+    if (!x) return;
+    const keys = new Set();
+    const list = Array.isArray(docPaths) ? docPaths : [docPaths];
+    for (const docPath of list) {
+        const base = String(docPath || '').replace(/\.(md|html?)$/i, '');
+        const segs = base.split('/').filter(Boolean);
+        segs.pop();                                   // 去掉文件名本身，只留目录链
+        for (let i = segs.length; i >= 0; i--) {      // 逐层向上，直到集合根
+            keys.add(x + (i ? '/' + segs.slice(0, i).join('/') : '') + '/index.html');
+        }
+    }
+    await Promise.all(Array.from(keys).map(function (k) {
+        return env.R2_BUCKET.delete(k).catch(function () { /* 不存在就算了 */ });
+    }));
+}
+
 async function ensureCoreSchema(env) {
     const ddl = [
         "CREATE TABLE IF NOT EXISTS posts (wp_id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, content TEXT, content_format TEXT DEFAULT 'html', excerpt TEXT, date DATETIME NOT NULL, modified DATETIME, status TEXT DEFAULT 'published', comment_status TEXT DEFAULT 'open', categories TEXT, tags TEXT, featured_image TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
@@ -655,7 +680,7 @@ function renderSingleHtml(row, site, tplOverride, opts) {
     rep('{{SIDEBAR_ARCHIVES}}', cfseSidebarArchiveItems(sb.archives, site, sbtpl));
     rep('{{SIDEBAR_TAGS}}', cfseSidebarTagItems(sb.tags, site, sbtpl));
     h = injectCodeAssets(h, bodyHtml);
-    return cfseInjectHead(cfseStripLeftovers(h, 'single'), site.headExtra);
+    return cfseStripLeftovers(h, 'single');
 }
 
 /** 单页上下篇：按 date 查 D1 的上一篇（更早）/ 下一篇（更新）。每次渲染查一次（之后单页写 R2 静态）。 */
@@ -1278,11 +1303,12 @@ function sanitizeMenu(list, depth) {
             "INSERT INTO documents (source_prefix, path, format, title, excerpt, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
             + "ON CONFLICT(source_prefix, path) DO UPDATE SET format = excluded.format, title = excluded.title, excerpt = excluded.excerpt, status = excluded.status, updated_at = excluded.updated_at"
         ).bind(abc, docPath, format, title, excerpt, status, now).run();
-        // 单篇失效：删成品 key（下次访问 miss → 重渲染）
+        // 单篇失效：删成品 + 所有祖先目录页（下次访问 miss → 重渲染）
         const siteCtx = await getSiteContext(env);
         const route = (siteCtx.docRoutes || []).find(function (r) { return r.abc === abc; });
         if (route) {
             try { await env.R2_BUCKET.delete(outKey(route.xyz, docPath)); } catch (e) {}
+            try { await purgeAncestorIndexes(env, route.xyz, docPath); } catch (e) {}
         }
         return json({ ok: true, path: docPath, format: format, title: title });
     }
@@ -1306,6 +1332,7 @@ function sanitizeMenu(list, depth) {
         const route = (siteCtx.docRoutes || []).find(function (r) { return r.abc === abc; });
         const now = new Date().toISOString();
         let success = 0, fail = 0;
+        const okPaths = [];
         const errors = [];
         for (const f of files) {
             if (!f || typeof f !== 'object') { fail++; errors.push({ path: String((f && f.path) || ''), error: '无效条目' }); continue; }
@@ -1339,11 +1366,16 @@ function sanitizeMenu(list, depth) {
                 // 单篇失效成品
                 if (route) { try { await env.R2_BUCKET.delete(outKey(route.xyz, docPath)); } catch (e) {} }
                 success++;
+                okPaths.push(docPath);
             } catch (e) {
                 console.error('doc import item failed:', docPath, e);
                 fail++;
                 errors.push({ path: docPath, error: (e && e.message) ? String(e.message) : String(e) });
             }
+        }
+        // 目录页失效：整批一次去重删除（避免逐篇重复删同一层）
+        if (route && okPaths.length) {
+            try { await purgeAncestorIndexes(env, route.xyz, okPaths); } catch (e) {}
         }
         // 可选：整库重建
         let rebuildResult = null;
@@ -1365,8 +1397,8 @@ function sanitizeMenu(list, depth) {
                 }
                 if (route.docIndex) {
                     try {
-                        const idxHtml = await renderDocIndex(env, route);
-                        await env.R2_BUCKET.put(String(route.xyz).replace(/^\/+|\/+$/g, '') + '/index.html', idxHtml, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
+                        const idxHtml = await renderDocIndex(env, route, '', 1);
+                        await env.R2_BUCKET.put(P_PAGES + '/' + String(route.xyz).replace(/^\/+|\/+$/g, '') + '/index.html', idxHtml, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
                     } catch (e) { console.error('doc import index failed:', e); }
                 }
                 rebuildResult = { total: docs.length, success: okC, fail: failC };
@@ -1387,12 +1419,17 @@ function sanitizeMenu(list, depth) {
         const siteCtx = await getSiteContext(env);
         const route = (siteCtx.docRoutes || []).find(function (r) { return r.abc === abc; });
         let done = 0;
+        const deletedPaths = [];
         for (const docPath of paths.slice(0, 500)) {
             if (!docPath) continue;
             if (route) { try { await env.R2_BUCKET.delete(outKey(route.xyz, docPath)); } catch (e) {} }
             try { await env.R2_BUCKET.delete(sourceKey(abc, docPath)); } catch (e) {}
-            try { await db.prepare("DELETE FROM documents WHERE source_prefix = ? AND path = ?").bind(abc, docPath).run(); done++; }
+            try { await db.prepare("DELETE FROM documents WHERE source_prefix = ? AND path = ?").bind(abc, docPath).run(); done++; deletedPaths.push(docPath); }
             catch (e) { console.error('doc delete failed:', docPath, e); }
+        }
+        // 目录页失效：删掉这些文档所有祖先目录的 index.html
+        if (route && deletedPaths.length) {
+            try { await purgeAncestorIndexes(env, route.xyz, deletedPaths); } catch (e) {}
         }
         return json({ ok: true, deleted: done });
     }
@@ -1426,8 +1463,8 @@ function sanitizeMenu(list, depth) {
         // 目录页
         if (route.docIndex) {
             try {
-                const idxHtml = await renderDocIndex(env, route);
-                await env.R2_BUCKET.put(String(route.xyz).replace(/^\/+|\/+$/g, '') + '/index.html', idxHtml, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
+                const idxHtml = await renderDocIndex(env, route, '', 1);
+                await env.R2_BUCKET.put(P_PAGES + '/' + String(route.xyz).replace(/^\/+|\/+$/g, '') + '/index.html', idxHtml, { httpMetadata: { contentType: 'text/html; charset=utf-8' } });
             } catch (e) { console.error('doc index rebuild failed:', e); }
         }
         return json({ ok: true, total: docs.length, success: okCount, fail: failCount });
