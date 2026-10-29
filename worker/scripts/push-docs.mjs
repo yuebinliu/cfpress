@@ -21,6 +21,26 @@ import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from '
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
+/**
+ * 剥 YAML frontmatter（只认文件开头）。
+ * 这里自带一份而不是 import src/md.js：package.json 没有 "type": "module"，
+ * 从 .mjs 里 import .js 会触发 MODULE_TYPELESS_PACKAGE_JSON 警告并重新解析一遍。
+ */
+function parseFrontmatter(src) {
+    const s = String(src == null ? '' : src);
+    const m = s.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+    if (!m) return { data: {}, body: s };
+    const data = {};
+    for (const line of m[1].split(/\r?\n/)) {
+        const hit = line.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+        if (!hit) continue;
+        let v = hit[2].trim();
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+        data[hit[1].toLowerCase()] = v;
+    }
+    return { data, body: s.slice(m[0].length) };
+}
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const contentDir = path.resolve(root, '..', 'content');
 
@@ -60,17 +80,20 @@ function walk(dir, base) {
     return out;
 }
 
-/** 标题：第一个 H1（没有就用文件名） */
+/** 标题：frontmatter.title > 第一个 H1 > 文件名（侧栏要短、正文要完整时用 frontmatter） */
 function titleOf(md, rel) {
-    const m = String(md).match(/^#\s+(.+)$/m);
+    const { data, body } = parseFrontmatter(md);
+    if (data.title) return String(data.title).replace(/\s+/g, ' ').slice(0, 200);
+    const m = String(body).match(/^#\s+(.+)$/m);
     const fallback = rel.replace(/\.md$/i, '').split('/').pop() || 'doc';
     return (m ? m[1].trim() : fallback).replace(/\s+/g, ' ').slice(0, 200);
 }
 
-/** 摘要：跳过 frontmatter / 标题 / 表格 / 代码块，取第一段正文，去掉行内标记 */
+/** 摘要：frontmatter.description > 第一段正文（跳过标题/表格/代码块/列表），去掉行内标记 */
 function excerptOf(md) {
-    const body = String(md).replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n/, '');
-    for (const raw of body.split(/\r?\n/)) {
+    const { data, body } = parseFrontmatter(md);
+    if (data.description) return String(data.description).replace(/\s+/g, ' ').slice(0, 180);
+    for (const raw of String(body).split(/\r?\n/)) {
         const t = raw.trim();
         if (!t) continue;
         if (t.startsWith('#') || t.startsWith('|') || t.startsWith('```') || t.startsWith('>') || t.startsWith('- ') || t.startsWith('* ')) continue;

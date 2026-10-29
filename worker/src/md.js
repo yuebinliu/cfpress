@@ -44,10 +44,32 @@ function dedupeHeadingIds(html) {
     });
 }
 
+/**
+ * 剥离 YAML frontmatter（`---\nkey: value\n---`），返回 { data, body }。
+ * marked 不认识 frontmatter，不剥的话它会渲染成一条 <hr> + 一段文本。
+ * 只在文件**开头**才认，正文里的 `---` 分隔线不受影响。
+ */
+export function parseFrontmatter(src) {
+    const s = String(src == null ? '' : src);
+    const m = s.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+    if (!m) return { data: {}, body: s };
+    const data = {};
+    for (const line of m[1].split(/\r?\n/)) {
+        const hit = line.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+        if (!hit) continue;
+        let v = hit[2].trim();
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+            v = v.slice(1, -1);
+        }
+        data[hit[1].toLowerCase()] = v;
+    }
+    return { data, body: s.slice(m[0].length) };
+}
+
 /** Markdown → HTML（渲染出口统一走这里；失败原样返回） */
 export function mdToHtml(src) {
     try {
-        const out = marked.parse(String(src || ''));
+        const out = marked.parse(parseFrontmatter(src).body);
         const html = typeof out === 'string' ? out : String(out || '');
         return dedupeHeadingIds(html);
     } catch (e) {

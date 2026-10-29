@@ -1,3 +1,7 @@
+---
+title: Install
+---
+
 # Install CF Press
 
 There are two ways to get a site running. The button is the short one: no Node, no terminal, about two minutes. The command line is for people who already have the repository, or who want to see exactly what gets created.

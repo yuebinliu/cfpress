@@ -1,3 +1,7 @@
+---
+title: Writing
+---
+
 # Writing in the CMS
 
 Once you are signed in, `/admin/` is where everything happens. The left rail is the whole product: posts, taxonomies, media, comments, menus, themes, settings.
