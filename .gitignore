@@ -41,3 +41,6 @@ worker/dist/
 # ---- 本地回滚备份（不入库）----
 *.bak.css
 *.bak.json
+
+# push-docs 生成的临时 SQL（正常写到系统临时目录，这里兜底）
+worker/.push-docs.sql

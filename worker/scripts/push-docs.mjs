@@ -17,6 +17,7 @@
  *   node scripts/push-docs.mjs --bucket=cfpress --db=cfpress --config=wrangler.prod.toml
  */
 import { execSync } from 'node:child_process';
+import os from 'node:os';
 import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -174,7 +175,7 @@ for (const lib of libs) {
 }
 
 // 元数据一次性提交（比逐篇 execute 快得多，也少一大堆子请求）
-const sqlPath = path.join(root, '.push-docs.sql');
+const sqlPath = path.join(os.tmpdir(), 'cfpress-push-docs.sql');
 const sql = 'INSERT INTO documents (source_prefix, path, format, title, excerpt, status, date, updated_at) VALUES\n'
     + rows.join(',\n') + '\n'
     + 'ON CONFLICT(source_prefix, path) DO UPDATE SET\n'
