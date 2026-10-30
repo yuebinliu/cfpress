@@ -12,14 +12,14 @@
 import { getFromR2 } from './storage';
 import { r2KeyFromPath } from './r2key';
 import { getPostsByTaxonomy, getTaxonomyInfo, getRecentPosts, getPostsByArchive, getSidebarData, searchPosts } from './database';
-import { renderCategoryPage, renderTagPage, renderHomepage, renderArchivePage, cfseInjectHead } from './template-engine';
+import { renderCategoryPage, renderTagPage, renderHomepage, renderArchivePage, cfseInjectHead, cfseBrandMark } from './template-engine';
 import { deleteCache, edgeGet, edgeSet, edgeDelete, edgePurge } from './cache';
 import { getActiveTplContent, getActiveSidebarTpl } from './tplstore';
 import { handleStylePreview } from './preview';
 import { handleAdminRequest, handleWpV2, renderSinglePageOnDemand } from './admin';
 import { createComment, commentRateAllowed, injectComments } from './comments';
 import { getSiteContext, clearSiteCtxMemo } from './site';
-import { matchDocRoute, renderDocument, renderDocIndex, outKey, P_PAGES } from './documents';
+import { matchDocRoute, renderDocument, renderDocIndex, outKey, outUrl, P_PAGES } from './documents';
 import { getCacheConfig } from './cacheconfig';
 import { mdToHtml } from './md';
 
@@ -121,10 +121,7 @@ export async function handleRequest(request, env) {
         }
     }
 
-    // favicon：无站点图标，静默 204 避免 404 噪音
-    if (path === '/favicon.ico' || path === '/favicon.png') {
-        return new Response(null, { status: 204 });
-    }
+    // favicon 由后面的动态分支处理（/favicon.svg 生成、.ico 重定向），这里不再拦截
 
     // 清除缓存（导出文章后由插件调用）：body 传 { keys: [...], prefixes: [...] }
     // 开关在 WP 设置页：cf_purge_sidebar（sidebar 即时清）/ cf_purge_lists（列表页第一页即时清）
@@ -549,13 +546,100 @@ export async function handleRequest(request, env) {
     // 价值也很低 —— 现在不拦它，让它走后面的分支自然落到 404。
     // ============================================
     if (path === '/robots.txt') {
-        return new Response('User-agent: *\nAllow: /\nDisallow: /admin/\nDisallow: /api/\n', {
+        let base = '';
+        try { const s = await getSiteContext(env); base = String((s && s.url) || '').replace(/\/+$/, ''); } catch (e) { /* 未初始化时跳过 */ }
+        return new Response('User-agent: *\nAllow: /\nDisallow: /admin/\nDisallow: /api/\n' + (base ? '\nSitemap: ' + base + '/sitemap.xml\n' : ''), {
             headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
                 'Cache-Control': 'public, max-age=86400',
             }
         });
     }
+
+    // ============================================
+    // favicon：按站名首字母动态生成 SVG —— 每个站都有自己的图标，不用手工传图。
+    // /favicon.ico 的请求 302 到 /favicon.svg（浏览器只认 Content-Type，不乱猜）。
+    // ============================================
+    if (path === '/favicon.ico' || path === '/favicon.png') {
+        return new Response(null, { status: 302, headers: { Location: '/favicon.svg', 'Cache-Control': 'public, max-age=86400' } });
+    }
+    if (path === '/favicon.svg') {
+        let site = null;
+        try { site = await getSiteContext(env); } catch (e) { site = null; }
+        const mark = String(cfseBrandMark((site && site.name) || '') || 'CF').slice(0, 4);
+        const safe = mark.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60" width="60" height="60">'
+            + '<rect width="60" height="60" rx="13" fill="#17140f"/>'
+            + '<text x="30" y="41" text-anchor="middle" font-family="Georgia,\'Times New Roman\',serif" font-size="27" font-weight="700" letter-spacing="0.5" fill="#faf8f5">' + safe + '</text>'
+            + '</svg>';
+        return new Response(svg, {
+            headers: {
+                'Content-Type': 'image/svg+xml; charset=utf-8',
+                'Cache-Control': 'public, max-age=604800',
+            }
+        });
+    }
+
+    // ============================================
+    // sitemap.xml：首页 + 文章（最近 500）+ 分类/标签 + 文档页。
+    // 刻意不做「全表 + 全站拼装」：单个请求要吃完这些查询，文章上万时会撞 CPU 上限。
+    // 500 条对搜索引擎足够（它们也按需抓），真要全量就分片做 sitemap index。
+    // ============================================
+    if (path === '/sitemap.xml') {
+        const site = await getSiteContext(env);
+        const base = String((site && site.url) || '').replace(/\/+$/, '');
+        const xesc = function (s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+        };
+        // storagePattern → 公开 URL（{slug}/index.html ⇒ /slug/）
+        const pattern = String((site && site.storagePattern) || '{slug}/index.html');
+        const postUrl = function (row) {
+            const parts = String(row.date || '').split('-');
+            let p = pattern
+                .replace('{year}', parts[0] || '')
+                .replace('{month}', parts[1] || '')
+                .replace('{day}', parts[2] || '')
+                .replace('{slug}', String(row.slug || ''));
+            p = p.replace(/\/?index\.html$/, '/');
+            return '/' + p.replace(/^\/+/, '');
+        };
+        const urls = [{ loc: base + '/', lastmod: '' }];
+        try {
+            const posts = await env.D1_DATABASE.prepare("SELECT slug, date, modified FROM posts WHERE status = 'published' ORDER BY date DESC LIMIT 500").all();
+            for (const p of (posts.results || [])) {
+                urls.push({ loc: base + postUrl(p), lastmod: String(p.modified || p.date || '').slice(0, 10) });
+            }
+        } catch (e) { /* 表不存在时只输出首页 */ }
+        try {
+            const tax = await env.D1_DATABASE.prepare('SELECT type, slug FROM taxonomies LIMIT 500').all();
+            for (const t of (tax.results || [])) {
+                const seg = t.type === 'category' ? 'category' : (t.type === 'tag' ? 'tag' : '');
+                if (!seg || !t.slug) continue;
+                urls.push({ loc: base + '/' + seg + '/' + encodeURIComponent(t.slug) + '/', lastmod: '' });
+            }
+        } catch (e) { /* ignore */ }
+        try {
+            const docs = await env.D1_DATABASE.prepare("SELECT source_prefix, path FROM documents WHERE status = 'published' LIMIT 500").all();
+            const routesDoc = Array.isArray(site && site.docRoutes) ? site.docRoutes : [];
+            for (const d of (docs.results || [])) {
+                const rt = routesDoc.filter(function (r) { return r && r.abc === d.source_prefix; })[0];
+                if (!rt || !rt.xyz) continue;
+                urls.push({ loc: base + outUrl(rt.xyz, d.path), lastmod: '' });
+            }
+        } catch (e) { /* ignore */ }
+        const xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            + urls.map(function (u) {
+                return '  <url><loc>' + xesc(u.loc) + '</loc>' + (u.lastmod ? '<lastmod>' + xesc(u.lastmod) + '</lastmod>' : '') + '</url>';
+            }).join('\n')
+            + '\n</urlset>\n';
+        return new Response(xml, {
+            headers: {
+                'Content-Type': 'application/xml; charset=utf-8',
+                'Cache-Control': 'public, max-age=3600',
+            }
+        });
+    }
+
 
     // ============================================
     // RSS Feed：/feed 或 /feed/（由 D1 生成；KV TTL = ttl_feed，默认 4 小时）

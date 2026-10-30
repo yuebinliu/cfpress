@@ -52,6 +52,10 @@ p { margin: 0; }
 }
 .topbar-in { display: flex; align-items: center; gap: 28px; height: 68px; }
 .brand { display: inline-flex; align-items: center; gap: 3px; margin-right: auto; }
+/* 站点配了品牌图（{{BRAND_LOGO}}）就用图，并隐藏文字字标，避免重复 */
+.brand-logo { display: block; height: 30px; width: auto; }
+.brand:has(.brand-logo) .logo-mark,
+.brand:has(.brand-logo) .brand-text { display: none; }
 .logo-mark {
   display: inline-grid; place-items: center;
   width: 30px; height: 30px;

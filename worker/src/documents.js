@@ -42,6 +42,13 @@ export const DEFAULT_DOC_SHELL = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{DOC_TITLE}} · {{SITE_NAME}}</title>
 <meta name="description" content="{{SITE_DESC}}">
+<link rel="icon" href="{{SITE_URL}}/favicon.svg" type="image/svg+xml">
+<meta property="og:site_name" content="{{SITE_NAME}}">
+<meta property="og:type" content="article">
+<meta property="og:title" content="{{DOC_TITLE}} — {{SITE_NAME}}">
+<meta property="og:description" content="{{SITE_DESC}}">
+<meta property="og:image" content="{{SITE_URL}}/assets/brand/og-cover.png">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="{{CSS_URL}}">
 <style>
 .doc-wrap{display:flex;align-items:flex-start;gap:44px;max-width:var(--maxw,1240px);margin:0 auto;padding:46px 28px 44px}
@@ -103,7 +110,7 @@ export const DEFAULT_DOC_SHELL = `<!DOCTYPE html>
 <body>
 <header class="topbar">
   <div class="shell topbar-in">
-    <a class="brand" href="{{SITE_URL}}/"><span class="logo-mark">{{BRAND_MARK}}</span><span class="brand-text">{{BRAND_WORD}}</span><span class="badge">beta</span></a>
+    <a class="brand" href="{{SITE_URL}}/">{{BRAND_LOGO}}<span class="logo-mark">{{BRAND_MARK}}</span><span class="brand-text">{{BRAND_WORD}}</span><span class="badge">beta</span></a>
     {{SITE_NAV}}
     <form class="srch" role="search" action="{{SITE_URL}}/" method="get">
       <input type="search" name="s" placeholder="Search docs…" aria-label="Search">
@@ -441,7 +448,7 @@ export async function renderDocument(env, route, doc, shared) {
     if (!shellTpl) shellTpl = DEFAULT_DOC_SHELL;
 
     // 6. 填占位符
-    const { cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
+    const { cfseBrandWord, cfseBrandMark, cfseBrandLogoImg, cfseMenuHtml } = await import('./template-engine');
     // 主题 CSS：与主站共用同一份 style.css（文档库不再自带一套内嵌皮肤）
     // 皮肤永远跟站点当前主题走 —— route.styleId 只用于取自定义 docShell（HTML 结构），
     // 它指向的往往是「只有 tpl.json、没有 style.css」的壳包，拿它拼 CSS 会 404。
@@ -460,6 +467,7 @@ export async function renderDocument(env, route, doc, shared) {
         if (v === 'SITE_DESC') return escHtml(site.description || '');
         if (v === 'BRAND_WORD') return escHtml(cfseBrandWord(site.name || ''));
         if (v === 'BRAND_MARK') return escHtml(cfseBrandMark(site.name || ''));
+        if (v === 'BRAND_LOGO') return cfseBrandLogoImg(site);
         if (v === 'CSS_URL') return escUrl(cssUrl);
         if (v === 'SITE_NAV') return siteNav;
         if (v === 'FOOTER_NAV') return footerNav;
@@ -470,7 +478,7 @@ export async function renderDocument(env, route, doc, shared) {
     // 顺序很重要：**先把壳里未实现的占位符清掉，再注入正文**。
     // 旧实现是「注入正文 → 全局兜底清理」，会把正文（md 原稿）里形如 {{POST_TITLE}}
     // 的字面量一起删掉 —— 一旦文档讲解占位符本身，正文就会被吃空。
-    const DOC_KEYS = ['DOC_TITLE', 'CONTENT', 'DOC_SIDEBAR', 'SITE_NAME', 'SITE_URL', 'SITE_DESC', 'BRAND_WORD', 'BRAND_MARK', 'CSS_URL', 'SITE_NAV', 'FOOTER_NAV', 'SITE_FOOTER', 'DOC_TOC'];
+    const DOC_KEYS = ['DOC_TITLE', 'CONTENT', 'DOC_SIDEBAR', 'SITE_NAME', 'SITE_URL', 'SITE_DESC', 'BRAND_WORD', 'BRAND_MARK', 'BRAND_LOGO', 'CSS_URL', 'SITE_NAV', 'FOOTER_NAV', 'SITE_FOOTER', 'DOC_TOC'];
     let h = shellTpl;
     // 壳里的已知占位符先换成哨兵（NUL 包裹；正文里不可能出现该串）
     DOC_KEYS.forEach(function (k, i) { h = h.split('{{' + k + '}}').join('\u0000cfseDoc' + i + '\u0000'); });
@@ -623,7 +631,7 @@ export async function renderDocIndex(env, route, dir, page) {
 
     const { getSiteContext } = await import('./site');
     const site = await getSiteContext(env);
-    const { cfseBrandWord, cfseBrandMark, cfseMenuHtml } = await import('./template-engine');
+    const { cfseBrandWord, cfseBrandMark, cfseBrandLogoImg, cfseMenuHtml } = await import('./template-engine');
     const home = String(site.url || '').replace(/\/+$/, '');
     const styleId = String((site && site.activeStyleId) || 'cfse-demo');
     const cssUrl = home + '/wp-content/themes/' + styleId + '/style.css';
@@ -667,7 +675,7 @@ export async function renderDocIndex(env, route, dir, page) {
 <body>
 <header class="topbar">
   <div class="shell topbar-in">
-    <a class="brand" href="${home}/"><span class="logo-mark">${escHtml(cfseBrandMark(site.name || ''))}</span><span class="brand-text">${escHtml(cfseBrandWord(site.name || ''))}</span><span class="badge">beta</span></a>
+    <a class="brand" href="${home}/">${cfseBrandLogoImg(site)}<span class="logo-mark">${escHtml(cfseBrandMark(site.name || ''))}</span><span class="brand-text">${escHtml(cfseBrandWord(site.name || ''))}</span><span class="badge">beta</span></a>
     ${siteNav}
     <form class="srch" role="search" action="${home}/" method="get">
       <input type="search" name="s" placeholder="Search docs…" aria-label="Search">

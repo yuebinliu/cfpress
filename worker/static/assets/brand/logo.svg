@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 176 60" width="176" height="60" role="img" aria-label="CF Press">
+  <title>CF Press</title>
+  <rect width="60" height="60" rx="13" fill="#17140f"/>
+  <text x="30" y="41" text-anchor="middle"
+        font-family="Georgia, 'Times New Roman', 'Songti SC', serif"
+        font-size="27" font-weight="700" letter-spacing="0.5" fill="#faf8f5">CF</text>
+  <text x="72" y="44"
+        font-family="Georgia, 'Times New Roman', 'Songti SC', serif"
+        font-size="34" font-weight="600" letter-spacing="-0.8" fill="#17140f">Press</text>
+</svg>

@@ -209,6 +209,15 @@ export function cfseBrandWord(name) {
 }
 
 /** 头部图标字标（logo 方块里的 1-2 个字母）：CF 系品牌固定 "CF"，否则取词首字母（"My Blog" → "MB"） */
+/** 头部品牌图（{{BRAND_LOGO}}）：站点配了 logo 才输出 <img>，否则空串 → 模板自动回落到字标文本。
+ *  单独出来是因为 {{SITE_LOGO}} 带 <a> 包裹，放进 .brand 里会嵌套链接。 */
+export function cfseBrandLogoImg(site) {
+    const logo = String((site && site.logo) || '').trim();
+    if (!logo) return '';
+    const name = escapeHtml((site && site.name) || '');
+    return '<img class="brand-logo" src="' + cfseEscUrl(logo) + '" alt="' + name + '" decoding="async">';
+}
+
 export function cfseBrandMark(name) {
     const n = String(name == null ? '' : name).trim();
     if (!n) return 'CF';
@@ -267,6 +276,7 @@ function cfseRenderItem(itemTpl, post, site) {
     h = cfseReplace(h, '{{SITE_NAME}}', escapeHtml((site && site.name) || ''));
     h = cfseReplace(h, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord((site && site.name) || '')));
     h = cfseReplace(h, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark((site && site.name) || '')));
+    h = cfseReplace(h, '{{BRAND_LOGO}}', cfseBrandLogoImg(site));
     h = cfseReplace(h, '{{SITE_DESC}}', escapeHtml((site && site.description) || ''));
     // 评论数：条目骨架是从"抓取那一刻的列表页"扒下来的，里面会夹带**探针文章**的评论数
     // （实测主题包写成 "3 Comments"）⇒ 这里按本篇真实评论数改写，避免列表里每篇都显示同一个数字。
@@ -401,6 +411,7 @@ export function renderHomepage(data, page, totalPosts, options = {}) {
     html = cfseReplace(html, '{{SITE_NAME}}', escapeHtml(site.name || ''));
     html = cfseReplace(html, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord(site.name || '')));
     html = cfseReplace(html, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark(site.name || '')));
+    html = cfseReplace(html, '{{BRAND_LOGO}}', cfseBrandLogoImg(site));
     html = cfseReplace(html, '{{SITE_DESC}}', escapeHtml(site.description || ''));
     html = cfseReplace(html, '{{SITE_URL}}', cfseEscUrl(site.url || ''));
     html = cfseReplace(html, '{{CONTENT}}', postListHtml);
@@ -467,6 +478,7 @@ export function renderCategoryPage(data, page, totalPosts, options = {}) {
     html = cfseReplace(html, '{{SITE_NAME}}', escapeHtml(site.name || ''));
     html = cfseReplace(html, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord(site.name || '')));
     html = cfseReplace(html, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark(site.name || '')));
+    html = cfseReplace(html, '{{BRAND_LOGO}}', cfseBrandLogoImg(site));
     html = cfseReplace(html, '{{SITE_DESC}}', escapeHtml(site.description || ''));
     html = cfseReplace(html, '{{SITE_URL}}', cfseEscUrl(site.url || ''));
     html = cfseReplace(html, '{{CONTENT}}', postListHtml);
@@ -533,6 +545,7 @@ export function renderTagPage(data, page, totalPosts, options = {}) {
     html = cfseReplace(html, '{{SITE_NAME}}', escapeHtml(site.name || ''));
     html = cfseReplace(html, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord(site.name || '')));
     html = cfseReplace(html, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark(site.name || '')));
+    html = cfseReplace(html, '{{BRAND_LOGO}}', cfseBrandLogoImg(site));
     html = cfseReplace(html, '{{SITE_DESC}}', escapeHtml(site.description || ''));
     html = cfseReplace(html, '{{SITE_URL}}', cfseEscUrl(site.url || ''));
     html = cfseReplace(html, '{{CONTENT}}', postListHtml);
@@ -602,6 +615,7 @@ export function renderArchivePage(data, page, totalPosts, options = {}) {
     html = cfseReplace(html, '{{SITE_NAME}}', escapeHtml(site.name || ''));
     html = cfseReplace(html, '{{BRAND_WORD}}', escapeHtml(cfseBrandWord(site.name || '')));
     html = cfseReplace(html, '{{BRAND_MARK}}', escapeHtml(cfseBrandMark(site.name || '')));
+    html = cfseReplace(html, '{{BRAND_LOGO}}', cfseBrandLogoImg(site));
     html = cfseReplace(html, '{{SITE_DESC}}', escapeHtml(site.description || ''));
     html = cfseReplace(html, '{{SITE_URL}}', cfseEscUrl(site.url || ''));
     html = cfseReplace(html, '{{CONTENT}}', postListHtml);
