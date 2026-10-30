@@ -42,12 +42,18 @@ npx wrangler d1 execute cfpress --remote --config wrangler.prod.toml --command "
 npx wrangler r2 object delete "cfpress/_pages/plugin/overview.html"
 ```
 
-> 通过后台「文档与上传」上传时，第 2、3 步由接口自动完成；
-> 上面这套是命令行路径，适合批量/脚本化。
+## 批量发布
 
-## 已知的待补工具
+手工三步（put / upsert / 删成品）已经脚本化：
 
-`worker/scripts/push-docs.mjs` 还没写。它应该做：遍历 `content/`、
-逐篇 put 到 `_src/`、按 H1 提取标题写进 `documents`、最后清掉受影响的成品。
+```bash
+cd worker
+node scripts/push-docs.mjs                 # 全部库
+node scripts/push-docs.mjs --only=docs     # 只推一个库
+node scripts/push-docs.mjs --dry-run       # 只打印命令，不动线上
+```
 
-在那之前，批量改动只能按上面的三步手工来。
+它会遍历 `content/`，逐篇 put 到 `_src/`、按 frontmatter（没有则取首个 H1）写 `documents`、
+再删掉受影响的成品与祖先目录页。第 3 步是"改了没生效"的根源，别跳过。
+
+> 通过后台「文档与上传」上传时，同样的三步由接口自动完成。

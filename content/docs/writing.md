@@ -4,7 +4,7 @@ title: Writing
 
 # Writing in the CMS
 
-Once you are signed in, `/admin/` is where everything happens. The left rail is the whole product: posts, taxonomies, media, comments, menus, themes, settings.
+Once you are signed in, `/admin/` is where everything happens. The top bar is the whole product: posts, categories and tags, media, users, templates, documents, settings, comments. It is a small surface on purpose — if a screen is not there, the feature does not exist.
 
 ## Posts
 
@@ -21,27 +21,19 @@ Drafts stay in D1 and are never written to R2, so an unfinished post has no publ
 
 Categories and tags are managed under their own screens and behave as you would expect. A taxonomy with no published posts is hidden from the sidebar automatically.
 
-Menus are **separate from taxonomies**. The header navigation is a menu tree you build yourself, with items that can point at a category, a tag, a post, or any custom URL. If the menu is empty, the header simply omits the nav — it will not guess.
+Menus are **separate from taxonomies**, and they live in **Settings → Navigation menu** rather than on a screen of their own. The header navigation is a tree you build yourself, with items that can point at a category, a tag, a post, or any custom URL. If the menu is empty, the header simply omits the nav — it will not guess.
 
 ## Themes
 
-A theme is a directory under `wp-content/themes/<id>/` containing:
+A theme is a directory under `wp-content/themes/<id>/` holding `tpl.json` (six HTML templates with `{{PLACEHOLDER}}` tokens) and `style.css`. Five ship built in; switching the active one takes effect on the next request for lists and archives.
 
-- `tpl.json` — the HTML templates with `{{PLACEHOLDER}}` tokens;
-- `style.css` — the visual layer.
-
-Switching the active theme in the admin takes effect on the next request. Five themes ship built in, including a premium and a minimal variant of the same layout. Because templates are data, you can iterate on a theme in the browser without redeploying the Worker.
+Post pages are the exception — they are static HTML, so they keep the old theme until you rebuild them. That one detail is behind most "I switched themes and nothing happened" reports. [Themes and templates](/docs/themes.html) covers the six template kinds, the placeholders, and the rebuild step.
 
 ## The document library
 
-Long-form documentation does not belong in the post stream — it has hierarchy, and it should not appear in "latest posts". CF Press has a separate library for it:
+Long-form documentation does not belong in the post stream — it has hierarchy, and it should not appear in "latest posts". CF Press has a separate library for it, with its own URL space (`/docs/...`), its own sidebar generated from file paths, and its own template rather than the blog theme's.
 
-- source files live in R2 under a prefix (for example `docs/`);
-- metadata lives in D1;
-- the public URL space is separate as well, so docs sit at `/docs/...` rather than inside a category;
-- the sidebar tree is generated from file paths, and relative links between files are rewritten automatically.
-
-You write Markdown locally, upload the files, and the library renders them through the active theme. Because the sources are plain files, they can live in git next to the code that documents them.
+You write Markdown, upload it, and the library renders it on first request. Sources can live in git next to the code they document. [The document library](/docs/documents.html) has the full picture: library setup, `index.md`, link rewriting, and the shell template.
 
 ## Comments
 
