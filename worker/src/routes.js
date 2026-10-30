@@ -561,16 +561,22 @@ export async function handleRequest(request, env) {
     // /favicon.ico 的请求 302 到 /favicon.svg（浏览器只认 Content-Type，不乱猜）。
     // ============================================
     if (path === '/favicon.ico' || path === '/favicon.png') {
-        return new Response(null, { status: 302, headers: { Location: '/favicon.svg', 'Cache-Control': 'public, max-age=86400' } });
+        return new Response(null, { status: 302, headers: { Location: '/favicon.svg?v=2', 'Cache-Control': 'public, max-age=86400' } });
     }
     if (path === '/favicon.svg') {
         let site = null;
         try { site = await getSiteContext(env); } catch (e) { site = null; }
         const mark = String(cfseBrandMark((site && site.name) || '') || 'CF').slice(0, 4);
         const safe = mark.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        // 标签栏里只有 16px，字必须尽量吃满画面：按字符数定字号（2 字 36、3 字 27、4 字 21），
+        // 基线按 cap-height 居中（Georgia 的 cap ≈ 0.7em），再配一点字距让两字母不粘。
+        const len = mark.length || 2;
+        const fs = len <= 2 ? 36 : (len === 3 ? 27 : 21);
+        const baseline = Math.round(30 + fs * 0.35);
+        const tracking = len <= 2 ? -0.5 : -0.2;
         const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60" width="60" height="60">'
-            + '<rect width="60" height="60" rx="13" fill="#17140f"/>'
-            + '<text x="30" y="41" text-anchor="middle" font-family="Georgia,\'Times New Roman\',serif" font-size="27" font-weight="700" letter-spacing="0.5" fill="#faf8f5">' + safe + '</text>'
+            + '<rect width="60" height="60" rx="12" fill="#17140f"/>'
+            + '<text x="30" y="' + baseline + '" text-anchor="middle" font-family="Georgia,\'Times New Roman\',serif" font-size="' + fs + '" font-weight="700" letter-spacing="' + tracking + '" fill="#faf8f5">' + safe + '</text>'
             + '</svg>';
         return new Response(svg, {
             headers: {

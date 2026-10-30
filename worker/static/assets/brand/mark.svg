@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60" width="60" height="60" role="img" aria-label="CF">
   <title>CF Press</title>
-  <rect width="60" height="60" rx="13" fill="#17140f"/>
-  <text x="30" y="41" text-anchor="middle"
+  <rect width="60" height="60" rx="12" fill="#17140f"/>
+  <text x="30" y="43" text-anchor="middle"
         font-family="Georgia, 'Times New Roman', 'Songti SC', serif"
-        font-size="27" font-weight="700" letter-spacing="0.5" fill="#faf8f5">CF</text>
+        font-size="36" font-weight="700" letter-spacing="-0.5" fill="#faf8f5">CF</text>
 </svg>

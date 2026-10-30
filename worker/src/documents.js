@@ -42,7 +42,7 @@ export const DEFAULT_DOC_SHELL = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{DOC_TITLE}} · {{SITE_NAME}}</title>
 <meta name="description" content="{{SITE_DESC}}">
-<link rel="icon" href="{{SITE_URL}}/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="{{SITE_URL}}/favicon.svg?v=2" type="image/svg+xml">
 <meta property="og:site_name" content="{{SITE_NAME}}">
 <meta property="og:type" content="article">
 <meta property="og:title" content="{{DOC_TITLE}} — {{SITE_NAME}}">
