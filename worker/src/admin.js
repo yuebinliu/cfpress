@@ -5,7 +5,7 @@
  */
 import { authenticate, signJwt, verifyJwt, bearerToken, loginRateLimit, accountLocked, accountFail, accountClear, hashPassword, verifyPassword } from './auth';
 import { deleteCache, edgeDelete, edgePurge } from './cache';
-import { CFSE_SINGLE_TPL, renderHomepage, renderCategoryPage, renderTagPage, renderArchivePage, cfseSidebarCategoryItems, cfseSidebarArchiveItems, cfseSidebarTagItems } from './template-engine';
+import { CFSE_SINGLE_TPL, renderHomepage, renderCategoryPage, renderTagPage, renderArchivePage, cfseSidebarCategoryItems, cfseSidebarArchiveItems, cfseSidebarTagItems, cfseBrandWord, cfseBrandMark } from './template-engine';
 import { mdToHtml, mdToText } from './md';
 import { getSiteContext, clearSiteCtxMemo, getStyleIndex, clearStyleIndexMemo } from './site';
 import { getActiveTpl } from './tplstore';
@@ -641,6 +641,9 @@ function renderSingleHtml(row, site, tplOverride, opts) {
     const rep = function (t, v) { h = h.split(t).join(String(v == null ? '' : v)); };
     rep('{{SITE_URL}}', cfseEscUrl(site.url || ''));
     rep('{{SITE_NAME}}', escHtml(site.name));
+    // 品牌：列表页/文档页都写了，单页这里曾漏掉 ⇒ 文章页 header/footer 的 CF 方块是空的、"Press" 也不显示
+    rep('{{BRAND_MARK}}', escHtml(cfseBrandMark(site.name || '')));
+    rep('{{BRAND_WORD}}', escHtml(cfseBrandWord(site.name || '')));
     rep('{{SITE_DESC}}', escHtml(site.description || ''));
     rep('{{SITE_FOOTER}}', site.footerHtml || '');
     // 站点级「可配」占位符（值来自 site:ctx，WP 侧 / Worker 后台上次算一次写入）

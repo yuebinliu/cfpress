@@ -45,6 +45,10 @@ export const DEFAULT_DOC_SHELL = `<!DOCTYPE html>
 <link rel="stylesheet" href="{{CSS_URL}}">
 <style>
 .doc-wrap{display:flex;align-items:flex-start;gap:44px;max-width:var(--maxw,1240px);margin:0 auto;padding:46px 28px 44px}
+/* 锚点跳转要给 sticky 顶栏留位置：留 92px = 68px 顶栏 + 24px 呼吸；
+   少了这两条，点「On this page」的链接后标题会正好滚到顶栏底下被盖住。 */
+.doc-wrap{scroll-padding-top:92px}
+.doc-body :is(h1,h2,h3,h4){scroll-margin-top:92px}
 .doc-side-col{flex:0 0 218px;position:sticky;top:86px;max-height:calc(100vh - 112px);overflow:auto}
 .doc-toc-col{flex:0 0 186px;position:sticky;top:86px;align-self:flex-start;max-height:calc(100vh - 112px);overflow:auto;font-size:13px}
 .doc-toc-col:empty{display:none}
