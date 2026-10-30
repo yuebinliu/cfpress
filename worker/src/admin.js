@@ -1121,6 +1121,8 @@ function sanitizeMenu(list, depth) {
                 menu: Array.isArray(site.menu) ? site.menu : [],
                 docRoutes: Array.isArray(site.docRoutes) ? site.docRoutes : [],
                 headExtra: String(site.headExtra || ''),
+                // 单页布局：必须回传，否则后台下拉永远显示"双列"，实际值与界面不一致
+                layout: { singleSidebar: (site.layout && site.layout.singleSidebar === 'hide') ? 'hide' : 'show' },
             },
             cache: site.cache,
             comments: site.comments || { mode: 'off', embed: '', accept: 'off' },

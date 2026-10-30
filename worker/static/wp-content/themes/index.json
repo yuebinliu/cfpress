@@ -1,32 +1,32 @@
 [
   {
     "id": "cfse-demo",
-    "name": "CF Press Premium · EN（cfse-demo）",
-    "updated": "2026-10-28 17:40:00",
+    "name": "CFSE Demo (English)",
+    "updated": "2026-10-30 15:29:50",
     "source": "builtin"
   },
   {
     "id": "cfse-minimal",
-    "name": "CF Press Minimal · EN（cfse-minimal）",
-    "updated": "2026-10-28 17:40:00",
+    "name": "CFSE Minimal (English)",
+    "updated": "2026-10-28 15:58:56",
     "source": "builtin"
   },
   {
     "id": "docs-wiki",
-    "name": "文档壳（docs-wiki）",
-    "updated": "2026-10-28 17:40:00",
-    "source": "builtin"
-  },
-  {
-    "id": "twentyten",
-    "name": "Twenty Ten",
-    "updated": "2026-10-28 17:40:00",
+    "name": "文档站（docs-wiki）",
+    "updated": "2026-10-28 10:09:20",
     "source": "builtin"
   },
   {
     "id": "twentyeleven",
-    "name": "Twenty Eleven",
-    "updated": "2026-10-28 17:40:00",
+    "name": "twentyeleven",
+    "updated": "2026-10-28 10:09:20",
+    "source": "builtin"
+  },
+  {
+    "id": "twentyten",
+    "name": "twentyten",
+    "updated": "2026-10-28 10:09:20",
     "source": "builtin"
   }
 ]
