@@ -39,4 +39,4 @@ You write Markdown, upload it, and the library renders it on first request. Sour
 
 Comments are stored in D1 and injected when a page is served. An approved comment appears immediately with no rebuild. Moderation lives in the admin; if you connect WordPress, comments can also sync back there.
 
-Next: [The WordPress plugin](/plugin/overview.html).
+Next: [The WordPress plugin](/plugin/overview.html). The rest of the admin has its own pages: [Themes](/docs/themes.html) · [Comments](/docs/comments.html) · [Media](/docs/media.html) · [Users](/docs/users.html) · [Settings](/docs/settings.html).
