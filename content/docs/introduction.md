@@ -1,3 +1,8 @@
+---
+title: What CF Press is
+order: 1
+---
+
 # What CF Press is
 
 CF Press is a content management system that runs entirely on Cloudflare. There is no origin server to patch, no database to provision, and no separate host to pay for. A single Worker serves the whole site, and it fits inside Cloudflare's free plan for a normal blog or docs site.

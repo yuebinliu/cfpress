@@ -1,5 +1,6 @@
 ---
 title: The document library
+order: 6
 ---
 
 # The document library

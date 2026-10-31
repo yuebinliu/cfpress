@@ -1,5 +1,6 @@
 ---
 title: Themes
+order: 4
 ---
 
 # Themes and templates

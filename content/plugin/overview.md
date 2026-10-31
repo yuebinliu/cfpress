@@ -1,3 +1,8 @@
+---
+title: The WordPress plugin
+order: 1
+---
+
 # The WordPress plugin
 
 CF Press does not need WordPress. The plugin exists for one situation: you already run a WordPress site and want it served from Cloudflare without giving up the editor you know.

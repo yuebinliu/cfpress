@@ -147,6 +147,13 @@ if (!libs.length) {
 }
 
 const today = new Date().toISOString().slice(0, 10);
+/** frontmatter 的 order → documents.sort（侧边栏排序用；不写就是 0） */
+function orderOf(src) {
+    const { data } = parseFrontmatter(src);
+    const n = parseInt(data.order, 10);
+    return Number.isFinite(n) ? n : 0;
+}
+
 const rows = [];
 let uploaded = 0, cleared = 0;
 
@@ -170,17 +177,17 @@ for (const lib of libs) {
             } catch (e) { /* 不存在就算了 */ }
         }
 
-        rows.push('  (' + [q(lib), q(f.rel), q('md'), q(titleOf(md, f.rel)), q(excerptOf(md)), q('published'), q(today), q(today)].join(',') + ')');
+        rows.push('  (' + [q(lib), q(f.rel), q('md'), q(titleOf(md, f.rel)), q(excerptOf(md)), q('published'), q(today), q(today), String(orderOf(md))].join(',') + ')');
     }
 }
 
 // 元数据一次性提交（比逐篇 execute 快得多，也少一大堆子请求）
 const sqlPath = path.join(os.tmpdir(), 'cfpress-push-docs.sql');
-const sql = 'INSERT INTO documents (source_prefix, path, format, title, excerpt, status, date, updated_at) VALUES\n'
+const sql = 'INSERT INTO documents (source_prefix, path, format, title, excerpt, status, date, updated_at, sort) VALUES\n'
     + rows.join(',\n') + '\n'
     + 'ON CONFLICT(source_prefix, path) DO UPDATE SET\n'
     + '  format = excluded.format, title = excluded.title, excerpt = excluded.excerpt,\n'
-    + '  status = excluded.status, updated_at = excluded.updated_at;\n';
+    + '  status = excluded.status, updated_at = excluded.updated_at, sort = excluded.sort;\n';
 writeFileSync(sqlPath, sql, 'utf8');
 
 say('\n[documents] ' + rows.length + ' 条元数据');

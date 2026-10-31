@@ -1,3 +1,8 @@
+---
+title: Sync rules
+order: 3
+---
+
 # Sync rules
 
 Two systems holding the same content need a rule for every conflict. These are the ones worth knowing before you rely on the plugin.

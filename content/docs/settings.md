@@ -1,5 +1,6 @@
 ---
 title: Settings
+order: 5
 ---
 
 # Settings

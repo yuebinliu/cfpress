@@ -1,5 +1,6 @@
 ---
 title: Troubleshooting
+order: 10
 ---
 
 # When something looks wrong

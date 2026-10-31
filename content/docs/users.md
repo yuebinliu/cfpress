@@ -1,5 +1,6 @@
 ---
 title: Users
+order: 9
 ---
 
 # Users and roles

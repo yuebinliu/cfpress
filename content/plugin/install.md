@@ -1,3 +1,8 @@
+---
+title: Installing the plugin
+order: 2
+---
+
 # Installing the plugin
 
 Three things have to agree before the first export: the Worker URL, the auth key, and which site is the source of truth.

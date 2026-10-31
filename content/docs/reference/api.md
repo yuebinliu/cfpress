@@ -1,3 +1,8 @@
+---
+title: Write API
+order: 20
+---
+
 # Write API
 
 Everything the admin does goes through HTTP, so anything the admin can do, a script can do. Authentication is a single header:

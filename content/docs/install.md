@@ -1,5 +1,6 @@
 ---
 title: Install
+order: 2
 ---
 
 # Install CF Press

@@ -1,5 +1,6 @@
 ---
 title: Comments
+order: 7
 ---
 
 # Comments

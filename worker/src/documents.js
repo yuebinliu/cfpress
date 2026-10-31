@@ -306,14 +306,28 @@ export function sidebarTreeHtml(docs, xyz, currentPath) {
     (docs || []).forEach(function (d) {
         const parts = String(d.path || '').split('/');
         const file = parts.pop() || '';
+        // index.* 是这一层的首页（打开目录 URL 就是它），不在侧栏里再列一条
+        if (/^index\.(md|markdown|html?)$/i.test(file)) return;
         let node = tree;
         parts.forEach(function (p) {
             if (!p) return;
             if (!node[p]) node[p] = { _dir: true, children: {} };
             node = node[p].children;
         });
-        node[file] = { _file: true, path: d.path, title: d.title || file };
+        node[file] = { _file: true, path: d.path, title: d.title || file, sort: Number(d.sort) || 0 };
     });
+
+    // 排序：frontmatter 的 order（落到 documents.sort）优先，没写的排在后面按名称；
+    // 目录取「子项里最小的 order」参与排序，这样 order 写在子文件上也能带正整个目录。
+    const minSort = function (children) {
+        let m = 0;
+        Object.keys(children).forEach(function (k) {
+            const v = children[k];
+            const s = v._dir ? minSort(v.children) : v.sort;
+            if (s > 0 && (m === 0 || s < m)) m = s;
+        });
+        return m;
+    };
 
     const esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
     const cur = String(currentPath || '');
@@ -321,8 +335,12 @@ export function sidebarTreeHtml(docs, xyz, currentPath) {
     const renderNode = function (obj) {
         let out = '';
         const keys = Object.keys(obj).sort(function (a, b) {
-            // 目录在前，文件按名
-            const da = obj[a]._dir ? 0 : 1, db = obj[b]._dir ? 0 : 1;
+            const va = obj[a], vb = obj[b];
+            // 没写 order 的落到最后（1e9），再按"目录在前、名字"兜底 —— 老文档库行为不变
+            const ra = (va._dir ? minSort(va.children) : va.sort) || 1e9;
+            const rb = (vb._dir ? minSort(vb.children) : vb.sort) || 1e9;
+            if (ra !== rb) return ra - rb;
+            const da = va._dir ? 0 : 1, db = vb._dir ? 0 : 1;
             if (da !== db) return da - db;
             return a.localeCompare(b);
         });
@@ -430,7 +448,7 @@ export async function renderDocument(env, route, doc, shared) {
         if (!list) {
             try {
                 const res = await env.D1_DATABASE.prepare(
-                    "SELECT path, title FROM documents WHERE source_prefix = ? AND status = 'published' ORDER BY path"
+                    "SELECT path, title, sort FROM documents WHERE source_prefix = ? AND status = 'published' ORDER BY sort, path"
                 ).bind(abc).all();
                 list = (res && res.results) || [];
             } catch (e) { list = []; }
@@ -578,7 +596,7 @@ export async function renderDocIndex(env, route, dir, page) {
     try {
         const like = prefix.replace(/[\\%_]/g, '\\$&') + '%';
         const res = await env.D1_DATABASE.prepare(
-            "SELECT path, title, excerpt FROM documents WHERE source_prefix = ? AND status = 'published'"
+            "SELECT path, title, excerpt, sort FROM documents WHERE source_prefix = ? AND status = 'published'"
             + " AND path LIKE ? ESCAPE '\\' ORDER BY path"
         ).bind(abc, like).all();
         rows = (res && res.results) || [];

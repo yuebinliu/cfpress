@@ -270,6 +270,8 @@ async function ensureCoreSchema(env) {
     for (const sql of ddl) {
         try { await env.D1_DATABASE.prepare(sql).run(); } catch (e) { console.error('ensureCoreSchema:', e); }
     }
+    // 文档排序（frontmatter 的 order → documents.sort）：老库补列，列已存在时静默
+    try { await env.D1_DATABASE.prepare('ALTER TABLE documents ADD COLUMN sort INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { /* 已有该列 */ }
 }
 
 /** 默认缓存策略 + 批量任务配置（与 WP 插件默认值一致） */
@@ -1285,6 +1287,7 @@ function sanitizeMenu(list, depth) {
             "CREATE TABLE IF NOT EXISTS documents (id INTEGER PRIMARY KEY AUTOINCREMENT, source_prefix TEXT NOT NULL, path TEXT NOT NULL, format TEXT DEFAULT 'md', title TEXT DEFAULT '', excerpt TEXT DEFAULT '', status TEXT DEFAULT 'published', date TEXT DEFAULT '', updated_at TEXT DEFAULT '', UNIQUE(source_prefix, path))"
         ).run();
         await env.D1_DATABASE.prepare("CREATE INDEX IF NOT EXISTS idx_documents_prefix ON documents(source_prefix)").run();
+        try { await env.D1_DATABASE.prepare('ALTER TABLE documents ADD COLUMN sort INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { /* 已有该列 */ }
     } catch (e) { console.error('ensure documents table:', e); }
     // GET /api/documents?abc=<前缀>&page=&per=  列出某库文档（或全部）
     if (path === '/api/documents' && method === 'GET') {
