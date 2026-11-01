@@ -3029,20 +3029,37 @@ async function wpResolveTerms(db, type, input) {
     if (input === undefined || input === null) return null;
     const list = Array.isArray(input) ? input : (typeof input === 'string' ? String(input).split(',') : [input]);
     const rows = await db.prepare('SELECT rowid AS id, slug, name FROM taxonomies WHERE type = ?').bind(type).all();
-    const byId = {}, bySlug = {};
-    for (const t of (rows.results || [])) { byId[String(t.id)] = t; bySlug[t.slug] = t; }
+    const byId = {}, bySlug = {}, byName = {};
+    for (const t of (rows.results || [])) {
+        byId[String(t.id)] = t;
+        bySlug[String(t.slug)] = t;
+        // 中文分类/标签的 slug 是 URL 编码的（%e8%83%a1%e6%80%9d...），
+        // 客户端（Obsidian 等）传的往往是**显示名**或**解码后的 slug** ⇒ 两种索引都建一份，
+        // 否则按名字永远匹配不上，条目会被静默丢弃、回落成 Uncategorized。
+        let dec = '';
+        try { dec = decodeURIComponent(String(t.slug)); } catch (e) { dec = String(t.slug); }
+        if (dec && dec !== t.slug) bySlug[dec] = t;
+        if (t.name) byName[String(t.name).trim().toLowerCase()] = t;
+    }
     const out = [];
     for (const el of list) {
         if (el === undefined || el === null || el === '') continue;
         let hit = null;
         if (typeof el === 'object') {
             if (el.id !== undefined) hit = byId[String(el.id)];
-            else if (el.slug) hit = bySlug[String(el.slug)];
+            else if (el.slug) hit = bySlug[String(el.slug)] || byName[String(el.slug).trim().toLowerCase()];
         } else {
             const key = String(el).trim();
-            hit = byId[key] || bySlug[key];
+            hit = byId[key] || bySlug[key] || byName[key.toLowerCase()];
         }
         if (hit) out.push({ name: hit.name, slug: hit.slug });
+        // 找不到就**别丢**：原样传下去，由下游 syncTaxonomy 创建（它本来就是 INSERT ON CONFLICT）。
+        //   以前这里静默丢弃，导致 API 发布时写一个新分类 → 文章被塞进 Uncategorized。
+        else if (typeof el === 'string' || (el && (el.name || el.slug))) {
+            const nm = (typeof el === 'string' ? String(el) : String(el.name || el.slug || '')).trim();
+            if (!nm) continue;
+            out.push({ name: nm, slug: slugify(nm) || ('c' + Date.now().toString(36)) });
+        }
     }
     return out;
 }
