@@ -15,6 +15,7 @@ import { getCacheConfig } from './cacheconfig';
 import { r2KeyFromPath, r2UrlPath } from './r2key';
 import { getSidebarData } from './database';
 import { validateRoutePrefix, validateDocPath, sourceKey, outKey, renderDocIndex, renderDocument, extractDocTitle, extractDocExcerpt, DEFAULT_DOC_SHELL, P_PAGES } from './documents';
+import { purgeOrphanPages } from './maintenance';
 
 const ACCESS_TTL = 15 * 60;   // 15 min
 const REFRESH_TTL = 7 * 86400; // 7 d
@@ -2121,41 +2122,9 @@ function sanitizeMenu(list, depth) {
         if (authPayload.role !== 'admin') return json({ error: '无权限' }, 403);
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
-        const siteP = await getSiteContext(env);
-        const pat = siteP.storagePattern || '{slug}/index.html';
-        // 1) 当前结构下的「应有」key 集合
-        const rows = await db.prepare("SELECT * FROM posts WHERE status = 'published'").all();
-        const want = {};
-        (rows.results || []).forEach(function (r) { want[postStoragePath(r, pat)] = true; });
-        // 2) 扫描 R2 全部对象（分页），挑出「单页形状」且不在应有集合里的
-        const found = [];
-        let cursor = undefined;
-        do {
-            const page = await env.R2_BUCKET.list({ limit: 1000, cursor: cursor });
-            (page.objects || []).forEach(function (o) {
-                const k = String(o.key || '');
-                if (!/\/index\.html$/.test(k) && k !== 'index.html') return;   // 非单页形状
-                if (/^wp-content\//.test(k) || /^style\//.test(k) || /^hl\//.test(k)) return; // 资源线排除
-                if (!want[k]) found.push({ key: k, size: o.size || 0 });
-            });
-            cursor = page.truncated ? page.cursor : undefined;
-        } while (cursor);
-        // 3) 可选删除
-        const doDelete = !!body.delete;
-        let deleted = 0;
-        if (doDelete) {
-            for (const o of found) {
-                try { await env.R2_BUCKET.delete(o.key); deleted++; } catch (e) { /* 单个失败继续 */ }
-            }
-        }
-        return json({
-            ok: true, pattern: pat,
-            expected: Object.keys(want).length,
-            orphanCount: found.length,
-            orphans: doDelete ? [] : found.slice(0, 50),
-            truncated: (!doDelete && found.length > 50),
-            deleted: deleted,
-        });
+        // 扫描/删除逻辑在 maintenance.js 里，定时任务用的是同一份（口径必须一致）
+        const res = await purgeOrphanPages(env, { delete: !!body.delete });
+        return json(Object.assign({ ok: true }, res));
     }
 
     // ---- 模板管理（单页壳 / 列表条目；KV 存储，多套切换） ----
