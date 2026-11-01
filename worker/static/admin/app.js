@@ -5,6 +5,19 @@
   var LS_A = 'cfse_access';
   var LS_R = 'cfse_refresh';
 
+  // 功能开关（来自站点设置 features）：默认全开。关闭某项就隐藏入口 + 拦截路由，
+  // 具体接口由 Worker 侧拒绝（403），前端只负责不让人点进去。
+  var CFSE_FEATURES = { docs: true };
+  function applyFeatures(feat) {
+    if (feat && feat.docs !== undefined) CFSE_FEATURES.docs = (feat.docs !== false);
+    var a = document.querySelector('header nav a[data-nav="documents"]');
+    if (a) a.style.display = CFSE_FEATURES.docs ? '' : 'none';
+    if (!CFSE_FEATURES.docs && location.hash === '#documents') location.hash = '#posts';
+  }
+  function loadFeatures() {
+    api('/api/me').then(function (me) { applyFeatures(me && me.features); }).catch(function () { /* 拉不到就按默认全开 */ });
+  }
+
   function getA() { return localStorage.getItem(LS_A) || ''; }
   function setA(t) { localStorage.setItem(LS_A, t); }
   function getR() { return localStorage.getItem(LS_R) || ''; }
@@ -1507,6 +1520,9 @@
       '<label style="margin-top:10px;">文章单页布局</label>' +
       '<select id="s-layout"><option value="show">双列（显示侧边栏，默认）</option><option value="hide">单列（隐藏侧边栏，主内容占满）</option></select>' +
       '<p class="muted" style="margin:6px 0 0;">单列由 Worker 在<b>渲染单页时</b>注入一段 CSS（写进产出的 HTML，即最终形态）。已生成的静态单页需重建才会改变；切换配置不影响其它页面。</p>' +
+      '<label style="margin-top:10px;">文档库</label>' +
+      '<select id="s-docs"><option value="1">启用（默认）</option><option value="0">关闭</option></select>' +
+      '<p class="muted" style="margin:6px 0 0;">关闭后：<code>/docs/</code> 等文档地址返回 404，后台隐藏入口，站点地图不再输出文档。<b>数据不动</b>——原稿与成品都留在 R2/D1，改回「启用」即恢复。</p>' +
       '<label style="margin-top:10px;">head 自定义 HTML（注入每个页面 <code>&lt;/head&gt;</code> 前）</label>' +
       '<textarea id="s-head-extra" style="min-height:64px;font-family:monospace;" placeholder=\'&lt;meta name="google-adsense-account" content="ca-pub-…"&gt;\'></textarea>' +
       '<p class="muted" style="margin:6px 0 0;">放 AdSense 验证 meta、统计代码等任意片段（原样输出，约 8KB 上限）。列表页保存即时生效；<b>已生成的静态单页</b>在访问时自动注入，无需重建。</p>' +
@@ -1761,6 +1777,7 @@
       document.getElementById('s-banner').value = (d.site && d.site.banner) || '';
       document.getElementById('s-head-extra').value = (d.site && d.site.headExtra) || '';
       document.getElementById('s-layout').value = (d.site && d.site.layout && d.site.layout.singleSidebar) || 'show';
+      document.getElementById('s-docs').value = (d.site && d.site.features && d.site.features.docs === false) ? '0' : '1';
       socInput.value = socText((d.site && d.site.social) || []);
       var c = d.cache || {};
       document.getElementById('c-ttl-list').value = (c.ttl_list !== undefined ? c.ttl_list : 0);
@@ -1918,8 +1935,9 @@
       var name = document.getElementById('s-name').value.trim();
       var desc = document.getElementById('s-desc').value.trim();
       if (!name) { flash('flash-main', '站点名不能为空', 'err'); return; }
-      api('/api/settings', { method: 'PUT', body: { site: { name: name, description: desc, logo: document.getElementById('s-logo').value.trim(), banner: document.getElementById('s-banner').value.trim(), headExtra: document.getElementById('s-head-extra').value, layout: { singleSidebar: (document.getElementById('s-layout') || {}).value || 'show' } } } }).then(function () {
+      api('/api/settings', { method: 'PUT', body: { site: { name: name, description: desc, logo: document.getElementById('s-logo').value.trim(), banner: document.getElementById('s-banner').value.trim(), headExtra: document.getElementById('s-head-extra').value, layout: { singleSidebar: (document.getElementById('s-layout') || {}).value || 'show' }, features: { docs: (document.getElementById('s-docs') || {}).value !== '0' } } } }).then(function () {
         flash('flash-main', '站点信息已更新并清空缓存，列表页立即生效', 'ok');
+        applyFeatures({ docs: (document.getElementById('s-docs') || {}).value !== '0' });
         setWho();
       }).catch(function (err) { flash('flash-main', err.message, 'err'); });
     });
@@ -2785,6 +2803,8 @@
     var ALIAS = { taxonomies: 'tax', categories: 'tax', templates: 'tpl' };
     if (ALIAS[nav]) nav = ALIAS[nav];
     if (!NAVS[nav]) nav = 'posts';
+    // 文档库关掉后，即使手动敲 #documents 也退回文章列表
+    if (nav === 'documents' && !CFSE_FEATURES.docs) nav = 'posts';
     document.querySelectorAll('header nav a').forEach(function (a) {
       a.classList.toggle('active', a.getAttribute('data-nav') === nav);
     });
@@ -2882,7 +2902,7 @@
     flash('flash-main', '', null);
     flash('flash-login', '', null);
     var authed = needAuth();
-    if (authed) { setWho(); goNav(); return; }
+    if (authed) { setWho(); goNav(); loadFeatures(); return; }
     // 未登录：先判断是否已初始化，避免"登录框闪一下再跳初始化"
     var lc = document.getElementById('login-card');
     lc.classList.add('hidden');

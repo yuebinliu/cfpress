@@ -410,7 +410,11 @@ export async function handleRequest(request, env) {
         const baseKey = r2KeyFromPath(path);
         let file = null;
         if (baseKey && /\.html?$/i.test(baseKey)) {
-            file = await getFromR2(env.R2_BUCKET, P_PAGES + '/' + baseKey);
+            // _pages/ 只放文档成品。文档库关掉后这条直出必须一起堵 ——
+            // 否则 /docs/install.html 仍会命中 R2，绕过下面的路由开关，看起来"没关掉"。
+            const siteF = await getSiteContext(env);
+            const docsOn = !(siteF && siteF.features && siteF.features.docs === false);
+            if (docsOn) file = await getFromR2(env.R2_BUCKET, P_PAGES + '/' + baseKey);
         }
         if (!file) file = await getFromR2(env.R2_BUCKET, baseKey);
         if (file) {
@@ -493,7 +497,9 @@ export async function handleRequest(request, env) {
         if (looksDoc) {
             const siteCtx0 = await getSiteContext(env);
             const docRoutes = Array.isArray(siteCtx0.docRoutes) ? siteCtx0.docRoutes : [];
-            if (docRoutes.length) {
+            // 功能开关：关掉后即使 docRoutes 还留着也不匹配，让 /docs/... 落到后面的 404
+            const docsOn = !(siteCtx0.features && siteCtx0.features.docs === false);
+            if (docRoutes.length && docsOn) {
                 const dm = matchDocRoute(path, docRoutes);
             if (dm) {
                 if (dm.kind === 'index' && dm.route.docIndex) {
@@ -625,7 +631,11 @@ export async function handleRequest(request, env) {
             }
         } catch (e) { /* ignore */ }
         try {
-            const docs = await env.D1_DATABASE.prepare("SELECT source_prefix, path FROM documents WHERE status = 'published' LIMIT 500").all();
+            // 文档库关闭时不往外吐文档 URL（吐了等于让搜索引擎去抓一堆 404）
+            const docsOn = !(site && site.features && site.features.docs === false);
+            const docs = docsOn
+                ? await env.D1_DATABASE.prepare("SELECT source_prefix, path FROM documents WHERE status = 'published' LIMIT 500").all()
+                : { results: [] };
             const routesDoc = Array.isArray(site && site.docRoutes) ? site.docRoutes : [];
             for (const d of (docs.results || [])) {
                 const rt = routesDoc.filter(function (r) { return r && r.abc === d.source_prefix; })[0];

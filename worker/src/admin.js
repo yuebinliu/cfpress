@@ -1063,7 +1063,13 @@ export async function handleAdminRequest(request, env) {
     // GET /api/me
     if (path === '/api/me' && method === 'GET') {
         const row = await db.prepare('SELECT id, user_login, user_email, display_name, role FROM users WHERE id = ?').bind(authPayload.sub).first();
-        return json(row ? { id: row.id, username: row.user_login, email: row.user_email, displayName: row.display_name, role: row.role } : { error: 'not found' }, row ? 200 : 404);
+        // features 一并返回：后台启动时据此隐藏入口（文档库开关）
+        let feat = { docs: true };
+        try {
+            const s = await getSiteContext(env);
+            if (s && s.features) feat = s.features;
+        } catch (e) { /* 未初始化时按默认全开 */ }
+        return json(row ? { id: row.id, username: row.user_login, email: row.user_email, displayName: row.display_name, role: row.role, features: feat } : { error: 'not found' }, row ? 200 : 404);
     }
 
     // PUT /api/me（更新昵称 / 邮箱）
@@ -1129,6 +1135,8 @@ function sanitizeMenu(list, depth) {
                 headExtra: String(site.headExtra || ''),
                 // 单页布局：必须回传，否则后台下拉永远显示"双列"，实际值与界面不一致
                 layout: { singleSidebar: (site.layout && site.layout.singleSidebar === 'hide') ? 'hide' : 'show' },
+                // 功能开关：同样必须回传，否则后台开关会一直显示"开"
+                features: { docs: !(site.features && site.features.docs === false) },
             },
             cache: site.cache,
             comments: site.comments || { mode: 'off', embed: '', accept: 'off' },
@@ -1188,6 +1196,10 @@ function sanitizeMenu(list, depth) {
                 sitePatch.layout = {
                     singleSidebar: (String(body.site.layout.singleSidebar) === 'hide') ? 'hide' : 'show',
                 };
+            }
+            // 功能开关（features.docs）：只有显式传了才改，避免其它保存动作把它重置
+            if (body.site.features && typeof body.site.features === 'object' && body.site.features.docs !== undefined) {
+                sitePatch.features = { docs: body.site.features.docs !== false };
             }
             // head 自定义 HTML：只有显式传入才更新（截断到 8KB，防误贴超大内容）
             if (body.site.headExtra !== undefined) {
@@ -1281,6 +1293,13 @@ function sanitizeMenu(list, depth) {
     }
 
     // ---- 文档库（documents）----
+    // 功能开关：关闭时所有文档接口一律 403（前端可能残留请求，给个明确原因比 500 好排查）
+    if (path.indexOf('/api/documents') === 0) {
+        const siteF = await getSiteContext(env);
+        if (siteF && siteF.features && siteF.features.docs === false) {
+            return json({ error: '文档库已在「设置 → 功能开关」中关闭' }, 403);
+        }
+    }
     // 首次访问时确保 documents 表存在（幂等；线上库不重跑 setup 也能用）
     try {
         await env.D1_DATABASE.prepare(

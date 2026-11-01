@@ -138,6 +138,9 @@ export async function getSiteContext(env) {
                     if (parsed.layout && typeof parsed.layout === 'object') {
                         ctx.layout = { singleSidebar: String(parsed.layout.singleSidebar || 'show') };
                     }
+                    // 功能开关：features.docs 默认 true（老站不写这个字段也照常开）。
+                    // 关掉后：文档路由不匹配、_pages/ 成品不再直出、/api/documents/* 拒绝、后台导航隐藏。
+                    ctx.features = { docs: !(parsed.features && parsed.features.docs === false) };
                     // head 自定义 HTML（{{HEAD_EXTRA}} / 渲染出口自动注入 </head> 前）：
                     // 管理员在 Worker 后台填的任意 head 片段（AdSense 验证 meta / 统计 / 字体…），原样输出
                     if (parsed.headExtra !== undefined) { ctx.headExtra = String(parsed.headExtra || ''); }
