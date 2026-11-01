@@ -794,7 +794,7 @@
     function loadLib(cursor) {
       var list = document.getElementById('lib-list');
       api('/api/media' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')).then(function (d) {
-        var html = (d.items || []).map(function (it) {
+        var html = (d.items || []).filter(function (it) { return isMediaImg(it.key); }).map(function (it) {
           var alt = it.key.split('/').pop().replace(/\.[a-z0-9]+$/, '');
           return '<div style="border:1px solid #eee;border-radius:6px;padding:6px;">' +
             '<img src="' + esc(it.url) + '" style="width:100%;height:90px;object-fit:cover;border-radius:4px;" alt="">' +
@@ -1015,6 +1015,14 @@
     if (!s) return '—';
     try { return new Date(s).toISOString().slice(0, 16).replace('T', ' '); } catch (e) { return s.slice(0, 16); }
   }
+  var MEDIA_IMG_RE = /\.(jpg|jpeg|png|gif|webp|avif|svg)$/i;
+  function isMediaImg(key) { return MEDIA_IMG_RE.test(String(key || '')); }
+  function mediaExt(key) {
+    var s = String(key || '').split('/').pop();
+    var i = s.lastIndexOf('.');
+    return i > 0 ? s.slice(i + 1).toUpperCase() : 'FILE';
+  }
+
   function mediaFiltered() {
     var q = mstate.q.toLowerCase();
     var arr = mstate.items.filter(function (it) {
@@ -1054,10 +1062,10 @@
 
   function renderMedia() {
     var sec = document.getElementById('view-media');
-    sec.innerHTML = '<h1>媒体库</h1>' + '<style>' + ".mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;}.mcard{position:relative;border:1px solid #e3e5e8;border-radius:10px;overflow:hidden;background:#fff;}.mcard img{display:block;width:100%;height:130px;object-fit:cover;background:#f6f7f9;cursor:zoom-in;}.mcard .mname{font-size:12px;color:#555;padding:7px 9px 2px;word-break:break-all;line-height:1.35;}.mcard .mmeta{font-size:11px;color:#98a1ab;padding:0 9px 8px;display:flex;justify-content:space-between;gap:6px;}.mcard .mops{display:flex;gap:4px;padding:0 8px 9px;}.mcard .mops .btn{padding:3px 7px;font-size:11.5px;}.mcard .mchk{position:absolute;left:8px;top:8px;width:18px;height:18px;z-index:2;cursor:pointer;background:#fff;border-radius:3px;box-shadow:0 0 0 1px rgba(0,0,0,.18);}.mcard.on{outline:2px solid #1d4ed8;outline-offset:-2px;}.mlight{position:fixed;inset:0;background:rgba(12,16,22,.82);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:24px;}.mlight img{max-width:92vw;max-height:80vh;border-radius:6px;background:#fff;}.mlight .mcap{color:#e8ecf1;font-size:13px;word-break:break-all;text-align:center;max-width:90vw;}.mlight .mclose{color:#fff;border:1px solid rgba(255,255,255,.5);background:transparent;border-radius:6px;padding:6px 16px;cursor:pointer;}.mbox{transition:background .15s;}.mbox.drag{background:#eef4ff;outline:2px dashed #9db8e8;}" + '</style>' +
+    sec.innerHTML = '<h1>媒体库</h1>' + '<style>' + ".mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;}.mcard{position:relative;border:1px solid #e3e5e8;border-radius:10px;overflow:hidden;background:#fff;}.mcard img{display:block;width:100%;height:130px;object-fit:cover;background:#f6f7f9;cursor:zoom-in;}.mcard .mname{font-size:12px;color:#555;padding:7px 9px 2px;word-break:break-all;line-height:1.35;}.mcard .mmeta{font-size:11px;color:#98a1ab;padding:0 9px 8px;display:flex;justify-content:space-between;gap:6px;}.mcard .mops{display:flex;gap:4px;padding:0 8px 9px;}.mcard .mops .btn{padding:3px 7px;font-size:11.5px;}.mcard .mchk{position:absolute;left:8px;top:8px;width:18px;height:18px;z-index:2;cursor:pointer;background:#fff;border-radius:3px;box-shadow:0 0 0 1px rgba(0,0,0,.18);}.mcard.on{outline:2px solid #1d4ed8;outline-offset:-2px;}.mlight{position:fixed;inset:0;background:rgba(12,16,22,.82);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:24px;}.mlight img{max-width:92vw;max-height:80vh;border-radius:6px;background:#fff;}.mlight .mcap{color:#e8ecf1;font-size:13px;word-break:break-all;text-align:center;max-width:90vw;}.mlight .mclose{color:#fff;border:1px solid rgba(255,255,255,.5);background:transparent;border-radius:6px;padding:6px 16px;cursor:pointer;}.mbox{transition:background .15s;}.mbox.drag{background:#eef4ff;outline:2px dashed #9db8e8;}.mcard .mfile{display:flex;align-items:center;justify-content:center;height:130px;background:#f6f7f9;color:#8b939d;font-weight:700;font-size:20px;letter-spacing:1.5px;}.mcard .mfile:hover{background:#eef4ff;}" + '</style>' +
             '<div class="toolbar" style="flex-wrap:wrap;">' +
-      '<button class="btn btn-primary" id="media-up">上传图片</button>' +
-      '<input type="file" id="media-up-file" accept="image/*" multiple hidden>' +
+      '<button class="btn btn-primary" id="media-up">上传文件</button>' +
+      '<input type="file" id="media-up-file" accept="image/*,.pdf,.zip,.rar,.7z,.tar,.gz,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.epub,.mobi,.mp3,.m4a,.wav,.ogg,.mp4,.webm,.apk" multiple hidden>' +
       '<input type="text" id="media-q" name="media-filter" placeholder="筛选文件名…" autocomplete="one-time-code" style="max-width:200px;">' +
       '<select id="media-sort">' +
       '<option value="time">时间：新→旧</option><option value="time-asc">时间：旧→新</option>' +
@@ -1153,14 +1161,16 @@
     var box = document.getElementById('media-box');
     var arr = mediaFiltered();
     if (!arr.length) {
-      box.innerHTML = '<p class="muted" style="margin:8px 0;">' + (mstate.items.length ? '没有匹配的文件' : '暂无媒体（可点「📤 上传图片」或把图片拖进来）') + '</p>';
+      box.innerHTML = '<p class="muted" style="margin:8px 0;">' + (mstate.items.length ? '没有匹配的文件' : '暂无媒体（可点「上传文件」或把文件拖进来）') + '</p>';
       mediaSyncBar();
       return;
     }
     if (mstate.view === 'table') {
       var rows = arr.map(function (it) {
         return '<tr><td><input type="checkbox" data-mdel="' + esc(it.key) + '" value="' + esc(it.key) + '"></td>' +
-          '<td><img src="' + esc(it.url) + '" loading="lazy" data-zoom="' + esc(it.url) + '" style="height:42px;max-width:80px;object-fit:cover;border-radius:3px;cursor:zoom-in;" alt=""></td>' +
+          '<td>' + (isMediaImg(it.key)
+            ? '<img src="' + esc(it.url) + '" loading="lazy" data-zoom="' + esc(it.url) + '" style="height:42px;max-width:80px;object-fit:cover;border-radius:3px;cursor:zoom-in;" alt="">'
+            : '<span class="muted" style="font-size:11px;font-weight:700;">' + esc(mediaExt(it.key)) + '</span>') + '</td>' +
           '<td class="muted">' + esc(it.key.split('/').pop()) + '</td>' +
           '<td class="muted">' + fmtSize(it.size) + '</td>' +
           '<td class="muted">' + fmtTime(it.uploaded) + '</td>' +
@@ -1174,7 +1184,9 @@
         var name = it.key.split('/').pop();
         return '<div class="mcard">' +
           '<input type="checkbox" class="mchk" data-mdel="' + esc(it.key) + '" value="' + esc(it.key) + '" title="选中">' +
-          '<img src="' + esc(it.url) + '" loading="lazy" data-zoom="' + esc(it.url) + '" alt="' + esc(name) + '">' +
+          (isMediaImg(it.key)
+            ? '<img src="' + esc(it.url) + '" loading="lazy" data-zoom="' + esc(it.url) + '" alt="' + esc(name) + '">'
+            : '<div class="mfile">' + esc(mediaExt(it.key)) + '</div>') +
           '<div class="mname" title="' + esc(it.key) + '">' + esc(name) + '</div>' +
           '<div class="mmeta"><span>' + fmtSize(it.size) + '</span><span>' + fmtTime(it.uploaded).slice(0, 10) + '</span></div>' +
           '<div class="mops"><button class="btn btn-sm" data-copy="' + esc(it.url) + '">复制URL</button>' +

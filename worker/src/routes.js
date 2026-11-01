@@ -404,7 +404,7 @@ export async function handleRequest(request, env) {
 
     // 静态资源（图片/css/js/字体/文档等）
     //   注意：未命中时**不直接 404**，而是继续往下匹配（可能是 slug 正好带后缀，或显式 index.html）
-    if (!skipStaticForPage && path.match(/\.(css|js|png|jpg|jpeg|gif|svg|webp|avif|ico|woff2?|ttf|eot|html?|xml|txt|json|map|webmanifest|pdf)$/)) {
+    if (!skipStaticForPage && path.match(/\.(css|js|png|jpg|jpeg|gif|svg|webp|avif|ico|woff2?|ttf|eot|html?|xml|txt|json|map|webmanifest|pdf|zip|rar|7z|tar|gz|docx?|xlsx?|pptx?|csv|epub|mobi|mp3|m4a|wav|ogg|mp4|webm|apk)$/i)) {
         // 文档成品在 _pages/ 下（源/成品分家）；HTML 先探这里，再回退到原路径
         // （文章单页仍在 {slug}/index.html，wp-content 静态资源也走原路径）
         const baseKey = r2KeyFromPath(path);

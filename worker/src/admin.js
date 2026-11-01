@@ -2518,24 +2518,55 @@ function sanitizeMenu(list, depth) {
         try { form = await request.formData(); } catch (e) { return json({ error: '无效表单' }, 400); }
         const file = form.get('file');
         if (!file || typeof file === 'string') return json({ error: '缺少文件' }, 400);
-        if (file.size > 10 * 1024 * 1024) return json({ error: '文件不能超过 10MB' }, 413);
         const name = String(file.name || '').toLowerCase();
         const ext = name.includes('.') ? name.split('.').pop() : '';
-        const allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
-        if (!allowed.includes(ext)) return json({ error: '仅支持 jpg/png/gif/webp' }, 400);
-        const contentType = file.type || ('image/' + (ext === 'jpg' ? 'jpeg' : ext));
+        // 图片：仍走魔数校验，限制 10MB（图片再大就该压缩了）
+        const IMG_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+        // 附件：文章里要挂下载 / 播放的常见格式（zip 是插件、脚本分发的刚需）
+        // 注意：**不收 svg / html / js** —— 同源静态文件，等于给站开一个存储型 XSS 的口子。
+        const FILE_EXT = ['pdf', 'zip', 'rar', '7z', 'tar', 'gz', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+            'csv', 'epub', 'mobi', 'mp3', 'm4a', 'wav', 'ogg', 'mp4', 'webm', 'apk'];
+        const isImg = IMG_EXT.indexOf(ext) !== -1;
+        if (!isImg && FILE_EXT.indexOf(ext) === -1) {
+            return json({ error: '不支持的文件类型：' + (ext ? '.' + ext : '无扩展名') + '（图片：' + IMG_EXT.join('/') + '；附件：' + FILE_EXT.join('/') + '）' }, 400);
+        }
+        if (file.size > (isImg ? 10 : 50) * 1024 * 1024) {
+            return json({ error: '文件不能超过 ' + (isImg ? '10MB' : '50MB') }, 413);
+        }
+        // 附件按扩展名给 MIME：mp4/mp3 若落成 octet-stream，浏览器 <video>/<audio> 会拒播。
+        const FILE_MIME = {
+            pdf: 'application/pdf', zip: 'application/zip', rar: 'application/vnd.rar',
+            '7z': 'application/x-7z-compressed', tar: 'application/x-tar', gz: 'application/gzip',
+            doc: 'application/msword',
+            docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            xls: 'application/vnd.ms-excel',
+            xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ppt: 'application/vnd.ms-powerpoint',
+            pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            csv: 'text/csv; charset=utf-8', epub: 'application/epub+zip', mobi: 'application/x-mobipocket-ebook',
+            mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg',
+            mp4: 'video/mp4', webm: 'video/webm', apk: 'application/vnd.android.package-archive',
+        };
+        // 浏览器/curl 对未知类型常直接报 application/octet-stream，那种值等于没报 —— 用扩展名兜底。
+        const declared = String(file.type || '');
+        const contentType = (declared && declared !== 'application/octet-stream')
+            ? declared
+            : (isImg ? ('image/' + (ext === 'jpg' ? 'jpeg' : ext)) : (FILE_MIME[ext] || 'application/octet-stream'));
         const safeBase = name.split('.').slice(0, -1).join('.').replace(/[\/\\:*?"<>|\x00-\x1f]+/g, '-').slice(0, 60) || 'img';
         // 存储 key 用中文原文（与 R2/S3 的解码语义一致）；返回给客户端的 URL 再逐段编码
         const asciiBase = safeBase;
         const buf = await file.arrayBuffer();
-        // 魔数嗅探：防止伪装扩展名上传非图片（sniff 前若干字节）
-        const head = new Uint8Array(buf, 0, 12);
-        const sig = function () { let s = ''; for (let i = 0; i < head.length; i++) s += String.fromCharCode(head[i]); return s; }();
-        const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4E && head[3] === 0x47;
-        const isJpeg = head[0] === 0xFF && head[1] === 0xD8 && head[2] === 0xFF;
-        const isGif = sig.slice(0, 4) === 'GIF8';
-        const isWebp = sig.slice(0, 4) === 'RIFF' && sig.slice(8, 12) === 'WEBP';
-        if (!isPng && !isJpeg && !isGif && !isWebp) return json({ error: '文件内容不是有效图片' }, 400);
+        // 魔数嗅探：防止伪装成图片的其它内容。附件（zip/pdf/…）不做嗅探 ——
+        // 它们本来就不是同源可执行的格式，MIME 由扩展名决定；真正要防的是 svg/html/js，已在白名单外。
+        if (isImg) {
+            const head = new Uint8Array(buf, 0, 12);
+            const sig = function () { let s = ''; for (let i = 0; i < head.length; i++) s += String.fromCharCode(head[i]); return s; }();
+            const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4E && head[3] === 0x47;
+            const isJpeg = head[0] === 0xFF && head[1] === 0xD8 && head[2] === 0xFF;
+            const isGif = sig.slice(0, 4) === 'GIF8';
+            const isWebp = sig.slice(0, 4) === 'RIFF' && sig.slice(8, 12) === 'WEBP';
+            if (!isPng && !isJpeg && !isGif && !isWebp) return json({ error: '文件内容不是有效图片' }, 400);
+        }
         // 内容寻址：key = <内容 SHA-256 前 12 位>/<原文件名>.<ext>
         // 同一份内容再传一次 → 同一个 key → 直接复用，不再产生第二个副本。
         const digest = await crypto.subtle.digest('SHA-256', buf);
