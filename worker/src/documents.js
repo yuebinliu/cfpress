@@ -436,6 +436,11 @@ export async function renderDocument(env, route, doc, shared) {
         bodyHtml = String(raw);
     }
 
+    // 2.1 去掉正文开头重复的 H1
+    // 壳里已经渲染了 <h1 class="doc-title">{{DOC_TITLE}}</h1>，原稿再写一行 `# 标题` 就是两个 h1
+    // （观感重复 + 对搜索引擎是两个一级标题）。只砍开头的这一个，正文里的小标题不动。
+    bodyHtml = bodyHtml.replace(/^\s*<h1\b[^>]*>[\s\S]{0,400}?<\/h1>\s*/, '');
+
     // 3. 内链改写
     bodyHtml = rewriteDocLinks(bodyHtml, abc, xyz, path);
 
