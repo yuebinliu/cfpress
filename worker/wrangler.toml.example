@@ -39,3 +39,7 @@ id = "REPLACE_WITH_YOUR_KV_ID"
 [observability]
 enabled = true
 head_sampling_rate = 0.1
+
+# 每天 03:00 UTC 自动清理孤儿单页（转草稿/改 slug/删文章后 R2 里的残留）
+[triggers]
+crons = ["0 3 * * *"]
