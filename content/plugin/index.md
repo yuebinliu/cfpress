@@ -9,6 +9,7 @@ Two plugins exist for two habits people already have. Pick the one that matches 
 | **[WordPress plugin](/plugin/overview.html)** | You already run a WordPress site and want to keep its editor | The Worker's `/d1-batch`, `/upload` and `/delete` endpoints |
 | ↳ [Installing it](/plugin/wordpress-plugin.html) | You are ready to connect the two | — |
 | ↳ [How the sync behaves](/plugin/wordpress-plugin-sync.html) | You are about to rely on it for real content | — |
+| ↳ [Releases](/plugin/releases.html) | You need the zip, or you are pinned to a version | — |
 | **[Obsidian publisher](/plugin/obsidian-plugin.html)** | You write Markdown in Obsidian and want it online in one click | The WordPress-compatible write API, `/wp-json/wp/v2/posts` |
 
 ## How they differ

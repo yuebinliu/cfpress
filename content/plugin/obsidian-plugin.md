@@ -1,6 +1,6 @@
 ---
 title: Obsidian publisher
-order: 4
+order: 5
 ---
 
 # Obsidian publisher
