@@ -1,6 +1,6 @@
 ---
 title: CF Press Sync (WordPress)
-order: 1
+order: 2
 ---
 
 # CF Press Sync

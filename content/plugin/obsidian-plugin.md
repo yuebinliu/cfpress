@@ -1,6 +1,6 @@
 ---
 title: CF Press Publisher (Obsidian)
-order: 2
+order: 3
 ---
 
 # CF Press Publisher
