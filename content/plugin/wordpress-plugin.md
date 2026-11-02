@@ -8,7 +8,7 @@ order: 2
 **CF Press Sync** is a free WordPress plugin that connects an existing WordPress site to a CF Press site. Posts, media, categories and comments move both ways, and it can deploy the CMS for you if you do not have one yet.
 
 - **Needs:** WordPress 5.5+, PHP 7.0+ with cURL, and a CF Press Worker (or let the plugin create one).
-- **Get it:** download the zip from the project's releases page, then **Plugins → Add New → Upload Plugin**.
+- **Get it:** [download cf-press-sync-2.2.0.zip](/wp-content/uploads/6b96da7af8ba/cf-press-sync-2.2.0.zip) (130 KB), then **Plugins → Add New → Upload Plugin**. Updating later means uploading a newer zip over it — never deleting the plugin, see the caveats below.
 - **Not sure this is the right path?** [Read why it exists first](/plugin/overview.html) — it is two minutes and covers the trade-offs.
 
 It does three jobs:
