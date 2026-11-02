@@ -8,6 +8,7 @@ worker/.wrangler/
 
 # ---- 通用默认配置入库（Deploy to Cloudflare 按钮 / 新克隆读取）；真实部署配置用 prod 文件，不入库 ----
 worker/wrangler.prod.toml
+worker/wrangler.yuebin.toml
 
 # ---- 本机 harness / 工具链配置（含本机绝对路径与服务器凭据，不入库） ----
 reasonix.toml
