@@ -85,7 +85,8 @@ export const DEFAULT_DOC_SHELL = `<!DOCTYPE html>
 .doc-body p{margin:0 0 1.1em}
 .doc-body ul,.doc-body ol{margin:0 0 1.1em;padding-left:1.35em}
 .doc-body li{margin:.35em 0}
-.doc-body a{color:var(--accent-ink,#6f5233);border-bottom:1px solid var(--line-2,#d8cfc0)}
+.doc-body a{color:var(--accent-ink,#6f5233);border-bottom:1px solid var(--accent,#8a6a43)}
+.doc-body a:hover{border-bottom-width:2px}
 .doc-body a:hover{border-bottom-color:var(--accent,#8a6a43)}
 .doc-body strong{color:var(--ink,#17140f);font-weight:600}
 .doc-body code{font-family:var(--mono,monospace);font-size:.88em;padding:.12em .4em;border:1px solid var(--line,#e8e2d8);border-radius:5px;background:var(--surface-2,#f4f0e9);color:var(--ink,#17140f)}

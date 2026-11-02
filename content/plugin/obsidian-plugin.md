@@ -1,27 +1,22 @@
 ---
-title: Obsidian publisher
-order: 5
+title: CF Press Publisher (Obsidian)
+order: 2
 ---
 
-# Obsidian publisher
+# CF Press Publisher
 
-**MD Publisher** — a small Obsidian plugin that publishes the note you are looking at. Not affiliated with the CMS; it just speaks its write API.
+[Download 1.3.0](/releases/obsidian/latest.zip) · 4.7 KB · Obsidian 1.0+
 
-Nothing is mirrored. The Markdown you write in Obsidian becomes the post, and Obsidian is only the editor.
+Publishes the note in front of you to your CF Press site. Markdown goes in as written, `![[image]]` attachments are uploaded, and the returned id is written back so the next publish updates instead of duplicating.
 
 ## Install
 
-The plugin is not in Obsidian's community store, so it is a manual install:
+1. Download the zip and unzip it into `<your vault>/.obsidian/plugins/cfpress-publisher/` — the folder must end up containing `main.js` and `manifest.json`.
+2. In Obsidian: **Settings → Community plugins → Installed plugins** → enable **CF Press Publisher**.
 
-1. Download `md-publisher-1.2.0.zip`.
-2. Unzip it into `<your vault>/.obsidian/plugins/md-publisher/` — the folder must contain `main.js` and `manifest.json`.
-3. In Obsidian: **Settings → Community plugins → Installed plugins**, enable **MD Publisher**.
-
-If the folder does not exist, create it. Obsidian only reads plugins from that directory.
+It is not in the community store yet, so this is a manual install. Create the folder if it does not exist.
 
 ## Settings
-
-Open **Settings → MD Publisher** and fill in three things:
 
 | Field | Value |
 |---|---|
@@ -29,27 +24,15 @@ Open **Settings → MD Publisher** and fill in three things:
 | **Username** | your CMS login name |
 | **Application password** | created in the CMS under **Users → 🔑 App passwords** |
 
-Authentication is HTTP Basic, exactly like WordPress. The CMS only accepts application passwords on `/wp-json/*` — your normal login password will not work.
+Authentication is HTTP Basic. The CMS only accepts application passwords on `/wp-json/*`, so your normal login password will not work.
 
-Two optional switches:
+## Publish
 
-- **Upload images** — push local attachments referenced as `![[image.png]]` to the CMS media library and replace them with the returned URL.
-- **Image prefix** — fallback used when an attachment cannot be uploaded, e.g. `https://your-site/wp-content/uploads`.
-
-## Publishing
-
-Put the cursor in a note, open the command palette, run **发布当前笔记 (Markdown 原文)**.
-
-The plugin sends the raw Markdown, not the rendered HTML, with `content_format: md` — so the CMS stores Markdown and renders it with the site's own theme. Code blocks, tables and headings all match what you see in Obsidian.
-
-## Frontmatter
-
-Everything is optional except the title, which falls back to the file name.
+Command palette → **发布当前笔记**. Frontmatter is optional:
 
 ```yaml
 ---
 title: Where it should be
-slug: where-it-should-be
 status: publish        # default is draft
 categories: [tech]
 tags: [obsidian, workflow]
@@ -57,12 +40,6 @@ wp_id: 179354571311647
 ---
 ```
 
-- **status** — `draft` unless you say otherwise. That default is deliberate: a mis-click should not publish.
-- **categories / tags** — names or slugs. A term that does not exist yet is created on the fly, so `categories: [tech]` works on a fresh site.
-- **wp_id** — written back automatically after the first publish. That is what makes the second publish an update instead of a duplicate.
-
-## One thing to watch
-
-If you delete `wp_id` from the frontmatter (or copy a note that has one), the next publish creates a **new** post instead of updating. Check the frontmatter before re-publishing an old note.
-
-Next: [Write API reference](/docs/reference/api.html).
+- **status** — `draft` unless you say otherwise.
+- **categories / tags** — names or slugs; a term that does not exist yet is created on the fly.
+- **wp_id** — filled in automatically after the first publish. Keep it, or the next publish creates a duplicate.
