@@ -5,7 +5,11 @@ order: 2
 
 # Installing the plugin
 
-**CFSE Sync for WordPress** connects an existing WordPress install to a CF Press Worker. It is a companion, not a dependency — if you are starting fresh, the CMS alone is the whole product and you can skip this section.
+**CF Press Sync** is a free WordPress plugin that connects an existing WordPress site to a CF Press site. Posts, media, categories and comments move both ways, and it can deploy the CMS for you if you do not have one yet.
+
+- **Needs:** WordPress 5.5+, PHP 7.0+ with cURL, and a CF Press Worker (or let the plugin create one).
+- **Get it:** download the zip from the project's releases page, then **Plugins → Add New → Upload Plugin**.
+- **Not sure this is the right path?** [Read why it exists first](/plugin/overview.html) — it is two minutes and covers the trade-offs.
 
 It does three jobs:
 
@@ -19,7 +23,7 @@ It does three jobs:
 
 ### 1. Pick the path that fits
 
-**If CF Press is not deployed yet**, the plugin can do it for you: **Settings → CFSE Sync → 下载发行包**, then **部署到 Cloudflare**.
+**If CF Press is not deployed yet**, the plugin can do it for you: **Settings → CF Press Sync → 下载发行包**, then **部署到 Cloudflare**.
 
 That second button runs `wrangler deploy` from PHP on your server. It needs three things: PHP `exec` not disabled, `wrangler` installed on the host, and `wrangler login` already done for that user. On ordinary shared hosting those are not available — in that case deploy from your own machine and come back to step 2.
 
@@ -42,7 +46,7 @@ WordPress admin → **Plugins → Add New → Upload Plugin** → choose the zip
 
 ### 4. Fill in the settings
 
-**Settings → CFSE Sync** (the menu label is Chinese: 「CFSE 同步」):
+**Settings → CF Press Sync** (the menu label is Chinese: 「CF Press 同步」):
 
 - **站点地址（Worker 域名）** — the site's public address, e.g. `https://example.com`. No trailing slash, no `/admin`.
 - **Auth Key** — exactly what you gave `AUTH_KEY_SECRET`.

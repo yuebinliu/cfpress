@@ -63,6 +63,8 @@ function cfseParseTaxo(raw) {
 
 // 文章绝对 URL（站点上下文 site.url + site.storagePattern）
 function cfsePostUrl(post, site) {
+    // 搜索结果里混排的文档库条目自带成品地址（/docs/xxx.html 这种），不走 permalink 模式
+    if (post && post._url) return String(post._url);
     let p = (site && site.storagePattern) || '';
     const d = String(post.date || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
     // {category}：取该文章第一个分类的 slug（posts.categories 是 JSON [{name,slug}]）
@@ -283,6 +285,8 @@ function cfseRenderItem(itemTpl, post, site) {
     // 同时支持 {{COMMENT_COUNT}} / {{COMMENT_COUNT_TEXT}}（抓取端已占位化的新骨架）。
     const cc = Number(post.comment_count || 0);
     const ccText = cc > 0 ? (cc + (cc === 1 ? ' Comment' : ' Comments')) : 'No Comments';
+    // 没有评论（以及文档库条目）就别渲染整块 —— 列表里满屏 "0 comments" 是噪音
+    h = cfseIfBlock(h, 'COMMENTS', cc > 0 && !post._doc);
     h = cfseReplace(h, '{{COMMENT_COUNT}}', String(cc));
     h = cfseReplace(h, '{{COMMENT_COUNT_TEXT}}', ccText);
     h = h.replace(/(#comments["'][^>]*>)(?:\d+\s*Comments?|No Comments)/g, '$1' + ccText);

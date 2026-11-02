@@ -19,7 +19,7 @@ import { handleStylePreview } from './preview';
 import { handleAdminRequest, handleWpV2, renderSinglePageOnDemand } from './admin';
 import { createComment, commentRateAllowed, injectComments } from './comments';
 import { getSiteContext, clearSiteCtxMemo } from './site';
-import { matchDocRoute, renderDocument, renderDocIndex, outKey, outUrl, P_PAGES } from './documents';
+import { matchDocRoute, renderDocument, renderDocIndex, outKey, outUrl, searchDocuments, P_PAGES } from './documents';
 import { getCacheConfig } from './cacheconfig';
 import { mdToHtml } from './md';
 
@@ -688,12 +688,23 @@ export async function handleRequest(request, env) {
         const site = await getSiteContext(env);
         const perPage = perPageOf(site);
         const data = await searchPosts(env.D1_DATABASE, q, searchPage, perPage);
+        // 文档库也要能被搜到 —— 读者不会区分「文章」和「文档」，
+        // 否则在站内搜 "install" 会找不到 /docs/install.html，文档等于藏起来了。
+        // 文档只并进第 1 页（总量仍计入 total，保证底部分页数不会跳）。
+        let docTotal = 0;
+        const docsEnabled = !(site.features && site.features.docs === false);
+        if (docsEnabled) {
+            const docRes = await searchDocuments(env, site, q, searchPage === 1 ? 10 : 0);
+            docTotal = docRes.total;
+            if (docRes.items.length) data.posts = (data.posts || []).concat(docRes.items);
+        }
+        const totalAll = Number(data.total || 0) + docTotal;
         await attachCommentCounts(env, data);
         const sidebar = await getSidebar(env);
-        const emptyHtml = data.total === 0
+        const emptyHtml = totalAll === 0
             ? '<div class="entry-content" style="padding:20px 0;"><p>没有找到与 “' + htmlEsc(q) + '” 相关的文章，试试其它关键词。</p></div>'
             : '';
-        const html = renderHomepage(data, searchPage, data.total, {
+        const html = renderHomepage(data, searchPage, totalAll, {
             baseUrl: '/',
             sidebar: sidebar,
             sidebarTpl: await getActiveSidebarTpl(env),

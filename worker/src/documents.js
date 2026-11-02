@@ -511,6 +511,17 @@ export async function renderDocument(env, route, doc, shared) {
     DOC_KEYS.forEach(function (k, i) { h = h.split('\u0000cfseDoc' + i + '\u0000').join(repVal(k)); });
     // headExtra 不在这里注入：成品保持纯净，改由访问时（routes.js 静态分支）用 HTMLRewriter
     // 统一注入 —— 避免"渲染注入一次 + 访问再注入一次"的重复，也避免每次回源全量解码。
+    // 「无导航」模式（docNav !== sidebar）：壳里的 <aside class="doc-side-col"> 是无条件输出的，
+    // 不处理就会留一条 218px 空列 + 一个孤零零的 "Contents"，正文还被挤在中间。
+    // 只注入两行 CSS，不动壳结构 —— 自定义壳也能吃到效果。
+    if (docNav !== "sidebar") {
+        const navCss = "<style id=\"cfse-docnav\">"
+            + ".doc-side-col{display:none!important}"
+            + ".doc-main{max-width:none!important;flex:1 1 auto}"
+            + "</style>";
+        const hi = h.indexOf("</head>");
+        h = (hi >= 0) ? (h.slice(0, hi) + navCss + h.slice(hi)) : (navCss + h);
+    }
     return h;
 }
 
@@ -760,4 +771,150 @@ export function matchDocRoute(path, routes) {
         }
     }
     return null;
+}
+
+/**
+ * 文档正文兜底搜索。
+ *
+ * documents 表只有 title/excerpt/path，没有全文 —— 搜 "frontmatter" 这种只出现在正文里的词会空手。
+ * 文档库体量小（十几到几十篇），所以只在 D1/title 零命中时才扫一遍原稿：一次 list + 最多 40 次读，
+ * 命中后回查一下标题。常规搜索走不到这里。
+ */
+async function searchDocSources(env, keyword, limit) {
+    const want = String(keyword).toLowerCase();
+    const keys = [];
+    let cursor;
+    do {
+        const page = await env.R2_BUCKET.list({ prefix: '_src/', limit: 500, cursor: cursor });
+        (page.objects || []).forEach(function (obj) {
+            const k = String(obj.key || '');
+            if (/\.(md|markdown|html?)$/i.test(k)) keys.push(k);
+        });
+        cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor && keys.length < 200);
+
+    const hits = [];
+    for (const key of keys.slice(0, 40)) {
+        let txt = '';
+        try {
+            const obj = await env.R2_BUCKET.get(key);
+            if (!obj) continue;
+            txt = await obj.text();
+        } catch (e) { continue; }
+        const at = txt.toLowerCase().indexOf(want);
+        if (at < 0) continue;
+        const rest = key.slice(5);            // 去掉 '_src/'
+        const slash = rest.indexOf('/');
+        if (slash <= 0) continue;
+        // 摘要取命中位置附近，让读者知道"为什么这条相关"
+        const from = Math.max(0, at - 60);
+        const snippet = txt.slice(from, at + 120)
+            .replace(/^---[\s\S]*?---\s*/, '')
+            .replace(/[#>*`\[\]]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        hits.push({ prefix: rest.slice(0, slash), path: rest.slice(slash + 1), snippet: snippet });
+        if (hits.length >= limit) break;
+    }
+    if (!hits.length) return [];
+
+    // 回查标题/日期：原稿 frontmatter 里的标题比文件名准
+    const meta = {};
+    try {
+        const rows = await env.D1_DATABASE.prepare(
+            "SELECT source_prefix, path, title, date FROM documents WHERE status = 'published'"
+        ).all();
+        (rows.results || []).forEach(function (d) { meta[d.source_prefix + '/' + d.path] = d; });
+    } catch (e) { /* 回查失败就用文件名 */ }
+    return hits.map(function (h) {
+        const m = meta[h.prefix + '/' + h.path] || {};
+        return {
+            prefix: h.prefix,
+            path: h.path,
+            snippet: h.snippet,
+            title: m.title || h.path,
+            date: m.date || '',
+        };
+    });
+}
+
+// ============================================================
+// 文档库站内搜索
+// ============================================================
+
+/**
+ * 读者不会区分「文章」和「文档」，顶部搜索框只查 posts 就会出现
+ * 「搜 install 找不到 /docs/install.html」这种荒诞结果。
+ *
+ * 返回的对象形状刻意与 posts 行兼容（含 _url / comment_count 等字段），
+ * 这样调用方直接和文章结果混排，条目标板一行都不用改。
+ *
+ * @param {object} env
+ * @param {object} site  站点上下文（要 docRoutes 把 source_prefix 映射成对外 xyz）
+ * @param {string} q     关键词
+ * @param {number} limit 本页最多返回几条（默认 10）
+ */
+export async function searchDocuments(env, site, q, limit) {
+    const keyword = String(q || '').trim();
+    if (!keyword) return { items: [], total: 0 };
+    const routes = (site && Array.isArray(site.docRoutes)) ? site.docRoutes : [];
+    // 文档表里存的是 source_prefix（如 docs / plugin），对外路径是 xyz；两者通常同名，但不保证
+    const xyzOf = function (abc) {
+        for (const r of routes) {
+            if (String((r && r.abc) || '') === abc) return String(r.xyz || abc).replace(/^\/+|\/+$/g, '');
+        }
+        for (const r of routes) {
+            if (String((r && r.xyz) || '').replace(/^\/+|\/+$/g, '') === abc) return abc;
+        }
+        return abc;
+    };
+    const like = '%' + keyword + '%';
+    const max = Number(limit) > 0 ? Number(limit) : 10;
+    try {
+        const cnt = await env.D1_DATABASE.prepare(
+            "SELECT COUNT(*) AS n FROM documents WHERE status = 'published' AND (title LIKE ? OR excerpt LIKE ? OR path LIKE ?)"
+        ).bind(like, like, like).first();
+        const rows = await env.D1_DATABASE.prepare(
+            "SELECT source_prefix, path, title, excerpt, date FROM documents WHERE status = 'published' AND (title LIKE ? OR excerpt LIKE ? OR path LIKE ?) ORDER BY date DESC, path ASC LIMIT ?"
+        ).bind(like, like, like, max).all();
+        const base = (site && site.url) || '';
+        const items = (rows.results || []).map(function (d) {
+            return {
+                _url: base + outUrl(xyzOf(String(d.source_prefix || '')), String(d.path || '')),
+                _doc: true,
+                title: d.title || d.path || '',
+                excerpt: d.excerpt || '',
+                date: d.date || '',
+                categories: '[]',
+                tags: '[]',
+                slug: '',
+                wp_id: 0,
+                comment_count: 0,
+            };
+        });
+        let total = Number((cnt && cnt.n) || 0);
+        // D1 零命中时兜底扫一遍原稿正文（标题/摘要里没有、正文里有的词）
+        if (!items.length) {
+            const extra = await searchDocSources(env, keyword, max);
+            extra.forEach(function (h) {
+                items.push({
+                    _url: base + outUrl(xyzOf(h.prefix), h.path),
+                    _doc: true,
+                    title: h.title,
+                    excerpt: h.snippet,
+                    date: h.date,
+                    categories: '[]',
+                    tags: '[]',
+                    slug: '',
+                    wp_id: 0,
+                    comment_count: 0,
+                });
+            });
+            total = items.length;
+        }
+        return { items: items, total: total };
+    } catch (e) {
+        console.error('searchDocuments error:', e);
+        return { items: [], total: 0 };
+    }
 }
