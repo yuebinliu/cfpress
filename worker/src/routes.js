@@ -398,6 +398,18 @@ export async function handleRequest(request, env) {
         return new Response(null, { status: 301, headers: { Location: dirPath } });
     }
 
+    // ---- 发行包分发：旧路径一律 301 到 /releases/（老安装升级后不会断）----
+    // 插件的「下载发行包」早期把地址写死成 /downloads/cf-cms-latest.tar.gz；
+    // 2026-11 统一收进 /releases/{cms,plugin}/。这里只做重定向，实体文件在 R2。
+    const RELEASE_ALIASES = {
+        "/downloads/cf-cms-latest.tar.gz": "/releases/cms/latest.tar.gz",
+        "/releases/latest.zip": "/releases/plugin/latest.zip",
+        "/releases/cf-press-sync-2.2.0.zip": "/releases/plugin/cf-press-sync-2.2.0.zip",
+    };
+    if (RELEASE_ALIASES[path]) {
+        return new Response(null, { status: 301, headers: { Location: RELEASE_ALIASES[path], "Cache-Control": "public, max-age=3600" } });
+    }
+
     // 目录页分页：成品只缓存第 1 页，?page>1 必须绕过静态直出（否则永远拿到第 1 页）
     const reqPage = Math.max(1, Number(url.searchParams.get('page')) || 1);
     const skipStaticForPage = reqPage > 1 && path.endsWith('/');
